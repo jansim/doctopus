@@ -6,6 +6,7 @@ extension Store {
     /// and sort all collapse into one statement so paging stays O(limit).
     func listDocuments(selection: Selection, query: SearchQuery, sort: SortField,
                        ascending: Bool, limit: Int = 500) throws -> [DocumentRow] {
+        let allFields = try cachedFields()
         var wheres: [String] = ["d.missing=0"]
         var args: [Database.Value] = []
 
@@ -23,12 +24,10 @@ extension Store {
         case .tag(let id):
             wheres.append("d.id IN (SELECT doc_id FROM document_tags WHERE tag_id=?)")
             args.append(.int(id))
-        case .correspondent(let v):
-            wheres.append("m.correspondent = ?"); args.append(.text(v))
-        case .docType(let v):
-            wheres.append("m.doc_type = ?"); args.append(.text(v))
-        case .language(let v):
-            wheres.append("m.language = ?"); args.append(.text(v))
+        case .field(let key, let value):
+            if let field = allFields.first(where: { $0.key == key }) {
+                appendFieldFilter(field, value, exact: true, to: &wheres, args: &args)
+            }
         case .untagged:
             wheres.append("d.id NOT IN (SELECT doc_id FROM document_tags)")
         case .needsReview:
@@ -39,9 +38,10 @@ extension Store {
             wheres.append("d.id IN (SELECT dt.doc_id FROM document_tags dt JOIN tags tg ON tg.id=dt.tag_id WHERE tg.name=? COLLATE NOCASE)")
             args.append(.text(t))
         }
-        for v in query.correspondents { wheres.append("m.correspondent LIKE ?"); args.append(.text("%\(v)%")) }
-        for v in query.docTypes       { wheres.append("m.doc_type LIKE ?");      args.append(.text("%\(v)%")) }
-        for v in query.languages      { wheres.append("m.language = ?");         args.append(.text(v)) }
+        for filter in query.fieldFilters {
+            guard let field = allFields.first(where: { $0.key == filter.key }) else { continue }
+            appendFieldFilter(field, filter.value, exact: false, to: &wheres, args: &args)
+        }
         for v in query.exts           { wheres.append("d.ext = ?");              args.append(.text(v)) }
         for v in query.folders        { wheres.append("d.directory LIKE ?");     args.append(.text("%\(v)%")) }
         for f in query.flags {
@@ -99,7 +99,7 @@ extension Store {
         LIMIT \(limit)
         """
 
-        return try db.map(sql, args) { r in
+        var rows = try db.map(sql, args) { r in
             DocumentRow(
                 id: r.int(0), path: r.string(1), directory: r.string(2), filename: r.string(3),
                 ext: r.string(4), size: r.int(5), originalSize: r.intOrNil(6),
@@ -110,6 +110,43 @@ extension Store {
                 title: r.stringOrNil(13), correspondent: r.stringOrNil(14), docType: r.stringOrNil(15),
                 language: r.stringOrNil(16), docDate: r.date(17), summary: r.stringOrNil(18),
                 snippet: r.stringOrNil(19)?.nilIfBlank)
+        }
+
+        // Fold every field's value into one uniform dictionary so the views
+        // never need to know whether a field is built in or user-defined.
+        let custom = try customValues(for: rows.map(\.id), fields: allFields)
+        for i in rows.indices {
+            var values: [String: String] = [:]
+            for field in allFields {
+                switch field.builtinColumn {
+                case "doc_type":      values[field.key] = rows[i].docType
+                case "correspondent": values[field.key] = rows[i].correspondent
+                case "language":      values[field.key] = rows[i].language
+                default: break
+                }
+            }
+            if let extra = custom[rows[i].id] { values.merge(extra) { _, new in new } }
+            rows[i].values = values.compactMapValues { $0 }
+        }
+        return rows
+    }
+
+    /// Adds the WHERE clause for one field, wherever its values are stored.
+    private func appendFieldFilter(_ field: Field, _ value: String, exact: Bool,
+                                   to wheres: inout [String], args: inout [Database.Value]) {
+        if let column = field.builtinColumn {
+            let allowed = ["correspondent", "doc_type", "language", "amount", "intent"]
+            guard allowed.contains(column) else { return }
+            if exact {
+                wheres.append("m.\(column) = ?"); args.append(.text(value))
+            } else {
+                wheres.append("m.\(column) LIKE ?"); args.append(.text("%\(value)%"))
+            }
+        } else {
+            let comparison = exact ? "v.value = ?" : "v.value LIKE ?"
+            wheres.append("d.id IN (SELECT v.doc_id FROM field_values v WHERE v.field_id=? AND \(comparison))")
+            args.append(.int(field.id))
+            args.append(.text(exact ? value : "%\(value)%"))
         }
     }
 
@@ -143,6 +180,22 @@ extension Store {
         }) else { return nil }
 
         var d = base
+        let allFields = try cachedFields()
+        var values: [String: String] = [:]
+        for field in allFields {
+            switch field.builtinColumn {
+            case "doc_type":      values[field.key] = d.row.docType
+            case "correspondent": values[field.key] = d.row.correspondent
+            case "language":      values[field.key] = d.row.language
+            case "amount":        values[field.key] = d.amount
+            case "intent":        values[field.key] = d.intent
+            default: break
+            }
+        }
+        if let extra = try customValues(for: [id], fields: allFields)[id] {
+            values.merge(extra) { _, new in new }
+        }
+        d.row.values = values.compactMapValues { $0 }
         d.text = try ocrText(id)
         d.tags = try tags(for: id)
         d.aliases = try aliases(for: id).map(\.path)

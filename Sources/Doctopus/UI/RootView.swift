@@ -70,8 +70,8 @@ struct RootView: View {
             Menu {
                 Button("Add Folder to Index…") { model.addRoot() }
                 Button("Import Files…") { importFiles() }
-                Button("Import from iPhone or iPad") {
-                    ScanCoordinator.shared.presentMenu(destination: model.defaultImportDirectory)
+                Button("Scan from iPhone or iPad…") {
+                    ScanCoordinator.shared.presentMenu(destination: model.contextImportDirectory)
                 }
                 Divider()
                 Button("Rescan All Folders") { model.reindex() }
@@ -80,6 +80,7 @@ struct RootView: View {
             }
             .menuIndicator(.hidden)
 
+            ViewModePicker()
             SortMenu()
 
             Button {
@@ -101,6 +102,22 @@ struct RootView: View {
     }
 }
 
+private struct ViewModePicker: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        @Bindable var model = model
+        Picker("View", selection: $model.viewMode) {
+            ForEach(ViewMode.allCases, id: \.self) { mode in
+                Label(mode.rawValue, systemImage: mode.icon).tag(mode)
+            }
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .help("Switch between list and gallery")
+    }
+}
+
 private struct SortMenu: View {
     @Environment(AppModel.self) private var model
 
@@ -117,6 +134,12 @@ private struct SortMenu: View {
                 Text("Descending").tag(false)
             }
             .pickerStyle(.inline)
+            if model.viewMode == .gallery {
+                Divider()
+                Slider(value: $model.settings.galleryThumbnailSize, in: 90...260) {
+                    Text("Thumbnail Size")
+                }
+            }
         } label: {
             Label("Sort", systemImage: "arrow.up.arrow.down")
         }
@@ -142,14 +165,14 @@ private struct SearchSuggestions: View {
     }
 
     private func completions(for token: String) -> [String] {
-        switch token.lowercased() {
-        case "tag:": return model.tags.map(\.name)
-        case "from:": return model.correspondents.map(\.value)
-        case "type:": return model.docTypes.map(\.value)
-        case "lang:": return model.languages.map(\.value)
-        case "is:": return ["review", "approved", "untagged", "tagged", "pending", "failed", "optimized"]
-        case "ext:": return ["pdf", "png", "jpg"]
-        default: return []
+        let prefix = String(token.dropLast()).lowercased()
+        switch prefix {
+        case "tag": return model.tags.map(\.name)
+        case "is": return ["review", "approved", "untagged", "tagged", "pending", "failed", "optimized"]
+        case "ext": return ["pdf", "png", "jpg"]
+        default:
+            let key = SearchQuery.aliases[prefix] ?? prefix
+            return (model.facets[key] ?? []).map(\.value)
         }
     }
 

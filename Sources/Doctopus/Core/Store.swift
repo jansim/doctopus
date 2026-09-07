@@ -5,6 +5,7 @@ import Foundation
 actor Store {
     let db: Database
     let url: URL
+    var fieldCache: [Field]?
 
     init(url: URL) throws {
         self.url = url
@@ -274,10 +275,6 @@ actor Store {
 
     func unassign(tag tagID: Int64, from docID: Int64) throws {
         try db.run("DELETE FROM document_tags WHERE doc_id=? AND tag_id=?", [.int(docID), .int(tagID)])
-    }
-
-    func renameTag(_ id: Int64, to name: String) throws {
-        try db.run("UPDATE tags SET name=? WHERE id=?", [.text(name), .int(id)])
     }
 
     func deleteTag(_ id: Int64) throws {

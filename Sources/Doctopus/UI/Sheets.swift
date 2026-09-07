@@ -104,7 +104,7 @@ struct AddTagSheet: View {
                             .buttonStyle(.borderless)
                             .font(.caption)
                             .padding(.horizontal, 7).padding(.vertical, 3)
-                            .background(TagColor.color(for: tag.name).opacity(0.16), in: Capsule())
+                            .background(TagColor.color(tag.color).opacity(0.16), in: Capsule())
                     }
                 }
             }

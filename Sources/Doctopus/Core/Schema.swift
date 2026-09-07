@@ -2,12 +2,56 @@ import Foundation
 
 /// Versioned schema. Migrations are append-only: bump `current` and add a case.
 enum Schema {
-    static let current = 1
+    static let current = 2
 
     static func migrate(_ db: Database) throws {
         let version = try db.first("PRAGMA user_version") { Int($0.int(0)) } ?? 0
         if version < 1 { try v1(db) }
+        if version < 2 { try v2(db) }
         try db.exec("PRAGMA user_version=\(current)")
+    }
+
+    /// Configurable fields. Built-ins keep their dedicated `metadata` column so
+    /// the list query stays one statement; user-defined fields live in
+    /// `field_values`. The UI treats both through a single `Field` model.
+    private static func v2(_ db: Database) throws {
+        try db.exec("""
+        CREATE TABLE IF NOT EXISTS fields (
+            id              INTEGER PRIMARY KEY,
+            key             TEXT NOT NULL UNIQUE,
+            name            TEXT NOT NULL,
+            builtin_column  TEXT,          -- non-null => stored in metadata.<column>
+            icon            TEXT NOT NULL DEFAULT 'tag',
+            show_in_sidebar INTEGER NOT NULL DEFAULT 1,
+            show_in_list    INTEGER NOT NULL DEFAULT 0,
+            position        INTEGER NOT NULL DEFAULT 0,
+            enabled         INTEGER NOT NULL DEFAULT 1
+        );
+        CREATE TABLE IF NOT EXISTS field_values (
+            doc_id   INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+            field_id INTEGER NOT NULL REFERENCES fields(id) ON DELETE CASCADE,
+            value    TEXT NOT NULL,
+            PRIMARY KEY (doc_id, field_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_field_values ON field_values(field_id, value);
+        """)
+
+        // Correspondent ships demoted: still extracted and shown in the
+        // inspector, but no longer taking up a sidebar section and a column.
+        let seed: [(String, String, String, String, Int, Int, Int)] = [
+            ("doc_type",      "Document Type", "doc_type",      "doc.on.doc",        1, 1, 10),
+            ("correspondent", "Correspondent", "correspondent", "building.2",        0, 0, 20),
+            ("language",      "Language",      "language",      "character.bubble",  1, 0, 30),
+            ("amount",        "Amount",        "amount",        "eurosign.circle",   0, 0, 40),
+            ("intent",        "Intent",        "intent",        "arrow.turn.down.right", 0, 0, 50),
+        ]
+        for (key, name, column, icon, sidebar, list, position) in seed {
+            try db.run("""
+                INSERT OR IGNORE INTO fields(key, name, builtin_column, icon, show_in_sidebar, show_in_list, position)
+                VALUES(?,?,?,?,?,?,?)
+                """, [.text(key), .text(name), .text(column), .text(icon),
+                      .int(sidebar), .int(list), .int(position)])
+        }
     }
 
     private static func v1(_ db: Database) throws {

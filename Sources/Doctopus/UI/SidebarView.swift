@@ -40,7 +40,7 @@ struct SidebarView: View {
                                 CountBadge(tag.count)
                             }
                         } icon: {
-                            Image(systemName: "tag")
+                            Image(systemName: "tag.fill")
                                 .foregroundStyle(TagColor.color(tag.color))
                         }
                         .tag(Selection.tag(tag.id))
@@ -49,9 +49,29 @@ struct SidebarView: View {
                 }
             }
 
-            facetSection("Correspondents", "building.2", model.correspondents, Selection.correspondent)
-            facetSection("Document Types", "doc.on.doc", model.docTypes, Selection.docType)
-            facetSection("Languages", "character.bubble", model.languages) { Selection.language($0) }
+            // Facet sections are entirely configuration-driven: which fields
+            // appear here, in what order, and under what name comes from
+            // Settings rather than being wired into the view.
+            ForEach(model.fields.filter(\.showInSidebar)) { field in
+                let values = model.facets[field.key] ?? []
+                if !values.isEmpty {
+                    Section(field.name) {
+                        ForEach(values.prefix(50)) { facet in
+                            Label {
+                                HStack {
+                                    Text(display(facet.value, field: field)).lineLimit(1)
+                                    Spacer()
+                                    CountBadge(facet.count)
+                                }
+                            } icon: {
+                                Image(systemName: field.icon)
+                            }
+                            .tag(Selection.field(field.key, facet.value))
+                            .contextMenu { facetMenu(field, facet) }
+                        }
+                    }
+                }
+            }
         }
         .listStyle(.sidebar)
         .safeAreaInset(edge: .bottom, spacing: 0) { StatusFooter() }
@@ -72,35 +92,51 @@ struct SidebarView: View {
         .tag(selection)
     }
 
-    @ViewBuilder
-    private func facetSection(_ title: String, _ icon: String, _ facets: [Facet],
-                              _ make: @escaping (String) -> Selection) -> some View {
-        if !facets.isEmpty {
-            Section(title) {
-                ForEach(facets.prefix(40)) { facet in
-                    Label {
-                        HStack {
-                            Text(display(facet.value, in: title))
-                                .lineLimit(1)
-                            Spacer()
-                            CountBadge(facet.count)
-                        }
-                    } icon: {
-                        Image(systemName: icon)
-                    }
-                    .tag(make(facet.value))
-                }
-            }
-        }
+    private func display(_ value: String, field: Field) -> String {
+        guard field.builtinColumn == "language" else { return value }
+        return Locale.current.localizedString(forLanguageCode: value)?.capitalized ?? value.uppercased()
     }
 
-    private func display(_ value: String, in section: String) -> String {
-        guard section == "Languages" else { return value }
-        return Locale.current.localizedString(forLanguageCode: value)?.capitalized ?? value.uppercased()
+    // MARK: - Context menus
+
+    @ViewBuilder
+    private func facetMenu(_ field: Field, _ facet: Facet) -> some View {
+        Button("Rename “\(facet.value)”…") {
+            guard let new = TextPrompt.ask(
+                title: "Rename \(field.name)",
+                message: "Renaming to a name already in use merges the two — every document keeps its other metadata.",
+                initial: facet.value) else { return }
+            model.renameFieldValue(field, from: facet.value, to: new)
+        }
+        Button("Clear from \(facet.count) Document\(facet.count == 1 ? "" : "s")", role: .destructive) {
+            model.deleteFieldValue(field, value: facet.value)
+        }
+        Divider()
+        Button("Hide “\(field.name)” from Sidebar") {
+            var updated = field
+            updated.showInSidebar = false
+            model.updateField(updated)
+        }
     }
 
     @ViewBuilder
     private func tagMenu(_ tag: Tag) -> some View {
+        Button("Rename…") {
+            guard let new = TextPrompt.ask(
+                title: "Rename Tag",
+                message: "Renaming to an existing tag merges them.",
+                initial: tag.name) else { return }
+            model.renameTag(tag, to: new)
+        }
+        Menu("Color") {
+            ForEach(Array(TagColor.names.enumerated()), id: \.offset) { index, name in
+                Button {
+                    model.setTagColor(tag, Int64(index))
+                } label: {
+                    Label(name, systemImage: Int64(index) == tag.color ? "checkmark.circle.fill" : "circle.fill")
+                }
+            }
+        }
         Toggle("Mirror to Disk as Aliases", isOn: Binding(
             get: { tag.mirrors },
             set: { model.setTagMirroring(tag, enabled: $0) }))
@@ -135,7 +171,9 @@ private struct FolderRow: View {
                 } else {
                     Spacer().frame(width: 10)
                 }
-                Text(node.isRoot ? shortRootName : node.name)
+                // Roots show their folder name, not their full path — the path
+                // is still one hover away.
+                Text(node.name)
                     .lineLimit(1)
                     .truncationMode(.middle)
                 Spacer()
@@ -144,6 +182,7 @@ private struct FolderRow: View {
         } icon: {
             Image(systemName: node.isRoot ? "externaldrive" : (isExpanded ? "folder.fill" : "folder"))
         }
+        .help(node.path)
         .padding(.leading, CGFloat(depth) * 11)
         .tag(Selection.folder(node.path))
         .contextMenu { menu }
@@ -155,17 +194,12 @@ private struct FolderRow: View {
         }
     }
 
-    private var shortRootName: String {
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        return node.path.hasPrefix(home) ? "~" + node.path.dropFirst(home.count) : node.path
-    }
-
     @ViewBuilder
     private var menu: some View {
         // Scan-in-place: the destination is pinned to this folder, so the
         // auto-routing engine is bypassed entirely.
-        Menu("Import from iPhone or iPad") {
-            Button("Scan Documents Here…") { presentScanner() }
+        Button("Scan from iPhone or iPad…") {
+            ScanCoordinator.shared.presentMenu(destination: URL(fileURLWithPath: node.path))
         }
         Button("Import Files Here…") { importHere() }
         Divider()
@@ -181,10 +215,6 @@ private struct FolderRow: View {
         }
     }
 
-    private func presentScanner() {
-        ScanCoordinator.shared.presentMenu(destination: URL(fileURLWithPath: node.path))
-    }
-
     private func importHere() {
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = true
@@ -196,18 +226,30 @@ private struct FolderRow: View {
     }
 
     private func newSubfolder() {
-        let alert = NSAlert()
-        alert.messageText = "New Folder"
-        alert.informativeText = "Create a folder inside \(node.name)."
-        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
-        field.stringValue = "Untitled Folder"
-        alert.accessoryView = field
-        alert.addButton(withTitle: "Create")
-        alert.addButton(withTitle: "Cancel")
-        guard alert.runModal() == .alertFirstButtonReturn,
-              let name = field.stringValue.nilIfBlank else { return }
+        guard let name = TextPrompt.ask(title: "New Folder",
+                                        message: "Create a folder inside \(node.name).",
+                                        initial: "Untitled Folder") else { return }
         let url = URL(fileURLWithPath: node.path).appendingPathComponent(name, isDirectory: true)
         try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+    }
+}
+
+/// Small modal text prompt. A sheet would need state plumbed through every
+/// context menu; for a one-field question this is the honest amount of code.
+enum TextPrompt {
+    @MainActor
+    static func ask(title: String, message: String, initial: String) -> String? {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 260, height: 24))
+        field.stringValue = initial
+        alert.accessoryView = field
+        alert.addButton(withTitle: "Rename")
+        alert.addButton(withTitle: "Cancel")
+        alert.window.initialFirstResponder = field
+        guard alert.runModal() == .alertFirstButtonReturn else { return nil }
+        return field.stringValue.nilIfBlank
     }
 }
 
@@ -258,12 +300,10 @@ private struct StatusFooter: View {
 }
 
 enum TagColor {
-    static let palette: [Color] = [.accentColor, .blue, .green, .orange, .pink, .purple, .red, .teal, .yellow, .mint]
+    static let palette: [Color] = [.gray, .blue, .green, .orange, .pink, .purple, .red, .teal, .yellow, .mint]
+    static let names = ["Graphite", "Blue", "Green", "Orange", "Pink", "Purple", "Red", "Teal", "Yellow", "Mint"]
+
     static func color(_ index: Int64) -> Color {
         palette[Int(abs(index)) % palette.count]
-    }
-    /// Stable colour derived from the name, so tags look consistent without state.
-    static func color(for name: String) -> Color {
-        palette[abs(name.hashValue) % palette.count]
     }
 }

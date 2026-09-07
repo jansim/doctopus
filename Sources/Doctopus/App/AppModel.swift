@@ -29,9 +29,9 @@ final class AppModel {
     var roots: [Store.Root] = []
     var folders: [FolderNode] = []
     var tags: [Tag] = []
-    var correspondents: [Facet] = []
-    var docTypes: [Facet] = []
-    var languages: [Facet] = []
+    var fields: [Field] = []
+    /// Facet values per field key, for the sidebar and search completions.
+    var facets: [String: [Facet]] = [:]
     var queue: [ProcessingEntry] = []
     var stats = Store.Stats()
 
@@ -42,6 +42,12 @@ final class AppModel {
     var sort: SortField = .added { didSet { reloadDocuments() } }
     var sortAscending = false { didSet { reloadDocuments() } }
     var selectedIDs: Set<Int64> = [] { didSet { if selectedIDs != oldValue { reloadDetail() } } }
+    var viewMode: ViewMode = .list {
+        didSet {
+            guard viewMode != oldValue else { return }
+            settings.viewMode = viewMode
+        }
+    }
 
     // Inspector
     var detail: DocumentDetail?
@@ -50,7 +56,6 @@ final class AppModel {
     var progress = IndexProgress()
     var modelStatus: LLMService.Status = .unsupported("Checking…")
     var errorMessage: String?
-    var isQuickLookOpen = false
 
     private var searchTask: Task<Void, Never>?
     private var reloadTask: Task<Void, Never>?
@@ -81,6 +86,7 @@ final class AppModel {
 
     func bootstrap() async {
         settings = await AppSettings.load(from: store)
+        viewMode = settings.viewMode
 
         // The callbacks hop back to the main actor; the actors themselves stay off it.
         indexer = Indexer(
@@ -114,20 +120,21 @@ final class AppModel {
             let paths = rootList.map(\.path)
             async let tree = (try? await store.folderTree(roots: paths)) ?? []
             async let tagList = (try? await store.tags()) ?? []
-            async let corr = (try? await store.facets(column: "correspondent")) ?? []
-            async let types = (try? await store.facets(column: "doc_type")) ?? []
-            async let langs = (try? await store.facets(column: "language")) ?? []
+            async let fieldList = (try? await store.fields()) ?? []
             async let q = (try? await store.processingQueue()) ?? []
             async let s = (try? await store.stats()) ?? Store.Stats()
 
-            let (t, tg, c, ty, l, qq, ss) = await (tree, tagList, corr, types, langs, q, s)
+            let (t, tg, fs, qq, ss) = await (tree, tagList, fieldList, q, s)
+            var facetMap: [String: [Facet]] = [:]
+            for field in fs {
+                facetMap[field.key] = (try? await store.facets(field: field)) ?? []
+            }
             guard !Task.isCancelled else { return }
             self.roots = rootList
             self.folders = t
             self.tags = tg
-            self.correspondents = c
-            self.docTypes = ty
-            self.languages = l
+            self.fields = fs
+            self.facets = facetMap
             self.queue = qq
             self.stats = ss
             self.reloadDocuments()
@@ -136,9 +143,10 @@ final class AppModel {
 
     func reloadDocuments() {
         let sel = selection, text = searchText, sortField = sort, asc = sortAscending
+        let keys = Set(fields.map(\.key))
         Task { [weak self] in
             guard let self else { return }
-            let query = SearchQuery(text)
+            let query = SearchQuery(text, fieldKeys: keys)
             let rows = (try? await store.listDocuments(selection: sel, query: query,
                                                        sort: sortField, ascending: asc)) ?? []
             guard !Task.isCancelled else { return }
@@ -221,6 +229,14 @@ final class AppModel {
     func cancelIndexing() { Task { await indexer.cancel() } }
 
     // MARK: - Document actions
+
+    /// Space, the Document menu and double-click all land here.
+    func quickLook(startingAt row: DocumentRow? = nil) {
+        let rows = selectedRows.isEmpty ? documents : selectedRows
+        guard !rows.isEmpty else { return }
+        QuickLookController.shared.toggle(urls: rows.map(\.url),
+                                          startingAt: row?.url ?? lastSelected?.url)
+    }
 
     func reveal(_ rows: [DocumentRow]) {
         NSWorkspace.shared.activateFileViewerSelecting(rows.map(\.url))
@@ -309,10 +325,69 @@ final class AppModel {
         }
     }
 
+    func renameTag(_ tag: Tag, to name: String) {
+        Task {
+            let survivor = (try? await store.renameTag(tag.id, to: name)) ?? tag.id
+            if selection == .tag(tag.id) { selection = .tag(survivor) }
+            refreshAll()
+            reloadDetail()
+        }
+    }
+
+    func setTagColor(_ tag: Tag, _ color: Int64) {
+        Task { try? await store.setTagColor(tag.id, color); refreshAll(); reloadDetail() }
+    }
+
     func deleteTag(_ tag: Tag) {
         Task {
             try? await store.deleteTag(tag.id)
             if selection == .tag(tag.id) { selection = .all }
+            refreshAll()
+        }
+    }
+
+    // MARK: - Fields
+
+    func setFieldValue(_ docID: Int64, field: Field, value: String?) {
+        Task {
+            try? await store.setFieldValue(docID: docID, field: field, value: value)
+            reloadDetail()
+            refreshAll()
+        }
+    }
+
+    /// Renaming a value onto an existing one merges every matching document.
+    func renameFieldValue(_ field: Field, from old: String, to new: String) {
+        Task {
+            let n = (try? await store.renameFieldValue(field: field, from: old, to: new)) ?? 0
+            if case .field(let key, let value) = selection, key == field.key, value == old {
+                selection = .field(field.key, new)
+            }
+            refreshAll()
+            if n > 0 { errorMessage = "Renamed “\(old)” to “\(new)” on \(n) document\(n == 1 ? "" : "s")." }
+        }
+    }
+
+    func deleteFieldValue(_ field: Field, value: String) {
+        Task {
+            try? await store.deleteFieldValue(field: field, value: value)
+            if selection == .field(field.key, value) { selection = .all }
+            refreshAll()
+        }
+    }
+
+    func updateField(_ field: Field) {
+        Task { try? await store.updateField(field); refreshAll() }
+    }
+
+    func addCustomField(named name: String) {
+        Task { _ = try? await store.addCustomField(name: name); refreshAll() }
+    }
+
+    func deleteField(_ field: Field) {
+        Task {
+            try? await store.deleteField(field.id)
+            if case .field(let key, _) = selection, key == field.key { selection = .all }
             refreshAll()
         }
     }
@@ -370,6 +445,13 @@ final class AppModel {
     var defaultImportDirectory: URL? {
         guard let root = roots.first else { return nil }
         return URL(fileURLWithPath: root.path).appendingPathComponent(settings.scanDestination, isDirectory: true)
+    }
+
+    /// Where a scan or import triggered from the center pane should land: the
+    /// folder currently selected in the sidebar, if any, else the inbox.
+    var contextImportDirectory: URL? {
+        if case .folder(let path) = selection { return URL(fileURLWithPath: path) }
+        return defaultImportDirectory
     }
 
     func importFiles(_ urls: [URL], into destination: URL?) {

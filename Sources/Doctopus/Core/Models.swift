@@ -38,6 +38,10 @@ struct DocumentRow: Identifiable, Hashable, Sendable {
     var summary: String?
     var snippet: String?
 
+    /// Every enabled field's value, keyed by field key. Built-ins are copied in
+    /// from their columns so the UI never has to care where a value lives.
+    var values: [String: String] = [:]
+
     var url: URL { URL(fileURLWithPath: path) }
     var displayTitle: String { title?.nilIfBlank ?? filename }
     var savings: Double? {
@@ -60,6 +64,23 @@ struct DocumentDetail: Sendable {
     var text: String = ""
     var tags: [Tag] = []
     var aliases: [String] = []
+}
+
+/// A configurable document attribute. Built-ins map to a `metadata` column;
+/// user-defined ones live in `field_values`. Both are renameable and can be
+/// shown or hidden per surface.
+struct Field: Identifiable, Hashable, Sendable {
+    var id: Int64
+    var key: String
+    var name: String
+    var builtinColumn: String?
+    var icon: String
+    var showInSidebar: Bool
+    var showInList: Bool
+    var position: Int64
+    var enabled: Bool
+
+    var isBuiltin: Bool { builtinColumn != nil }
 }
 
 struct Tag: Identifiable, Hashable, Sendable {
@@ -122,13 +143,20 @@ enum Selection: Hashable, Sendable {
     case queue
     case folder(String)
     case tag(Int64)
-    case correspondent(String)
-    case docType(String)
-    case language(String)
+    /// A field value facet: (field key, value).
+    case field(String, String)
     case untagged
     case needsReview
 
     var isQueue: Bool { if case .queue = self { return true }; return false }
+}
+
+/// How the center pane presents results.
+enum ViewMode: String, CaseIterable, Sendable, Codable {
+    case list = "List"
+    case gallery = "Gallery"
+
+    var icon: String { self == .list ? "list.bullet" : "square.grid.2x2" }
 }
 
 enum SortField: String, CaseIterable, Sendable {

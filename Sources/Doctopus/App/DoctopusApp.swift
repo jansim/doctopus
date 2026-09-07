@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import QuickLookUI
 
 /// Entry point. A hidden `--selftest` mode drives the whole ingest pipeline
 /// headlessly, which is how the indexing path is verified without a UI session.
@@ -71,6 +72,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSServicesMenuRequesto
 
     func writeSelection(to pasteboard: NSPasteboard,
                         types: [NSPasteboard.PasteboardType]) -> Bool { false }
+
+    // Quick Look asks the responder chain who owns the panel. SwiftUI views are
+    // not in that chain, so the app delegate — which always is — claims it.
+    override func acceptsPreviewPanelControl(_ panel: QLPreviewPanel!) -> Bool { true }
+
+    override func beginPreviewPanelControl(_ panel: QLPreviewPanel!) {
+        MainActor.assumeIsolated {
+            panel.dataSource = QuickLookController.shared
+            panel.delegate = QuickLookController.shared
+        }
+    }
+
+    override func endPreviewPanelControl(_ panel: QLPreviewPanel!) {
+        panel.dataSource = nil
+        panel.delegate = nil
+    }
 }
 
 struct DoctopusCommands: Commands {
@@ -82,8 +99,8 @@ struct DoctopusCommands: Commands {
                 .keyboardShortcut("o", modifiers: [.command])
             Button("Import Files…") { importPanel() }
                 .keyboardShortcut("i", modifiers: [.command])
-            Button("Import from iPhone or iPad") {
-                ScanCoordinator.shared.presentMenu(destination: model.defaultImportDirectory)
+            Button("Scan from iPhone or iPad…") {
+                ScanCoordinator.shared.presentMenu(destination: model.contextImportDirectory)
             }
             .keyboardShortcut("i", modifiers: [.command, .shift])
         }
@@ -95,7 +112,7 @@ struct DoctopusCommands: Commands {
         }
 
         CommandMenu("Document") {
-            Button("Quick Look") { model.isQuickLookOpen.toggle() }
+            Button("Quick Look") { model.quickLook() }
                 .keyboardShortcut(.space, modifiers: [])
                 .disabled(model.selectedIDs.isEmpty)
             Button("Open in Default App") { model.open(model.selectedRows) }

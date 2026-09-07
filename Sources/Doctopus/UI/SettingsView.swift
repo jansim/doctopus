@@ -4,11 +4,13 @@ struct SettingsView: View {
     var body: some View {
         TabView {
             GeneralSettings().tabItem { Label("General", systemImage: "gearshape") }
+            FieldSettings().tabItem { Label("Fields", systemImage: "list.bullet.rectangle") }
+            TagSettings().tabItem { Label("Tags", systemImage: "tag") }
             RoutingSettings().tabItem { Label("Routing", systemImage: "arrow.triangle.branch") }
             OptimizationSettings().tabItem { Label("Optimization", systemImage: "arrow.down.circle") }
             IntelligenceSettings().tabItem { Label("Intelligence", systemImage: "sparkles") }
         }
-        .frame(width: 560, height: 430)
+        .frame(width: 620, height: 470)
     }
 }
 
@@ -63,6 +65,181 @@ private struct GeneralSettings: View {
     private func shorten(_ path: String) -> String {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         return path.hasPrefix(home) ? "~" + path.dropFirst(home.count) : path
+    }
+}
+
+/// The list of document attributes. Built-ins and user-defined fields are
+/// managed identically here — which is the point: nothing is special-cased into
+/// prominence, the configuration decides.
+private struct FieldSettings: View {
+    @Environment(AppModel.self) private var model
+    @State private var newName = ""
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Form {
+                Section {
+                    ForEach(model.fields) { field in
+                        FieldRow(field: field)
+                    }
+                } header: {
+                    HStack {
+                        Text("Fields")
+                        Spacer()
+                        Text("Sidebar")
+                            .font(.caption).foregroundStyle(.secondary).frame(width: 52)
+                        Text("Column")
+                            .font(.caption).foregroundStyle(.secondary).frame(width: 52)
+                    }
+                } footer: {
+                    Text("Sidebar shows the field as a browsable section; Column adds it to the list view. Every enabled field is editable in the inspector, and its values can be renamed — or merged — by right-clicking them in the sidebar.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+
+                Section("Add a Field") {
+                    HStack {
+                        TextField("Name", text: $newName)
+                            .onSubmit(add)
+                        Button("Add", action: add)
+                            .disabled(newName.nilIfBlank == nil)
+                    }
+                    Text("Custom fields are yours to fill in — the extraction pipeline populates the built-in ones only.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            .formStyle(.grouped)
+        }
+    }
+
+    private func add() {
+        guard let name = newName.nilIfBlank else { return }
+        model.addCustomField(named: name)
+        newName = ""
+    }
+}
+
+private struct FieldRow: View {
+    @Environment(AppModel.self) private var model
+    let field: Field
+    @State private var name: String = ""
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: field.icon)
+                .foregroundStyle(.secondary)
+                .frame(width: 18)
+            TextField("", text: $name)
+                .textFieldStyle(.plain)
+                .onSubmit {
+                    guard let clean = name.nilIfBlank, clean != field.name else { return }
+                    var updated = field
+                    updated.name = clean
+                    model.updateField(updated)
+                }
+            if field.isBuiltin {
+                Text("built-in").font(.caption2).foregroundStyle(.tertiary)
+            }
+            Toggle("", isOn: binding(\.showInSidebar)).labelsHidden().frame(width: 52)
+            Toggle("", isOn: binding(\.showInList)).labelsHidden().frame(width: 52)
+            Menu {
+                Button("Move Up") { move(by: -1) }
+                Button("Move Down") { move(by: 1) }
+                Divider()
+                Button(field.isBuiltin ? "Hide Field" : "Delete Field", role: .destructive) {
+                    model.deleteField(field)
+                }
+            } label: {
+                Image(systemName: "ellipsis.circle")
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .frame(width: 24)
+        }
+        .onAppear { name = field.name }
+        .onChange(of: field.name) { _, new in name = new }
+    }
+
+    private func binding(_ path: WritableKeyPath<Field, Bool>) -> Binding<Bool> {
+        Binding(get: { field[keyPath: path] },
+                set: { new in
+                    var updated = field
+                    updated[keyPath: path] = new
+                    model.updateField(updated)
+                })
+    }
+
+    /// Positions are spaced by ten, so swapping with the neighbour is enough.
+    private func move(by offset: Int) {
+        let ordered = model.fields
+        guard let index = ordered.firstIndex(where: { $0.id == field.id }) else { return }
+        let target = index + offset
+        guard ordered.indices.contains(target) else { return }
+        var a = ordered[index], b = ordered[target]
+        swap(&a.position, &b.position)
+        model.updateField(a)
+        model.updateField(b)
+    }
+}
+
+private struct TagSettings: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        Form {
+            Section {
+                if model.tags.isEmpty {
+                    Text("No tags yet. Add one from a document's inspector or context menu.")
+                        .foregroundStyle(.secondary)
+                }
+                ForEach(model.tags) { tag in
+                    HStack(spacing: 10) {
+                        Menu {
+                            ForEach(Array(TagColor.names.enumerated()), id: \.offset) { index, name in
+                                Button(name) { model.setTagColor(tag, Int64(index)) }
+                            }
+                        } label: {
+                            Circle()
+                                .fill(TagColor.color(tag.color))
+                                .frame(width: 13, height: 13)
+                        }
+                        .menuStyle(.borderlessButton)
+                        .menuIndicator(.hidden)
+                        .frame(width: 20)
+
+                        Text(tag.name)
+                        Spacer()
+                        Text("\(tag.count)")
+                            .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                        Toggle("Mirror", isOn: Binding(
+                            get: { tag.mirrors },
+                            set: { model.setTagMirroring(tag, enabled: $0) }))
+                            .toggleStyle(.checkbox)
+                            .help("Mirror this tag to disk as Finder aliases")
+                        Button {
+                            guard let new = TextPrompt.ask(title: "Rename Tag",
+                                                           message: "Renaming to an existing tag merges them.",
+                                                           initial: tag.name) else { return }
+                            model.renameTag(tag, to: new)
+                        } label: {
+                            Image(systemName: "pencil")
+                        }
+                        .buttonStyle(.borderless)
+                        Button(role: .destructive) {
+                            model.deleteTag(tag)
+                        } label: {
+                            Image(systemName: "trash")
+                        }
+                        .buttonStyle(.borderless)
+                    }
+                }
+            } header: {
+                Text("Tags")
+            } footer: {
+                Text("Mirrored tags get a folder of Finder aliases inside the indexed root, so tag membership is visible from Finder without duplicating any file.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .formStyle(.grouped)
     }
 }
 

@@ -128,6 +128,59 @@ enum SelfTest {
             print("  \(row.filename.padded(38)) → \(target.padded(28)) \(Int(decision.confidence * 100))%  [\(decision.rule)]")
         }
 
+        print("\nFIELDS")
+        let fields = (try? await store.fields()) ?? []
+        for field in fields {
+            let count = ((try? await store.facets(field: field)) ?? []).count
+            print("  \(field.name.padded(16)) key=\(field.key.padded(14)) "
+                  + "\(field.isBuiltin ? "built-in" : "custom  ") "
+                  + "sidebar=\(field.showInSidebar ? "y" : "n") list=\(field.showInList ? "y" : "n") "
+                  + "values=\(count)")
+        }
+
+        print("\nRENAME + MERGE")
+        if let typeField = fields.first(where: { $0.key == "doc_type" }) {
+            var n = (try? await store.renameFieldValue(field: typeField, from: "Invoice", to: "Bill")) ?? 0
+            print("  Invoice → Bill                        \(n) document(s)")
+            n = (try? await store.renameFieldValue(field: typeField, from: "Contract", to: "Bill")) ?? 0
+            let after = ((try? await store.facets(field: typeField)) ?? [])
+                .first { $0.value == "Bill" }?.count ?? 0
+            print("  Contract → Bill (merge)               \(n) document(s); “Bill” now holds \(after)")
+            n = (try? await store.renameFieldValue(field: typeField, from: "Bill", to: "Invoice")) ?? 0
+            print("  Bill → Invoice (restore)              \(n) document(s)")
+        }
+
+        // A custom field behaves the same way, including the merge.
+        if let id = try? await store.addCustomField(name: "Project"),
+           let project = ((try? await store.fields()) ?? []).first(where: { $0.id == id }) {
+            for (index, row) in rows.prefix(3).enumerated() {
+                try? await store.setFieldValue(docID: row.id, field: project,
+                                               value: index == 0 ? "Alpha" : "Beta")
+            }
+            let before = (try? await store.facets(field: project)) ?? []
+            print("  custom “Project” values               \(before.map { "\($0.value) (\($0.count))" }.joined(separator: ", "))")
+            _ = try? await store.renameFieldValue(field: project, from: "Alpha", to: "Beta")
+            let merged = (try? await store.facets(field: project)) ?? []
+            print("  Alpha → Beta (merge)                  \(merged.map { "\($0.value) (\($0.count))" }.joined(separator: ", "))")
+            let filtered = (try? await store.listDocuments(selection: .field("project", "Beta"),
+                                                           query: SearchQuery(""), sort: .added,
+                                                           ascending: false)) ?? []
+            print("  filter project:Beta                   \(filtered.count) hit(s)")
+            try? await store.deleteField(id)
+        }
+
+        print("\nTAG MERGE")
+        let invoiceTag = (try? await store.tagID(named: "invoice")) ?? 0
+        let billTag = (try? await store.tagID(named: "bills")) ?? 0
+        for row in rows.prefix(2) { try? await store.assign(tag: invoiceTag, to: row.id) }
+        for row in rows.prefix(3) { try? await store.assign(tag: billTag, to: row.id) }
+        try? await store.setTagColor(billTag, 3)
+        let before = (try? await store.tags()) ?? []
+        print("  before  \(before.map { "\($0.name) (\($0.count), colour \($0.color))" }.joined(separator: ", "))")
+        _ = try? await store.renameTag(invoiceTag, to: "bills")
+        let after = (try? await store.tags()) ?? []
+        print("  after   \(after.map { "\($0.name) (\($0.count), colour \($0.color))" }.joined(separator: ", "))")
+
         print("\nQUEUE")
         for entry in ((try? await store.processingQueue(limit: 8)) ?? []) {
             print("  \(entry.action.padded(10)) \(entry.filename.padded(34)) \(entry.detail ?? "")")

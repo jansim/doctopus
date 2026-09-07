@@ -15,6 +15,8 @@ struct AppSettings: Codable, Sendable, Equatable {
     var mirrorTagsAsAliases = false
     var ocrConcurrency = 0        // 0 = auto
     var scanDestination = "Inbox"
+    var viewMode: ViewMode = .list
+    var galleryThumbnailSize: Double = 150
 
     var jpegQuality: Double = 0.6
     var targetDPI: Double = 150

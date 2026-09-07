@@ -56,8 +56,10 @@ private struct DetailInspector: View {
 
     private var header: some View {
         HStack(alignment: .top, spacing: 10) {
-            ThumbnailView(url: row.url)
-                .frame(width: 54, height: 70)
+            Thumbnail(url: row.url, mtime: row.mtime, size: .large,
+                      width: 54, height: 70, cornerRadius: 4, showsShadow: true)
+                .onTapGesture { model.quickLook(startingAt: row) }
+                .help("Quick Look")
             VStack(alignment: .leading, spacing: 3) {
                 Text(row.displayTitle)
                     .font(.headline)
@@ -87,11 +89,11 @@ private struct DetailInspector: View {
             EditableField("Title", value: row.title ?? "") {
                 model.editMetadata(row.id, column: "title", value: $0)
             }
-            EditableField("Correspondent", value: row.correspondent ?? "") {
-                model.editMetadata(row.id, column: "correspondent", value: $0)
-            }
-            EditableField("Type", value: row.docType ?? "") {
-                model.editMetadata(row.id, column: "doc_type", value: $0)
+            // Every configured field, in the order Settings puts them.
+            ForEach(model.fields) { field in
+                EditableField(field.name, value: row.values[field.key] ?? "") {
+                    model.setFieldValue(row.id, field: field, value: $0)
+                }
             }
             LabeledContent("Document Date") {
                 HStack(spacing: 4) {
@@ -108,16 +110,6 @@ private struct DetailInspector: View {
                             .help("Where this date came from")
                     }
                 }
-            }
-            if let lang = row.language {
-                LabeledContent("Language",
-                               value: Locale.current.localizedString(forLanguageCode: lang)?.capitalized ?? lang)
-            }
-            if let intent = detail.intent {
-                LabeledContent("Intent", value: intent.capitalized)
-            }
-            if let amount = detail.amount {
-                LabeledContent("Amount", value: amount)
             }
             if let source = detail.metadataSource {
                 LabeledContent("Extracted by") {
@@ -163,8 +155,8 @@ private struct DetailInspector: View {
                             .buttonStyle(.plain)
                         }
                         .padding(.horizontal, 7).padding(.vertical, 3)
-                        .background(TagColor.color(for: tag.name).opacity(0.16), in: Capsule())
-                        .overlay(Capsule().strokeBorder(TagColor.color(for: tag.name).opacity(0.35)))
+                        .background(TagColor.color(tag.color).opacity(0.16), in: Capsule())
+                        .overlay(Capsule().strokeBorder(TagColor.color(tag.color).opacity(0.45)))
                     }
                 }
             }
@@ -373,34 +365,6 @@ struct EditableField: View {
                 .multilineTextAlignment(.trailing)
                 .onSubmit { if draft != committed { onCommit(draft) } }
         }
-    }
-}
-
-struct ThumbnailView: View {
-    let url: URL
-    @State private var image: NSImage?
-
-    var body: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 4).fill(.quaternary.opacity(0.5))
-            if let image {
-                Image(nsImage: image).resizable().aspectRatio(contentMode: .fit)
-            } else {
-                Image(systemName: "doc").foregroundStyle(.tertiary)
-            }
-        }
-        .clipShape(RoundedRectangle(cornerRadius: 4))
-        .task(id: url) { await load() }
-    }
-
-    private func load() async {
-        image = nil
-        let request = QLThumbnailGenerator.Request(
-            fileAt: url, size: CGSize(width: 108, height: 140),
-            scale: 2, representationTypes: .thumbnail)
-        guard let rep = try? await QLThumbnailGenerator.shared.generateBestRepresentation(for: request)
-        else { return }
-        image = rep.nsImage
     }
 }
 
