@@ -289,6 +289,38 @@ final class AppModel {
         }
     }
 
+    /// Files documents into a second folder as Finder aliases, leaving the
+    /// master where it is. This is what a plain drag onto a folder does.
+    func createAliases(_ rows: [DocumentRow], in folder: URL) {
+        Task {
+            var made = 0
+            for row in rows {
+                guard row.url.deletingLastPathComponent().path != folder.path else { continue }
+                guard let created = try? AliasManager.createAlias(to: row.url, in: folder) else { continue }
+                try? await store.recordAlias(docID: row.id, tagID: nil, path: created.path)
+                try? await store.logProcessing(docID: row.id, action: "aliased",
+                                               detail: "Also filed under \(folder.lastPathComponent)",
+                                               confidence: nil, rule: nil, from: row.path,
+                                               to: created.path, approved: true)
+                made += 1
+            }
+            refreshAll()
+            if made == 0 { errorMessage = "Those documents are already in that folder." }
+        }
+    }
+
+    /// Removes an alias placement without touching the master file.
+    func removeAlias(_ row: DocumentRow, inFolder folder: String) {
+        Task {
+            for alias in ((try? await store.aliases(for: row.id)) ?? [])
+            where alias.path.hasPrefix(folder + "/") {
+                AliasManager.removeAlias(at: alias.path)
+                try? await store.deleteAlias(id: alias.id)
+            }
+            refreshAll()
+        }
+    }
+
     // MARK: - Tags
 
     func addTag(_ name: String, to rows: [DocumentRow]) {
@@ -325,6 +357,10 @@ final class AppModel {
         }
     }
 
+    func createTag(named name: String) {
+        Task { _ = try? await store.tagID(named: name); refreshAll() }
+    }
+
     func renameTag(_ tag: Tag, to name: String) {
         Task {
             let survivor = (try? await store.renameTag(tag.id, to: name)) ?? tag.id
@@ -347,6 +383,16 @@ final class AppModel {
     }
 
     // MARK: - Fields
+
+    func setFieldValue(_ rows: [DocumentRow], field: Field, value: String?) {
+        Task {
+            for row in rows {
+                try? await store.setFieldValue(docID: row.id, field: field, value: value)
+            }
+            reloadDetail()
+            refreshAll()
+        }
+    }
 
     func setFieldValue(_ docID: Int64, field: Field, value: String?) {
         Task {
@@ -412,13 +458,6 @@ final class AppModel {
 
     // MARK: - Queue
 
-    func setApproved(_ entry: ProcessingEntry, _ approved: Bool) {
-        Task {
-            try? await store.setProcessingApproved(entry.id, approved)
-            refreshAll()
-        }
-    }
-
     func approveAll() {
         Task {
             for entry in queue where !entry.approved {
@@ -428,15 +467,13 @@ final class AppModel {
         }
     }
 
-    func revealQueueEntry(_ entry: ProcessingEntry) {
+    func setApproved(_ rows: [DocumentRow], _ approved: Bool) {
         Task {
-            guard let path = try? await store.documentPath(entry.docID) else { return }
-            selection = .all
-            searchText = ""
-            reloadDocuments()
-            try? await Task.sleep(for: .milliseconds(120))
-            selectedIDs = [entry.docID]
-            _ = path
+            for row in rows {
+                guard let entry = row.queue else { continue }
+                try? await store.setProcessingApproved(entry.entryID, approved)
+            }
+            refreshAll()
         }
     }
 
@@ -459,7 +496,9 @@ final class AppModel {
             errorMessage = "Add a folder to index before importing."
             return
         }
-        let dest = destination ?? defaultImportDirectory ?? URL(fileURLWithPath: root.path)
+        // A scan started from the menu bar has no explicit destination; follow
+        // whatever the sidebar has selected, then fall back to the inbox.
+        let dest = destination ?? contextImportDirectory ?? URL(fileURLWithPath: root.path)
         Task { await indexer.importFiles(urls, into: dest, rootID: root.id) }
     }
 

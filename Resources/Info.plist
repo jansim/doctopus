@@ -25,6 +25,16 @@
     <string>Doctopus indexes the folders you point it at.</string>
     <key>NSDownloadsFolderUsageDescription</key>
     <string>Doctopus indexes the folders you point it at.</string>
+    <key>UTExportedTypeDeclarations</key>
+    <array>
+        <dict>
+            <key>UTTypeIdentifier</key><string>io.doctopus.document</string>
+            <key>UTTypeDescription</key><string>Doctopus Document Reference</string>
+            <key>UTTypeConformsTo</key>
+            <array><string>public.data</string></array>
+            <key>UTTypeTagSpecification</key><dict/>
+        </dict>
+    </array>
     <key>CFBundleDocumentTypes</key>
     <array>
         <dict>

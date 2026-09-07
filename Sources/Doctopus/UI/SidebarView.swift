@@ -11,7 +11,10 @@ struct SidebarView: View {
         List(selection: $model.selection) {
             Section("Library") {
                 row(.all, "All Documents", "tray.full", model.stats.total)
-                row(.needsReview, "Needs Review", "exclamationmark.triangle", model.stats.needsReview)
+                // Needs Review is the queue filtered to undecided entries, so
+                // its count comes from the same place the queue's does.
+                row(.needsReview, "Needs Review", "exclamationmark.triangle",
+                    model.queue.filter { !$0.approved }.count)
                 row(.untagged, "Untagged", "tag.slash", nil)
                 row(.queue, "Recent Processing", "clock.arrow.circlepath", model.queue.count)
             }
@@ -24,29 +27,21 @@ struct SidebarView: View {
                 }
             }
 
-            if !model.tags.isEmpty {
-                Section("Tags") {
-                    ForEach(model.tags) { tag in
-                        Label {
-                            HStack {
-                                Text(tag.name)
-                                Spacer()
-                                if tag.mirrors {
-                                    Image(systemName: "arrow.triangle.branch")
-                                        .font(.caption2)
-                                        .foregroundStyle(.tertiary)
-                                        .help("Mirrored to disk as Finder aliases")
-                                }
-                                CountBadge(tag.count)
-                            }
-                        } icon: {
-                            Image(systemName: "tag.fill")
-                                .foregroundStyle(TagColor.color(tag.color))
-                        }
-                        .tag(Selection.tag(tag.id))
-                        .contextMenu { tagMenu(tag) }
-                    }
+            Section {
+                ForEach(model.tags) { tag in
+                    TagRow(tag: tag)
                 }
+                Button {
+                    guard let name = TextPrompt.ask(title: "New Tag", message: "Tags can be dragged onto from the document list.", initial: "", confirm: "Create") else { return }
+                    model.createTag(named: name)
+                } label: {
+                    Label("New Tag…", systemImage: "plus")
+                        .foregroundStyle(.secondary)
+                        .font(.callout)
+                }
+                .buttonStyle(.plain)
+            } header: {
+                Text("Tags")
             }
 
             // Facet sections are entirely configuration-driven: which fields
@@ -68,6 +63,9 @@ struct SidebarView: View {
                             }
                             .tag(Selection.field(field.key, facet.value))
                             .contextMenu { facetMenu(field, facet) }
+                            .dropDestination(for: DocumentDragItem.self) { items, _ in
+                                model.handleDrop(items, action: .field(field, value: facet.value))
+                            }
                         }
                     }
                 }
@@ -119,13 +117,46 @@ struct SidebarView: View {
         }
     }
 
+}
+
+/// A tag row: selectable, renameable, colourable, and a drop target that
+/// assigns the tag to whatever was dragged.
+private struct TagRow: View {
+    @Environment(AppModel.self) private var model
+    let tag: Tag
+    @State private var targeted = false
+
+    var body: some View {
+        Label {
+            HStack {
+                Text(tag.name)
+                Spacer()
+                if tag.mirrors {
+                    Image(systemName: "arrow.triangle.branch")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .help("Mirrored to disk as Finder aliases")
+                }
+                CountBadge(tag.count)
+            }
+        } icon: {
+            Image(systemName: "tag.fill")
+                .foregroundStyle(TagColor.color(tag.color))
+        }
+        .dropHighlight(targeted)
+        .tag(Selection.tag(tag.id))
+        .contextMenu { menu }
+        .dropDestination(for: DocumentDragItem.self) { items, _ in
+            model.handleDrop(items, action: .tag(tag))
+        } isTargeted: { targeted = $0 }
+    }
+
     @ViewBuilder
-    private func tagMenu(_ tag: Tag) -> some View {
+    private var menu: some View {
         Button("Rename…") {
-            guard let new = TextPrompt.ask(
-                title: "Rename Tag",
-                message: "Renaming to an existing tag merges them.",
-                initial: tag.name) else { return }
+            guard let new = TextPrompt.ask(title: "Rename Tag",
+                                           message: "Renaming to an existing tag merges them.",
+                                           initial: tag.name) else { return }
             model.renameTag(tag, to: new)
         }
         Menu("Color") {
@@ -152,6 +183,7 @@ private struct FolderRow: View {
     let depth: Int
     @Binding var expanded: Set<String>
 
+    @State private var targeted = false
     private var isExpanded: Bool { expanded.contains(node.path) }
 
     var body: some View {
@@ -183,9 +215,13 @@ private struct FolderRow: View {
             Image(systemName: node.isRoot ? "externaldrive" : (isExpanded ? "folder.fill" : "folder"))
         }
         .help(node.path)
+        .dropHighlight(targeted)
         .padding(.leading, CGFloat(depth) * 11)
         .tag(Selection.folder(node.path))
         .contextMenu { menu }
+        .dropDestination(for: DocumentDragItem.self) { items, _ in
+            model.handleDrop(items, action: .alias(folder: node.path))
+        } isTargeted: { targeted = $0 }
 
         if isExpanded {
             ForEach(node.children) { child in
@@ -238,14 +274,15 @@ private struct FolderRow: View {
 /// context menu; for a one-field question this is the honest amount of code.
 enum TextPrompt {
     @MainActor
-    static func ask(title: String, message: String, initial: String) -> String? {
+    static func ask(title: String, message: String, initial: String,
+                    confirm: String = "Rename") -> String? {
         let alert = NSAlert()
         alert.messageText = title
         alert.informativeText = message
         let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 260, height: 24))
         field.stringValue = initial
         alert.accessoryView = field
-        alert.addButton(withTitle: "Rename")
+        alert.addButton(withTitle: confirm)
         alert.addButton(withTitle: "Cancel")
         alert.window.initialFirstResponder = field
         guard alert.runModal() == .alertFirstButtonReturn else { return nil }
@@ -296,6 +333,17 @@ private struct StatusFooter: View {
         .padding(.horizontal, 12)
         .padding(.bottom, 8)
         .padding(.top, 2)
+    }
+}
+
+extension View {
+    /// Consistent highlight for every sidebar drop target.
+    func dropHighlight(_ active: Bool) -> some View {
+        background {
+            RoundedRectangle(cornerRadius: 5)
+                .fill(Color.accentColor.opacity(active ? 0.3 : 0))
+                .padding(.horizontal, -4)
+        }
     }
 }
 

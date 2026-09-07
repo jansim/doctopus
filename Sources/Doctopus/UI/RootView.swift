@@ -16,9 +16,10 @@ struct RootView: View {
             Group {
                 if model.roots.isEmpty {
                     WelcomeView()
-                } else if model.selection.isQueue {
-                    ProcessingQueueView()
                 } else {
+                    // Queue mode is the same browser with review affordances
+                    // turned on, so view switching and drag-and-drop work there
+                    // exactly as they do everywhere else.
                     DocumentListView()
                 }
             }
@@ -49,6 +50,28 @@ struct RootView: View {
     @ToolbarContentBuilder
     private var toolbar: some ToolbarContent {
         ToolbarItem(placement: .navigation) {
+            Menu {
+                Button("Add Folder to Index…") { model.addRoot() }
+                Button("Import Files…") { importFiles() }
+                Button("Scan from iPhone or iPad…") {
+                    ScanCoordinator.shared.presentMenu(destination: model.contextImportDirectory)
+                }
+                Divider()
+                Button("New Tag…") {
+                    guard let name = TextPrompt.ask(title: "New Tag", message: "",
+                                                    initial: "", confirm: "Create") else { return }
+                    model.createTag(named: name)
+                }
+                Divider()
+                Button("Rescan All Folders") { model.reindex() }
+            } label: {
+                Label("Add", systemImage: "plus")
+            }
+            .menuIndicator(.hidden)
+            .help("Add documents or folders")
+        }
+
+        ToolbarItem(placement: .navigation) {
             if model.progress.isRunning {
                 HStack(spacing: 8) {
                     ProgressView(value: model.progress.fraction)
@@ -67,19 +90,6 @@ struct RootView: View {
         }
 
         ToolbarItemGroup(placement: .primaryAction) {
-            Menu {
-                Button("Add Folder to Index…") { model.addRoot() }
-                Button("Import Files…") { importFiles() }
-                Button("Scan from iPhone or iPad…") {
-                    ScanCoordinator.shared.presentMenu(destination: model.contextImportDirectory)
-                }
-                Divider()
-                Button("Rescan All Folders") { model.reindex() }
-            } label: {
-                Label("Add", systemImage: "plus")
-            }
-            .menuIndicator(.hidden)
-
             ViewModePicker()
             SortMenu()
 

@@ -34,6 +34,9 @@ struct DoctopusApp: App {
                     ScanCoordinator.shared.onScan = { items, destination in
                         model.importScanned(items, into: destination)
                     }
+                    ScanCoordinator.shared.onImportFiles = { urls, destination in
+                        model.importFiles(urls, into: destination ?? model.contextImportDirectory)
+                    }
                     await model.bootstrap()
                 }
         }
@@ -51,7 +54,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSServicesMenuRequesto
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
-        MainActor.assumeIsolated { ScanCoordinator.shared.register() }
+        // The main menu is only assembled once SwiftUI's commands are in place.
+        DispatchQueue.main.async { ScanCoordinator.shared.register() }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }

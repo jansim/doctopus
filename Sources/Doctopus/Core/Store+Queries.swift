@@ -18,9 +18,13 @@ extension Store {
         case .queue:
             wheres.append("d.id IN (SELECT doc_id FROM processing)")
         case .folder(let path):
-            // Subtree, not just the immediate folder.
-            wheres.append("(d.directory = ? OR d.directory LIKE ?)")
+            // Subtree, plus anything present here only as a Finder alias.
+            wheres.append("""
+                (d.directory = ? OR d.directory LIKE ?
+                 OR EXISTS (SELECT 1 FROM aliases a WHERE a.doc_id = d.id AND a.path LIKE ?))
+                """)
             args.append(.text(path)); args.append(.text(path + "/%"))
+            args.append(.text(path + "/%"))
         case .tag(let id):
             wheres.append("d.id IN (SELECT doc_id FROM document_tags WHERE tag_id=?)")
             args.append(.int(id))
@@ -31,7 +35,7 @@ extension Store {
         case .untagged:
             wheres.append("d.id NOT IN (SELECT doc_id FROM document_tags)")
         case .needsReview:
-            wheres.append("d.approved=0")
+            wheres.append("d.id IN (SELECT doc_id FROM processing WHERE status=0)")
         }
 
         for t in query.tags {
@@ -78,8 +82,22 @@ extension Store {
             wheres.append("(" + ors.joined(separator: " OR ") + ")")
         }
 
+        // Queue mode carries the latest pipeline event alongside each row, so
+        // review happens in the same browser as everything else.
+        var joinQueue = ""
+        var queueColumns = "NULL, NULL, NULL, NULL, NULL, NULL, NULL"
+        if selection.isQueueMode {
+            joinQueue = """
+            LEFT JOIN processing p
+                ON p.id = (SELECT id FROM processing WHERE doc_id = d.id ORDER BY at DESC LIMIT 1)
+            """
+            queueColumns = "p.id, p.at, p.action, p.detail, p.confidence, p.rule, p.status"
+        }
+
         let order: String
-        if sort == .relevance && !joinFTS.isEmpty {
+        if selection.isQueueMode {
+            order = "p.at DESC"
+        } else if sort == .relevance && !joinFTS.isEmpty {
             order = "(h.r IS NULL), h.r ASC, d.created_at DESC"
         } else {
             let field = sort == .relevance ? SortField.added : sort
@@ -90,10 +108,11 @@ extension Store {
         SELECT d.id, d.path, d.directory, d.filename, d.ext, d.size, d.original_size,
                d.created_at, d.mtime, d.ocr_state, d.page_count, d.approved, d.missing,
                m.title, m.correspondent, m.doc_type, m.language, m.doc_date, m.summary,
-               \(snippetCol)
+               \(snippetCol), \(queueColumns)
         FROM documents d
         LEFT JOIN metadata m ON m.doc_id = d.id
         \(joinFTS)
+        \(joinQueue)
         WHERE \(wheres.joined(separator: " AND "))
         ORDER BY \(order)
         LIMIT \(limit)
@@ -109,7 +128,20 @@ extension Store {
                 pageCount: r.intOrNil(10).map(Int.init), approved: r.bool(11), missing: r.bool(12),
                 title: r.stringOrNil(13), correspondent: r.stringOrNil(14), docType: r.stringOrNil(15),
                 language: r.stringOrNil(16), docDate: r.date(17), summary: r.stringOrNil(18),
-                snippet: r.stringOrNil(19)?.nilIfBlank)
+                snippet: r.stringOrNil(19)?.nilIfBlank,
+                queue: r.intOrNil(20).map { id in
+                    QueueInfo(entryID: id, at: r.date(21) ?? .now, action: r.string(22),
+                              detail: r.stringOrNil(23), confidence: r.doubleOrNil(24),
+                              rule: r.stringOrNil(25), approved: r.bool(26))
+                })
+        }
+
+        // A document shown inside a folder it does not physically live in is
+        // there through an alias; flag it so the UI can say so.
+        if case .folder(let path) = selection {
+            for i in rows.indices where rows[i].directory != path && !rows[i].directory.hasPrefix(path + "/") {
+                rows[i].isAliasHere = true
+            }
         }
 
         // Fold every field's value into one uniform dictionary so the views

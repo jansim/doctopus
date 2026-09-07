@@ -181,6 +181,31 @@ enum SelfTest {
         let after = (try? await store.tags()) ?? []
         print("  after   \(after.map { "\($0.name) (\($0.count), colour \($0.color))" }.joined(separator: ", "))")
 
+        print("\nALIASES (drag onto a folder)")
+        if let target = rows.first(where: { $0.directory.hasSuffix("Work") })?.url.deletingLastPathComponent(),
+           let source = rows.first(where: { $0.directory.hasSuffix("Inbox") }) {
+            if let created = try? AliasManager.createAlias(to: source.url, in: target) {
+                try? await store.recordAlias(docID: source.id, tagID: nil, path: created.path)
+                let listed = (try? await store.listDocuments(selection: .folder(target.path),
+                                                             query: SearchQuery(""), sort: .added,
+                                                             ascending: false)) ?? []
+                print("  aliased \(source.filename) into \(target.lastPathComponent)")
+                for row in listed {
+                    print("    \(row.filename.padded(40)) \(row.isAliasHere ? "alias → \((row.directory as NSString).lastPathComponent)" : "master")")
+                }
+                print("  resolves back to: \(AliasManager.resolve(created)?.lastPathComponent ?? "✗ broken")")
+                AliasManager.removeAlias(at: created.path)
+            }
+        }
+
+        print("\nQUEUE MODE (same browser, review columns)")
+        for row in ((try? await store.listDocuments(selection: .queue, query: SearchQuery(""),
+                                                     sort: .added, ascending: false)) ?? []).prefix(4) {
+            guard let q = row.queue else { continue }
+            print("  \(row.filename.padded(36)) \(q.action.padded(10)) "
+                  + "\(q.approved ? "approved    " : "needs review") \(q.detail ?? "")")
+        }
+
         print("\nQUEUE")
         for entry in ((try? await store.processingQueue(limit: 8)) ?? []) {
             print("  \(entry.action.padded(10)) \(entry.filename.padded(34)) \(entry.detail ?? "")")

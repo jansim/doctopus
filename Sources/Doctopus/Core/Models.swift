@@ -42,11 +42,40 @@ struct DocumentRow: Identifiable, Hashable, Sendable {
     /// from their columns so the UI never has to care where a value lives.
     var values: [String: String] = [:]
 
+    /// True when this document's master file lives elsewhere and it is only
+    /// present in the folder being viewed through a Finder alias.
+    var isAliasHere = false
+
+    /// Populated only in queue mode: the most recent pipeline event.
+    var queue: QueueInfo?
+
     var url: URL { URL(fileURLWithPath: path) }
     var displayTitle: String { title?.nilIfBlank ?? filename }
     var savings: Double? {
         guard let o = originalSize, o > 0, size < o else { return nil }
         return 1.0 - Double(size) / Double(o)
+    }
+}
+
+/// The latest processing event for a document, shown in queue mode.
+struct QueueInfo: Hashable, Sendable {
+    var entryID: Int64
+    var at: Date
+    var action: String
+    var detail: String?
+    var confidence: Double?
+    var rule: String?
+    var approved: Bool
+
+    var icon: String {
+        switch action {
+        case "routed": return "arrow.triangle.branch"
+        case "optimized": return "arrow.down.circle"
+        case "renamed": return "character.cursor.ibeam"
+        case "moved": return "folder"
+        case "imported": return "tray.and.arrow.down"
+        default: return "doc.text.magnifyingglass"
+        }
     }
 }
 
@@ -148,7 +177,9 @@ enum Selection: Hashable, Sendable {
     case untagged
     case needsReview
 
-    var isQueue: Bool { if case .queue = self { return true }; return false }
+    /// Both queue selections render the browser with its review affordances —
+    /// Needs Review is simply the queue filtered to undecided entries.
+    var isQueueMode: Bool { self == .queue || self == .needsReview }
 }
 
 /// How the center pane presents results.
