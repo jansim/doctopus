@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key><string>Doctopus</string>
+    <key>CFBundleDisplayName</key><string>Doctopus</string>
+    <key>CFBundleExecutable</key><string>Doctopus</string>
+    <key>CFBundleIdentifier</key><string>io.doctopus.app</string>
+    <key>CFBundleIconFile</key><string>doctopus</string>
+    <key>CFBundleIconName</key><string>doctopus</string>
+    <key>CFBundlePackageType</key><string>APPL</string>
+    <key>CFBundleShortVersionString</key><string>1.0</string>
+    <key>CFBundleVersion</key><string>1</string>
+    <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+    <key>LSMinimumSystemVersion</key><string>15.0</string>
+    <key>NSPrincipalClass</key><string>NSApplication</string>
+    <key>NSHighResolutionCapable</key><true/>
+    <key>NSSupportsAutomaticTermination</key><true/>
+    <key>NSSupportsSuddenTermination</key><false/>
+    <key>NSCameraUsageDescription</key>
+    <string>Doctopus uses Continuity Camera so you can scan documents with your iPhone or iPad directly into a folder.</string>
+    <key>NSDesktopFolderUsageDescription</key>
+    <string>Doctopus indexes the folders you point it at.</string>
+    <key>NSDocumentsFolderUsageDescription</key>
+    <string>Doctopus indexes the folders you point it at.</string>
+    <key>NSDownloadsFolderUsageDescription</key>
+    <string>Doctopus indexes the folders you point it at.</string>
+    <key>CFBundleDocumentTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleTypeName</key><string>Document</string>
+            <key>CFBundleTypeRole</key><string>Viewer</string>
+            <key>LSHandlerRank</key><string>Alternate</string>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>com.adobe.pdf</string>
+                <string>public.png</string>
+                <string>public.jpeg</string>
+            </array>
+        </dict>
+    </array>
+</dict>
+</plist>

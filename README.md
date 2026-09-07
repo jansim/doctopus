@@ -41,3 +41,33 @@ A high-performance, native macOS document management utility inspired by the org
   - metadata: Correspondents, document dates, language, one-sentence LLM summary.
  - tags & document_tags: Relational junction for multi-tag assignment.
  - aliases: Registry of generated macOS Finder aliases for automated pruning when tags change.
+
+---
+
+## Building
+
+No third-party dependencies. Requires Xcode 26 (for the macOS 26 SDK) and runs on macOS 15 or later.
+
+```bash
+Scripts/build.sh && open build/Doctopus.app
+```
+
+The script compiles the SwiftPM executable, assembles `build/Doctopus.app`, compiles `Resources/doctopus.icon` with `actool` (emitting both a layered `Assets.car` for macOS 26 and a legacy `.icns` used on macOS 15), and ad-hoc signs the bundle.
+
+### Command line
+
+```bash
+build/Doctopus.app/Contents/MacOS/Doctopus --selftest Testing/DemoLibrary   # headless pipeline check
+build/Doctopus.app/Contents/MacOS/Doctopus --add-root <folder>              # register a folder without the UI
+```
+
+See [Testing/README.md](Testing/README.md) for generating a demo library.
+
+## Implementation notes
+
+- **Storage** — the system SQLite C API directly (`import SQLite3`), WAL, cached prepared statements. FTS5 with `unicode61 remove_diacritics 2`. One `Store` actor owns the connection, so there is no locking anywhere else.
+- **OCR** — PDFs are read through their embedded text layer first, which is nearly free; only pages that come back empty are rasterized to grayscale at 200 DPI and sent through Vision. A digital-origin archive is indexed without invoking OCR at all. Per-document provenance (`pdf-layer` / `vision` / `mixed`) is shown in the inspector.
+- **Optimization** — a page is only ever rasterized if it has *no* text layer to lose; pages with real text are re-drawn into the output PDF context, which copies their text and vector operators through intact. If the result is not at least 15% smaller, the original is kept byte-for-byte.
+- **Disk is the source of truth** — FSEvents drives a debounced reconcile. A file that disappears is marked missing rather than deleted, so when it reappears elsewhere it is relinked by SHA-256 and keeps its tags, metadata and OCR text. Rows stay claimable for seven days.
+- **On-device model** — `FoundationModels` is weak-linked and every call site is behind `@available(macOS 26)` plus a runtime availability probe. Where it is unavailable the deterministic analyzer supplies dates, correspondents, types and titles, and the app behaves identically otherwise. Document text never leaves the machine either way.
+- **Nothing moves uninvited** — auto-routing applies to imports and scans only. Files already in your library are never moved or renamed unless you ask, and anything below the confidence threshold stays put and lands in the review queue.
