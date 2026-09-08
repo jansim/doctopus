@@ -69,18 +69,22 @@ final class AppModel {
 
     // MARK: - Lifecycle
 
-    init() {
+    /// `storeURL` exists for the headless UI checks, which drive a real model
+    /// against a throwaway index instead of the user's own.
+    init(storeURL: URL? = nil) {
         let support = (try? FileManager.default.url(for: .applicationSupportDirectory,
                                                     in: .userDomainMask, appropriateFor: nil, create: true))
             ?? FileManager.default.temporaryDirectory
         let dir = support.appendingPathComponent("Doctopus", isDirectory: true)
+        let url = storeURL ?? dir.appendingPathComponent("index.sqlite")
         do {
-            store = try Store(url: dir.appendingPathComponent("index.sqlite"))
+            store = try Store(url: url)
         } catch {
             // A corrupt index is recoverable — the disk still holds every document.
-            let backup = dir.appendingPathComponent("index-\(Int(Date().timeIntervalSince1970)).sqlite")
-            try? FileManager.default.moveItem(at: dir.appendingPathComponent("index.sqlite"), to: backup)
-            store = try! Store(url: dir.appendingPathComponent("index.sqlite"))
+            let backup = url.deletingLastPathComponent()
+                .appendingPathComponent("index-\(Int(Date().timeIntervalSince1970)).sqlite")
+            try? FileManager.default.moveItem(at: url, to: backup)
+            store = try! Store(url: url)
         }
     }
 

@@ -19,7 +19,7 @@ final class ThumbnailCache {
 
         var points: CGSize {
             switch self {
-            case .row: return CGSize(width: 22, height: 28)
+            case .row: return CGSize(width: 32, height: 42)
             case .gallery: return CGSize(width: 160, height: 208)
             case .large: return CGSize(width: 108, height: 140)
             }
@@ -47,10 +47,15 @@ final class ThumbnailCache {
         if let running = inFlight[key] { return await running.value }
 
         let points = size.points
+        let scale = NSScreen.main?.backingScaleFactor ?? 2
         let task = Task<NSImage?, Never> {
+            // `.all` prefers a rendered page and falls back to the file's icon
+            // only when there is nothing to render. Asking for `.icon` — as the
+            // list rows used to — always returns the generic document badge,
+            // never the page itself.
             let request = QLThumbnailGenerator.Request(
-                fileAt: url, size: points, scale: 2,
-                representationTypes: size == .row ? .icon : .thumbnail)
+                fileAt: url, size: points, scale: scale,
+                representationTypes: .all)
             guard let rep = try? await QLThumbnailGenerator.shared
                 .generateBestRepresentation(for: request) else { return nil }
             return rep.nsImage

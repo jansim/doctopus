@@ -57,7 +57,8 @@ The script compiles the SwiftPM executable, assembles `build/Doctopus.app`, comp
 ### Command line
 
 ```bash
-build/Doctopus.app/Contents/MacOS/Doctopus --selftest Testing/DemoLibrary   # headless pipeline check
+build/Doctopus.app/Contents/MacOS/Doctopus --selftest Testing/DemoLibrary   # headless pipeline checks
+build/Doctopus.app/Contents/MacOS/Doctopus --uitest Testing/DemoLibrary     # headless UI checks
 build/Doctopus.app/Contents/MacOS/Doctopus --add-root <folder>              # register a folder without the UI
 ```
 

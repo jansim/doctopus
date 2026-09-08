@@ -121,7 +121,11 @@ private struct DocumentTableView: View {
     var body: some View {
         @Bindable var model = model
 
-        Table(model.documents, selection: $model.selectedIDs) {
+        // Rows are built explicitly so the drag lives on the row rather than on
+        // the cell: `.draggable` inside a cell swallows the mouse-down, which
+        // left the document name — the largest target in the row — unable to
+        // change the selection.
+        Table(of: DocumentRow.self, selection: $model.selectedIDs) {
             TableColumn("Document") { row in
                 HStack(spacing: 8) {
                     if model.selection.isQueueMode {
@@ -149,7 +153,6 @@ private struct DocumentTableView: View {
                         }
                     }
                 }
-                .draggable(DocumentDragItem(row))
             }
             .width(min: 240, ideal: 400)
 
@@ -192,6 +195,10 @@ private struct DocumentTableView: View {
 
             TableColumn("") { row in StatusDot(row: row) }
                 .width(18)
+        } rows: {
+            ForEach(model.documents) { row in
+                TableRow(row).draggable(DocumentDragItem(row))
+            }
         }
         .tableStyle(.inset(alternatesRowBackgrounds: true))
         .contextMenu(forSelectionType: Int64.self) { ids in

@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    # macOS 26 for the SDK: the app weak-links FoundationModels so it can still
+    # run on the macOS 15 deployment target, but it has to compile against a
+    # toolchain that has the framework.
+    runs-on: macos-26
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain
+        run: swift --version && xcodebuild -version
+
+      - name: Build
+        run: Scripts/build.sh
+
+      - name: Generate the demo library
+        run: swift Testing/makefixtures.swift Testing/DemoLibrary
+
+      - name: Pipeline checks
+        run: build/Doctopus.app/Contents/MacOS/Doctopus --selftest Testing/DemoLibrary
+
+      # Hit testing and thumbnail rendering only fail when the views are really
+      # on screen, so these drive hosted panes with synthetic events.
+      - name: UI checks
+        run: build/Doctopus.app/Contents/MacOS/Doctopus --uitest Testing/DemoLibrary build/snapshots
+
+      - name: Snapshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: snapshots
+          path: build/snapshots
+          if-no-files-found: warn

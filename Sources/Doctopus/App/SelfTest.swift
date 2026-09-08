@@ -38,7 +38,7 @@ enum SelfTest {
             .appendingPathComponent("doctopus-selftest-\(UUID().uuidString).sqlite")
         defer { try? FileManager.default.removeItem(at: dbURL) }
 
-        guard let store = try? Store(url: dbURL) else { print("✗ could not open store"); return }
+        guard let store = try? Store(url: dbURL) else { print("✗ could not open store"); exit(1) }
         print("Index:  \(dbURL.lastPathComponent)")
         print("Root:   \(root.path)\n")
 
@@ -71,7 +71,24 @@ enum SelfTest {
 
         let rows = (try? await store.listDocuments(selection: .all, query: SearchQuery(""),
                                                    sort: .added, ascending: false)) ?? []
-        print("DOCUMENTS")
+        print("CHECKS")
+        Check.that("documents indexed", stats.total > 0, "\(stats.total)")
+        var sources: Set<String> = []
+        var textless: [String] = []
+        for row in rows {
+            let detail = try? await store.detail(row.id)
+            if let source = detail?.ocrSource { sources.insert(source) }
+            if detail?.ocrWords ?? 0 == 0 { textless.append(row.filename) }
+        }
+        Check.that("every document has extracted text", textless.isEmpty, textless.joined(separator: ", "))
+        Check.that("every document has a type and a date",
+                   rows.allSatisfy { $0.docType != nil && $0.docDate != nil })
+        // The fixtures deliberately include pages with no text layer, so both
+        // extraction paths have to have run.
+        Check.that("both text paths exercised", sources.contains("pdf-layer") && sources.contains("vision"),
+                   sources.sorted().joined(separator: ", "))
+
+        print("\nDOCUMENTS")
         for row in rows {
             guard let detail = try? await store.detail(row.id) else { continue }
             print("  \(row.filename)")
@@ -86,6 +103,11 @@ enum SelfTest {
         }
 
         print("\nSEARCH")
+        for probe in ["rechnung", "insurance polic", "type:Invoice", "\"net pay\""] {
+            let hits = (try? await store.listDocuments(selection: .all, query: SearchQuery(probe),
+                                                       sort: .relevance, ascending: false)) ?? []
+            Check.that("search \(probe) finds something", !hits.isEmpty, "\(hits.count) hit(s)")
+        }
         for probe in ["rechnung", "insurance polic", "kontoauszug", "steuer", "type:Invoice", "is:pending", "\"net pay\""] {
             let hits = (try? await store.listDocuments(selection: .all, query: SearchQuery(probe),
                                                        sort: .relevance, ascending: false)) ?? []
@@ -104,6 +126,7 @@ enum SelfTest {
 
         print("\nFOLDER TREE")
         let tree = (try? await store.folderTree(roots: [root.path])) ?? []
+        Check.that("folder tree built", !tree.isEmpty && tree[0].deepCount == stats.total)
         printTree(tree, depth: 0)
 
         print("\nRENAME PREVIEW (\(Naming.defaultTemplate))")
@@ -146,6 +169,7 @@ enum SelfTest {
             let after = ((try? await store.facets(field: typeField)) ?? [])
                 .first { $0.value == "Bill" }?.count ?? 0
             print("  Contract → Bill (merge)               \(n) document(s); “Bill” now holds \(after)")
+            Check.that("renaming two values to one merges them", after >= 2, "“Bill” holds \(after)")
             n = (try? await store.renameFieldValue(field: typeField, from: "Bill", to: "Invoice")) ?? 0
             print("  Bill → Invoice (restore)              \(n) document(s)")
         }
@@ -166,6 +190,8 @@ enum SelfTest {
                                                            query: SearchQuery(""), sort: .added,
                                                            ascending: false)) ?? []
             print("  filter project:Beta                   \(filtered.count) hit(s)")
+            Check.that("custom field merges and filters", merged.count == 1 && filtered.count == 3,
+                       "\(merged.count) value(s), \(filtered.count) hit(s)")
             try? await store.deleteField(id)
         }
 
@@ -180,6 +206,8 @@ enum SelfTest {
         _ = try? await store.renameTag(invoiceTag, to: "bills")
         let after = (try? await store.tags()) ?? []
         print("  after   \(after.map { "\($0.name) (\($0.count), colour \($0.color))" }.joined(separator: ", "))")
+        Check.that("merged tag keeps the target's colour and documents",
+                   after.count == 1 && after[0].name == "bills" && after[0].count == 3 && after[0].color == 3)
 
         print("\nALIASES (drag onto a folder)")
         if let target = rows.first(where: { $0.directory.hasSuffix("Work") })?.url.deletingLastPathComponent(),
@@ -194,13 +222,19 @@ enum SelfTest {
                     print("    \(row.filename.padded(40)) \(row.isAliasHere ? "alias → \((row.directory as NSString).lastPathComponent)" : "master")")
                 }
                 print("  resolves back to: \(AliasManager.resolve(created)?.lastPathComponent ?? "✗ broken")")
+                Check.that("alias is listed in its folder and resolves to the master",
+                           listed.contains { $0.isAliasHere && $0.id == source.id }
+                               && AliasManager.resolve(created) == source.url)
                 AliasManager.removeAlias(at: created.path)
             }
         }
 
         print("\nQUEUE MODE (same browser, review columns)")
-        for row in ((try? await store.listDocuments(selection: .queue, query: SearchQuery(""),
-                                                     sort: .added, ascending: false)) ?? []).prefix(4) {
+        let queued = (try? await store.listDocuments(selection: .queue, query: SearchQuery(""),
+                                                     sort: .added, ascending: false)) ?? []
+        Check.that("queue mode carries a processing row per document",
+                   queued.count == rows.count && queued.allSatisfy { $0.queue != nil })
+        for row in queued.prefix(4) {
             guard let q = row.queue else { continue }
             print("  \(row.filename.padded(36)) \(q.action.padded(10)) "
                   + "\(q.approved ? "approved    " : "needs review") \(q.detail ?? "")")
@@ -210,7 +244,7 @@ enum SelfTest {
         for entry in ((try? await store.processingQueue(limit: 8)) ?? []) {
             print("  \(entry.action.padded(10)) \(entry.filename.padded(34)) \(entry.detail ?? "")")
         }
-        print("\n✓ self-test complete")
+        Check.finish("pipeline self-test")
     }
 
     private static func printTree(_ nodes: [FolderNode], depth: Int) {

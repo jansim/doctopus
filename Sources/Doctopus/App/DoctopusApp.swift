@@ -22,6 +22,14 @@ enum Main {
             MainActor.assumeIsolated { ScanTest.run(mode: mode) }
             return
         }
+        if let i = CommandLine.arguments.firstIndex(of: "--uitest") {
+            let args = CommandLine.arguments
+            let root = args.count > i + 1 ? args[i + 1] : "Testing/DemoLibrary"
+            MainActor.assumeIsolated {
+                UITest.run(root: root, snapshots: args.count > i + 2 ? args[i + 2] : nil)
+            }
+            return
+        }
         DoctopusApp.main()
     }
 }

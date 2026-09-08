@@ -86,43 +86,44 @@ private struct DetailInspector: View {
 
     private var metadataSection: some View {
         Section2("Metadata") {
-            EditableField("Title", value: row.title ?? "") {
-                model.editMetadata(row.id, column: "title", value: $0)
-            }
-            // Every configured field, in the order Settings puts them.
-            ForEach(model.fields) { field in
-                EditableField(field.name, value: row.values[field.key] ?? "") {
-                    model.setFieldValue(row.id, field: field, value: $0)
+            InfoGrid {
+                EditableRow("Title", value: row.title ?? "") {
+                    model.editMetadata(row.id, column: "title", value: $0)
                 }
-            }
-            LabeledContent("Document Date") {
-                HStack(spacing: 4) {
-                    DatePicker("", selection: Binding(
-                        get: { row.docDate ?? row.createdAt },
-                        set: { model.setDocumentDate(row.id, $0) }),
-                        displayedComponents: .date)
-                    .labelsHidden()
-                    .datePickerStyle(.compact)
-                    if let source = detail.dateSource {
-                        Text(dateSourceLabel(source))
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
-                            .help("Where this date came from")
+                // Every configured field, in the order Settings puts them.
+                ForEach(model.fields) { field in
+                    EditableRow(field.name, value: row.values[field.key] ?? "") {
+                        model.setFieldValue(row.id, field: field, value: $0)
                     }
                 }
-            }
-            if let source = detail.metadataSource {
-                LabeledContent("Extracted by") {
+                InfoRow("Date", alignment: .center) {
                     HStack(spacing: 5) {
-                        Text(source == "llm" ? "On-device model" : "Heuristics")
-                        if let c = detail.metadataConfidence {
-                            ConfidenceBadge(value: c)
+                        DatePicker("", selection: Binding(
+                            get: { row.docDate ?? row.createdAt },
+                            set: { model.setDocumentDate(row.id, $0) }),
+                            displayedComponents: .date)
+                        .labelsHidden()
+                        .datePickerStyle(.compact)
+                        if let source = detail.dateSource {
+                            Text(dateSourceLabel(source))
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                                .help("Where this date came from")
+                        }
+                    }
+                }
+                if let source = detail.metadataSource {
+                    InfoRow("Extracted by") {
+                        HStack(spacing: 5) {
+                            Text(source == "llm" ? "On-device model" : "Heuristics")
+                            if let c = detail.metadataConfidence {
+                                ConfidenceBadge(value: c)
+                            }
                         }
                     }
                 }
             }
         }
-        .font(.callout)
     }
 
     private func dateSourceLabel(_ s: String) -> String {
@@ -181,44 +182,43 @@ private struct DetailInspector: View {
 
     private var fileSection: some View {
         Section2("File") {
-            LabeledContent("Location") {
-                Button {
-                    model.reveal([row])
-                } label: {
-                    Text(shortPath).lineLimit(2).multilineTextAlignment(.trailing)
+            InfoGrid {
+                InfoRow("Where") {
+                    Button { model.reveal([row]) } label: {
+                        Text(shortPath).lineLimit(3).multilineTextAlignment(.leading)
+                    }
+                    .buttonStyle(.link)
+                    .help(row.directory)
                 }
-                .buttonStyle(.link)
-                .help(row.directory)
-            }
-            LabeledContent("Size", value: ByteFormat.string(row.size))
-            if let original = row.originalSize, let savings = row.savings {
-                LabeledContent("Optimized") {
-                    Text("\(ByteFormat.string(original)) → \(ByteFormat.string(row.size)) (−\(Int(savings * 100))%)")
-                        .foregroundStyle(.green)
+                InfoRow("Size", ByteFormat.string(row.size))
+                if let original = row.originalSize, let savings = row.savings {
+                    InfoRow("Optimized") {
+                        Text("\(ByteFormat.string(original)) → \(ByteFormat.string(row.size)) (−\(Int(savings * 100))%)")
+                            .foregroundStyle(.green)
+                    }
                 }
-            }
-            LabeledContent("Added", value: row.createdAt.formatted(date: .abbreviated, time: .shortened))
-            LabeledContent("Modified", value: row.mtime.formatted(date: .abbreviated, time: .shortened))
-            if let words = detail.ocrWords, let src = detail.ocrSource {
-                LabeledContent("Text") {
-                    HStack(spacing: 5) {
-                        Text("\(words) words · \(ocrSourceLabel(src))")
-                        if let c = detail.ocrConfidence, src != "pdf-layer" {
-                            ConfidenceBadge(value: c)
+                InfoRow("Added", row.createdAt.formatted(date: .abbreviated, time: .shortened))
+                InfoRow("Modified", row.mtime.formatted(date: .abbreviated, time: .shortened))
+                if let words = detail.ocrWords, let src = detail.ocrSource {
+                    InfoRow("Text") {
+                        HStack(spacing: 5) {
+                            Text("\(words) words · \(ocrSourceLabel(src))")
+                            if let c = detail.ocrConfidence, src != "pdf-layer" {
+                                ConfidenceBadge(value: c)
+                            }
                         }
                     }
                 }
-            }
-            if let hash = detail.hash {
-                LabeledContent("SHA-256") {
-                    Text(hash.prefix(16) + "…")
-                        .font(.caption.monospaced())
-                        .textSelection(.enabled)
-                        .help(hash)
+                if let hash = detail.hash {
+                    InfoRow("SHA-256") {
+                        Text(hash.prefix(16) + "…")
+                            .font(.caption.monospaced())
+                            .textSelection(.enabled)
+                            .help(hash)
+                    }
                 }
             }
         }
-        .font(.callout)
     }
 
     private func ocrSourceLabel(_ s: String) -> String {
@@ -285,7 +285,7 @@ private struct MultiSelectionInspector: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("\(count) documents selected").font(.headline)
             let total = model.selectedRows.reduce(Int64(0)) { $0 + $1.size }
-            LabeledContent("Total size", value: ByteFormat.string(total))
+            InfoGrid { InfoRow("Total size", ByteFormat.string(total)) }
             Divider()
             Button("Optimize All") { model.optimize(model.selectedRows) }
             Button("Reprocess All") { model.reprocess(model.selectedRows) }
@@ -344,8 +344,54 @@ struct ConfidenceBadge: View {
     private var color: Color { value >= 0.85 ? .green : (value >= 0.6 ? .orange : .red) }
 }
 
-/// Click-to-edit text field that only writes back on commit.
-struct EditableField: View {
+/// Finder-style property list: right-aligned labels in their own gutter, all
+/// values starting at one shared edge. `LabeledContent` pushed the two apart to
+/// opposite sides of the inspector, which made a row hard to read as a pair.
+struct InfoGrid<Content: View>: View {
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 10, verticalSpacing: 6) {
+            content
+        }
+        .font(.callout)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+struct InfoRow<Value: View>: View {
+    let label: String
+    var alignment: VerticalAlignment = .firstTextBaseline
+    @ViewBuilder let value: Value
+
+    init(_ label: String, alignment: VerticalAlignment = .firstTextBaseline,
+         @ViewBuilder value: () -> Value) {
+        self.label = label
+        self.alignment = alignment
+        self.value = value()
+    }
+
+    var body: some View {
+        GridRow(alignment: alignment) {
+            Text(label)
+                .foregroundStyle(.secondary)
+                .gridColumnAlignment(.trailing)
+            value
+                .gridColumnAlignment(.leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
+extension InfoRow where Value == Text {
+    init(_ label: String, _ text: String) {
+        self.init(label) { Text(text) }
+    }
+}
+
+/// Click-to-edit value that only writes back on commit. Empty reads as an
+/// em dash so a blank row still looks like a row.
+struct EditableRow: View {
     let label: String
     @State private var draft: String
     private let committed: String
@@ -359,10 +405,9 @@ struct EditableField: View {
     }
 
     var body: some View {
-        LabeledContent(label) {
+        InfoRow(label, alignment: .center) {
             TextField("", text: $draft, prompt: Text("—"))
                 .textFieldStyle(.plain)
-                .multilineTextAlignment(.trailing)
                 .onSubmit { if draft != committed { onCommit(draft) } }
         }
     }
