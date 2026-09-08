@@ -6,6 +6,7 @@
     {
       "layers" : [
         {
+          "glass" : true,
           "hidden" : true,
           "image-name" : "ChatGPT Image Sep 7, 2026, 11_13_07 PM 2.png",
           "name" : "ChatGPT Image Sep 7, 2026, 11_13_07 PM 2",
@@ -29,24 +30,13 @@
     },
     {
       "layers" : [
-
-      ],
-      "shadow" : {
-        "kind" : "neutral",
-        "opacity" : 0.5
-      },
-      "translucency" : {
-        "enabled" : true,
-        "value" : 0.5
-      }
-    },
-    {
-      "layers" : [
         {
+          "glass" : true,
+          "hidden" : false,
           "image-name" : "background-removed.png",
           "name" : "background-removed",
           "position" : {
-            "scale" : 0.5,
+            "scale" : 0.55,
             "translation-in-points" : [
               -10.41997727840635,
               -26.5
