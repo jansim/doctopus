@@ -204,16 +204,14 @@ private struct DocumentTableView: View {
             // Both tag systems can be shown, and are deliberately separate
             // columns: one is Doctopus's, the other is the Finder's.
             TableColumn("Tags") { (row: DocumentRow) in
-                TagChips(names: row.tags.map(\.name),
-                         colors: row.tags.map { TagColor.color($0.color) })
+                TagChips(tags: row.tags)
             }
             .width(min: 80, ideal: 160)
             .customizationID("tags")
             .defaultVisibility(.hidden)
 
             TableColumn("Finder Tags") { (row: DocumentRow) in
-                TagChips(names: row.finderTags,
-                         colors: row.finderTags.map { FinderTags.color(for: $0) ?? .secondary })
+                FinderTagChips(names: row.finderTags)
             }
             .width(min: 80, ideal: 160)
             .customizationID("finderTags")
@@ -619,30 +617,6 @@ private extension ComparisonResult {
         case .orderedAscending: return .orderedDescending
         case .orderedDescending: return .orderedAscending
         case .orderedSame: return .orderedSame
-        }
-    }
-}
-
-/// A row's tags, small enough to sit in a table cell. Tags are a set, so the
-/// column is not sortable — there is no sensible order to put them in.
-private struct TagChips: View {
-    let names: [String]
-    let colors: [Color]
-
-    var body: some View {
-        if names.isEmpty {
-            Text("—").foregroundStyle(.tertiary)
-        } else {
-            HStack(spacing: 3) {
-                ForEach(Array(names.enumerated()), id: \.offset) { index, name in
-                    Text(name)
-                        .font(.caption)
-                        .lineLimit(1)
-                        .padding(.horizontal, 5).padding(.vertical, 1)
-                        .background(colors[index].opacity(0.16), in: Capsule())
-                        .overlay(Capsule().strokeBorder(colors[index].opacity(0.4)))
-                }
-            }
         }
     }
 }

@@ -148,7 +148,11 @@ private struct DetailInspector: View {
             } else {
                 FlowLayout(spacing: 5) {
                     ForEach(detail.tags) { tag in
-                        HStack(spacing: 3) {
+                        let color = TagColor.color(tag.color)
+                        HStack(spacing: 4) {
+                            Image(systemName: "tag")
+                                .font(.system(size: 9))
+                                .foregroundStyle(color)
                             Text(tag.name).font(.caption)
                             Button {
                                 model.removeTag(tag, from: [row])
@@ -158,8 +162,8 @@ private struct DetailInspector: View {
                             .buttonStyle(.plain)
                         }
                         .padding(.horizontal, 7).padding(.vertical, 3)
-                        .background(TagColor.color(tag.color).opacity(0.16), in: Capsule())
-                        .overlay(Capsule().strokeBorder(TagColor.color(tag.color).opacity(0.45)))
+                        .background(color.opacity(0.16), in: Capsule())
+                        .overlay(Capsule().strokeBorder(color.opacity(0.45)))
                     }
                 }
             }
@@ -183,8 +187,8 @@ private struct DetailInspector: View {
             } else {
                 FlowLayout(spacing: 5) {
                     ForEach(row.finderTags, id: \.self) { name in
-                        let tint = FinderTags.color(for: name) ?? .secondary
-                        HStack(spacing: 3) {
+                        HStack(spacing: 4) {
+                            FinderTagDot(name: name, size: 8)
                             Text(name).font(.caption)
                             Button {
                                 model.removeFinderTag(name, from: [row])
@@ -194,8 +198,9 @@ private struct DetailInspector: View {
                             .buttonStyle(.plain)
                         }
                         .padding(.horizontal, 7).padding(.vertical, 3)
-                        .background(tint.opacity(0.16), in: Capsule())
-                        .overlay(Capsule().strokeBorder(tint.opacity(0.45)))
+                        // The dot carries the colour, so the token stays
+                        // neutral — the way a Finder tag token does.
+                        .background(.quaternary, in: Capsule())
                     }
                 }
             }

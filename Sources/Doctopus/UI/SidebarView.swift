@@ -56,8 +56,7 @@ struct SidebarView: View {
                                 CountBadge(tag.count)
                             }
                         } icon: {
-                            Image(systemName: "tag")
-                                .foregroundStyle(FinderTags.color(for: tag.value) ?? .secondary)
+                            FinderTagDot(name: tag.value)
                         }
                         .tag(Selection.finderTag(tag.value))
                         .dropDestination(for: DocumentDragItem.self) { items, _ in
@@ -172,7 +171,7 @@ private struct TagRow: View {
                 CountBadge(tag.count)
             }
         } icon: {
-            Image(systemName: "tag.fill")
+            Image(systemName: "tag")
                 .foregroundStyle(TagColor.color(tag.color))
         }
         .dropHighlight(targeted)
