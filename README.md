@@ -1,3 +1,7 @@
+<div align="center">
+  <img src="Resources/doctopus_detailed.png" width="350"/>
+</div>
+
 # doctopus
 
 ## Goal
