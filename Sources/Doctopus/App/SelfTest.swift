@@ -81,8 +81,14 @@ enum SelfTest {
             if detail?.ocrWords ?? 0 == 0 { textless.append(row.filename) }
         }
         Check.that("every document has extracted text", textless.isEmpty, textless.joined(separator: ", "))
-        Check.that("every document has a type and a date",
-                   rows.allSatisfy { $0.docType != nil && $0.docDate != nil })
+        let undated = rows.filter { $0.docDate == nil }
+        Check.that("every document has a date", undated.isEmpty,
+                   undated.map(\.filename).joined(separator: ", "))
+        // A type is a guess from the text, and a document the heuristics have
+        // no rule for — a certificate, say — legitimately has none.
+        let typed = rows.filter { $0.docType != nil }.count
+        Check.that("most documents get a type",
+                   Double(typed) >= Double(rows.count) * 0.8, "\(typed)/\(rows.count)")
         // The fixtures deliberately include pages with no text layer, so both
         // extraction paths have to have run.
         Check.that("both text paths exercised", sources.contains("pdf-layer") && sources.contains("vision"),

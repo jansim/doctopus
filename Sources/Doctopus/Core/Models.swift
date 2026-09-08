@@ -190,20 +190,34 @@ enum ViewMode: String, CaseIterable, Sendable, Codable {
     var icon: String { self == .list ? "list.bullet" : "square.grid.2x2" }
 }
 
-enum SortField: String, CaseIterable, Sendable {
-    case added = "Added"
-    case docDate = "Document Date"
-    case name = "Name"
-    case size = "Size"
-    case relevance = "Relevance"
+enum SortField: Hashable, Sendable {
+    case added, docDate, name, size, relevance
+    /// A configured field column. Where its values live decides the SQL, so
+    /// that is resolved by the query rather than here.
+    case field(String)
 
-    var column: String {
+    static let standard: [SortField] = [.relevance, .added, .docDate, .name, .size]
+
+    var label: String {
+        switch self {
+        case .added: return "Added"
+        case .docDate: return "Document Date"
+        case .name: return "Name"
+        case .size: return "Size"
+        case .relevance: return "Relevance"
+        case .field(let key): return key
+        }
+    }
+
+    var column: String? {
         switch self {
         case .added: return "d.created_at"
         case .docDate: return "COALESCE(m.doc_date, d.created_at)"
-        case .name: return "d.filename COLLATE NOCASE"
+        // What the Document column actually shows.
+        case .name: return "COALESCE(NULLIF(m.title, ''), d.filename) COLLATE NOCASE"
         case .size: return "d.size"
         case .relevance: return "rank"
+        case .field: return nil
         }
     }
 }

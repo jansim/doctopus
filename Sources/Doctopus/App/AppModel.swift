@@ -39,8 +39,69 @@ final class AppModel {
     var documents: [DocumentRow] = []
     var selection: Selection = .all { didSet { if selection != oldValue { reloadDocuments() } } }
     var searchText = "" { didSet { if searchText != oldValue { scheduleSearch() } } }
-    var sort: SortField = .added { didSet { reloadDocuments() } }
-    var sortAscending = false { didSet { reloadDocuments() } }
+    /// Which columns the list shows, and in what order. Persisted, so a chosen
+    /// layout survives a relaunch. A field column toggled here writes back to
+    /// the field itself, and `updateField` clears the entry again, so Settings
+    /// and the header menu can never disagree about a field.
+    var listColumns = TableColumnCustomization<DocumentRow>() {
+        didSet {
+            guard listColumns != oldValue else { return }
+            adoptColumnVisibility()
+            persist(UIState.columns, JSONEncoder.string(listColumns))
+        }
+    }
+
+    /// Folders the user has collapsed. Stored as the exceptions rather than the
+    /// expansions, so the tree starts fully open and a folder that appears
+    /// later is open too.
+    var collapsedFolders: Set<String> = [] {
+        didSet {
+            guard collapsedFolders != oldValue else { return }
+            persist(UIState.collapsed, JSONEncoder.string(collapsedFolders.sorted()))
+        }
+    }
+
+    private enum UIState {
+        static let columns = "list_columns_v1"
+        static let collapsed = "sidebar_collapsed_v1"
+    }
+
+    private func persist(_ key: String, _ value: String?) {
+        guard let value else { return }
+        Task { try? await store.setSetting(key, value) }
+    }
+
+    /// Mirrors a header-menu show/hide onto the field, which is what the rest
+    /// of the app (and Settings) reads.
+    private func adoptColumnVisibility() {
+        for field in fields {
+            let visibility = listColumns[visibility: "field.\(field.key)"]
+            guard visibility != .automatic else { continue }
+            let shown = visibility == .visible
+            guard shown != field.showInList else { continue }
+            let updated = Field(id: field.id, key: field.key, name: field.name,
+                                builtinColumn: field.builtinColumn, icon: field.icon,
+                                showInSidebar: field.showInSidebar, showInList: shown,
+                                position: field.position, enabled: field.enabled)
+            Task { try? await store.updateField(updated); refreshAll() }
+        }
+    }
+
+    /// Document date rather than added date, so the default order is the one
+    /// the Date column shows — and its header carries the sort arrow.
+    var sort: SortField = .docDate { didSet { if !batchingSort { reloadDocuments() } } }
+    var sortAscending = false { didSet { if !batchingSort { reloadDocuments() } } }
+    private var batchingSort = false
+
+    /// Field and direction together, so a header click runs one query.
+    func setSort(_ field: SortField, ascending: Bool) {
+        guard field != sort || ascending != sortAscending else { return }
+        batchingSort = true
+        sort = field
+        sortAscending = ascending
+        batchingSort = false
+        reloadDocuments()
+    }
     var selectedIDs: Set<Int64> = [] { didSet { if selectedIDs != oldValue { reloadDetail() } } }
     var viewMode: ViewMode = .list {
         didSet {
@@ -91,6 +152,12 @@ final class AppModel {
     func bootstrap() async {
         settings = await AppSettings.load(from: store)
         viewMode = settings.viewMode
+        if let saved: TableColumnCustomization<DocumentRow> = await decode(UIState.columns) {
+            listColumns = saved
+        }
+        if let saved: [String] = await decode(UIState.collapsed) {
+            collapsedFolders = Set(saved)
+        }
 
         // The callbacks hop back to the main actor; the actors themselves stay off it.
         indexer = Indexer(
@@ -115,6 +182,11 @@ final class AppModel {
     }
 
     // MARK: - Refresh
+
+    private func decode<T: Decodable>(_ key: String) async -> T? {
+        guard let raw = try? await store.setting(key), let data = raw.data(using: .utf8) else { return nil }
+        return try? JSONDecoder().decode(T.self, from: data)
+    }
 
     func refreshAll() {
         reloadTask?.cancel()
@@ -427,6 +499,8 @@ final class AppModel {
     }
 
     func updateField(_ field: Field) {
+        // An explicit choice in Settings supersedes one made in the list header.
+        listColumns[visibility: "field.\(field.key)"] = .automatic
         Task { try? await store.updateField(field); refreshAll() }
     }
 
@@ -540,4 +614,12 @@ extension ISO8601DateFormatter {
         f.dateFormat = "yyyy-MM-dd HH.mm.ss"
         return f
     }()
+}
+
+extension JSONEncoder {
+    /// Small helper for the bits of UI state that live in the settings table.
+    static func string<T: Encodable>(_ value: T) -> String? {
+        guard let data = try? JSONEncoder().encode(value) else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
 }

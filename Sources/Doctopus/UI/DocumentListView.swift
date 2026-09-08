@@ -110,8 +110,16 @@ private struct DocumentTableView: View {
     @Binding var renameSheet: Bool
     @Binding var tagSheet: Bool
 
-    /// Columns beyond the fixed ones are whatever Settings says to show.
-    private var listFields: [Field] { model.fields.filter(\.showInList) }
+    /// Reflects the model's sort onto the headers, so the arrow is in the same
+    /// place whether the order was chosen from a header or from the toolbar.
+    private var sortOrder: Binding<[DocumentSort]> {
+        Binding(
+            get: { [DocumentSort(field: model.sort, order: model.sortAscending ? .forward : .reverse)] },
+            set: { new in
+                guard let sort = new.first else { return }
+                model.setSort(sort.field, ascending: sort.order == .forward)
+            })
+    }
 
     /// Queue mode swaps in review-specific columns.
     private var queueColumns: [QueueColumn] {
@@ -125,8 +133,9 @@ private struct DocumentTableView: View {
         // the cell: `.draggable` inside a cell swallows the mouse-down, which
         // left the document name — the largest target in the row — unable to
         // change the selection.
-        Table(of: DocumentRow.self, selection: $model.selectedIDs) {
-            TableColumn("Document") { row in
+        Table(of: DocumentRow.self, selection: $model.selectedIDs,
+              sortOrder: sortOrder, columnCustomization: $model.listColumns) {
+            TableColumn("Document", sortUsing: DocumentSort(field: .name)) { row in
                 HStack(spacing: 8) {
                     if model.selection.isQueueMode {
                         Toggle("", isOn: Binding(
@@ -155,16 +164,24 @@ private struct DocumentTableView: View {
                 }
             }
             .width(min: 240, ideal: 400)
+            .customizationID("document")
+            // The name column is the list; hiding it would leave nothing to click.
+            .disabledCustomizationBehavior(.visibility)
 
             TableColumnForEach(queueColumns) { kind in
+                // Not sortable: queue mode is always ordered by when the event
+                // happened, so an arrow here would promise something untrue.
                 TableColumn(kind.title) { (row: DocumentRow) in
                     QueueCell(row: row, kind: kind)
                 }
                 .width(min: 70, ideal: kind == .action ? 130 : 90)
+                .customizationID("queue.\(kind.rawValue)")
             }
 
-            TableColumnForEach(listFields) { field in
-                TableColumn(field.name) { (row: DocumentRow) in
+            // Every configured field gets a column; Settings decides which are
+            // on by default and the header menu takes it from there.
+            TableColumnForEach(model.fields) { field in
+                TableColumn(field.name, sortUsing: DocumentSort(field: .field(field.key))) { (row: DocumentRow) in
                     if let value = row.values[field.key] {
                         Text(value).lineLimit(1)
                     } else {
@@ -172,16 +189,30 @@ private struct DocumentTableView: View {
                     }
                 }
                 .width(min: 70, ideal: 130)
+                .customizationID("field.\(field.key)")
+                .defaultVisibility(field.showInList ? .visible : .hidden)
             }
 
-            TableColumn("Date") { row in
+            TableColumn("Date", sortUsing: DocumentSort(field: .docDate)) { row in
                 Text((row.docDate ?? row.createdAt), format: .dateTime.year().month(.abbreviated).day())
                     .monospacedDigit()
                     .foregroundStyle(row.docDate == nil ? .secondary : .primary)
             }
             .width(min: 80, ideal: 100)
+            .customizationID("date")
 
-            TableColumn("Size") { row in
+            // Off by default: the sort menu offers "Added" too, and a sort with
+            // no column on screen would have nowhere to put its arrow.
+            TableColumn("Added", sortUsing: DocumentSort(field: .added)) { row in
+                Text(row.createdAt, format: .dateTime.year().month(.abbreviated).day())
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+            }
+            .width(min: 80, ideal: 100)
+            .customizationID("added")
+            .defaultVisibility(.hidden)
+
+            TableColumn("Size", sortUsing: DocumentSort(field: .size)) { row in
                 HStack(spacing: 4) {
                     Text(ByteFormat.string(row.size)).monospacedDigit()
                     if let savings = row.savings {
@@ -192,9 +223,12 @@ private struct DocumentTableView: View {
                 }
             }
             .width(min: 70, ideal: 96)
+            .customizationID("size")
 
             TableColumn("") { row in StatusDot(row: row) }
                 .width(18)
+                .customizationID("status")
+                .disabledCustomizationBehavior([.resize, .reorder])
         } rows: {
             ForEach(model.documents) { row in
                 TableRow(row).draggable(DocumentDragItem(row))
@@ -506,5 +540,45 @@ private struct ResultsBar: View {
             .padding(.vertical, 5)
         }
         .background(.bar)
+    }
+}
+
+/// What a column header sorts by. The ordering itself is done by SQLite over
+/// the whole result set — the table only ever shows a window of it — so this
+/// exists to carry the choice into the model and to put the arrow on the right
+/// header. `compare` is implemented anyway so the comparator is not a lie.
+struct DocumentSort: SortComparator, Hashable {
+    var field: SortField
+    var order: SortOrder = .forward
+
+    func compare(_ lhs: DocumentRow, _ rhs: DocumentRow) -> ComparisonResult {
+        let result: ComparisonResult
+        switch field {
+        case .name:
+            result = lhs.displayTitle.localizedStandardCompare(rhs.displayTitle)
+        case .size:
+            result = compare(lhs.size, rhs.size)
+        case .added, .relevance:
+            result = compare(lhs.createdAt, rhs.createdAt)
+        case .docDate:
+            result = compare(lhs.docDate ?? lhs.createdAt, rhs.docDate ?? rhs.createdAt)
+        case .field(let key):
+            result = (lhs.values[key] ?? "").localizedStandardCompare(rhs.values[key] ?? "")
+        }
+        return order == .forward ? result : result.reversed
+    }
+
+    private func compare<T: Comparable>(_ lhs: T, _ rhs: T) -> ComparisonResult {
+        lhs == rhs ? .orderedSame : (lhs < rhs ? .orderedAscending : .orderedDescending)
+    }
+}
+
+private extension ComparisonResult {
+    var reversed: ComparisonResult {
+        switch self {
+        case .orderedAscending: return .orderedDescending
+        case .orderedDescending: return .orderedAscending
+        case .orderedSame: return .orderedSame
+        }
     }
 }

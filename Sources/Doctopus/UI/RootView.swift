@@ -133,7 +133,12 @@ private struct SortMenu: View {
         @Bindable var model = model
         Menu {
             Picker("Sort by", selection: $model.sort) {
-                ForEach(SortField.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                ForEach(SortField.standard, id: \.self) { Text($0.label).tag($0) }
+                // The configured columns sort too, so the menu and the list
+                // header offer the same choices.
+                ForEach(model.fields) { field in
+                    Text(field.name).tag(SortField.field(field.key))
+                }
             }
             .pickerStyle(.inline)
             Divider()

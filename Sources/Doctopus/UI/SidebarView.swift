@@ -3,7 +3,6 @@ import AppKit
 
 struct SidebarView: View {
     @Environment(AppModel.self) private var model
-    @State private var expanded: Set<String> = []
 
     var body: some View {
         @Bindable var model = model
@@ -22,7 +21,7 @@ struct SidebarView: View {
             if !model.folders.isEmpty {
                 Section("Folders") {
                     ForEach(model.folders) { node in
-                        FolderRow(node: node, depth: 0, expanded: $expanded)
+                        FolderRow(node: node, depth: 0)
                     }
                 }
             }
@@ -181,17 +180,22 @@ private struct FolderRow: View {
     @Environment(AppModel.self) private var model
     let node: FolderNode
     let depth: Int
-    @Binding var expanded: Set<String>
 
     @State private var targeted = false
-    private var isExpanded: Bool { expanded.contains(node.path) }
+    /// Expanded unless the user has said otherwise, and the exceptions are
+    /// remembered across launches.
+    private var isExpanded: Bool { !model.collapsedFolders.contains(node.path) }
 
     var body: some View {
         Label {
             HStack(spacing: 4) {
                 if !node.children.isEmpty {
                     Button {
-                        if isExpanded { expanded.remove(node.path) } else { expanded.insert(node.path) }
+                        if isExpanded {
+                            model.collapsedFolders.insert(node.path)
+                        } else {
+                            model.collapsedFolders.remove(node.path)
+                        }
                     } label: {
                         Image(systemName: "chevron.right")
                             .font(.system(size: 9, weight: .bold))
@@ -225,7 +229,7 @@ private struct FolderRow: View {
 
         if isExpanded {
             ForEach(node.children) { child in
-                FolderRow(node: child, depth: depth + 1, expanded: $expanded)
+                FolderRow(node: child, depth: depth + 1)
             }
         }
     }

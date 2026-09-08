@@ -99,9 +99,16 @@ extension Store {
             order = "p.at DESC"
         } else if sort == .relevance && !joinFTS.isEmpty {
             order = "(h.r IS NULL), h.r ASC, d.created_at DESC"
+        } else if case .field(let key) = sort, let f = allFields.first(where: { $0.key == key }) {
+            // Built-ins are columns; everything else is one row in the EAV table.
+            let expr = f.builtinColumn.map { "m.\($0)" }
+                ?? "(SELECT value FROM field_values WHERE doc_id = d.id AND field_id = \(f.id))"
+            // Blank values sort last whichever way the column points, so an
+            // unfilled field never heads the list.
+            order = "(\(expr) IS NULL OR \(expr) = ''), \(expr) COLLATE NOCASE \(ascending ? "ASC" : "DESC")"
         } else {
-            let field = sort == .relevance ? SortField.added : sort
-            order = "\(field.column) \(ascending ? "ASC" : "DESC")"
+            let column = sort.column ?? SortField.added.column!
+            order = "\(sort == .relevance ? SortField.added.column! : column) \(ascending ? "ASC" : "DESC")"
         }
 
         let sql = """
