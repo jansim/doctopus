@@ -216,7 +216,7 @@ private struct FolderRow: View {
                 CountBadge(node.deepCount)
             }
         } icon: {
-            Image(systemName: node.isRoot ? "externaldrive" : (isExpanded ? "folder.fill" : "folder"))
+            Image(systemName: node.isRoot ? "externaldrive" : "folder")
         }
         .help(node.path)
         .dropHighlight(targeted)

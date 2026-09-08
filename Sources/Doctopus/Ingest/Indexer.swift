@@ -376,17 +376,32 @@ actor Indexer {
     }
 
     /// Imports files that arrived from a scan or a drop into `destination`.
-    func importFiles(_ urls: [URL], into destination: URL, rootID: Int64) async {
+    /// `movingSource` is only ever true for files the app itself produced, such
+    /// as a scan staged in the temporary directory. A document dropped in from
+    /// anywhere else is copied and the original left exactly where it was:
+    /// importing must never relocate or delete something outside the library.
+    func importFiles(_ urls: [URL], into destination: URL, rootID: Int64,
+                     movingSource: Bool = false) async {
         var work: [(Int64, String)] = []
         try? FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
+        let roots = ((try? await store.roots()) ?? []).map(\.path)
 
         for url in urls {
-            let target = Naming.uniqueURL(in: destination, filename: url.lastPathComponent)
             do {
-                if url.deletingLastPathComponent().path != destination.path {
-                    try FileManager.default.moveItem(at: url, to: target)
+                let target: URL
+                if roots.contains(where: { url.path == $0 || url.path.hasPrefix($0 + "/") }) {
+                    // Already in the library: index it where it lies rather than
+                    // making a second copy of it.
+                    target = url
+                } else {
+                    target = Naming.uniqueURL(in: destination, filename: url.lastPathComponent)
+                    if movingSource {
+                        try FileManager.default.moveItem(at: url, to: target)
+                    } else {
+                        try FileManager.default.copyItem(at: url, to: target)
+                    }
                 }
-                let final = FileManager.default.fileExists(atPath: target.path) ? target : url
+                let final = target
                 let v = try final.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey, .creationDateKey])
                 let facts = Store.FileFacts(rootID: rootID, path: final.path,
                                             size: Int64(v.fileSize ?? 0),

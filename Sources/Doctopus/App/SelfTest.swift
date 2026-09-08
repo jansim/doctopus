@@ -250,6 +250,31 @@ enum SelfTest {
         for entry in ((try? await store.processingQueue(limit: 8)) ?? []) {
             print("  \(entry.action.padded(10)) \(entry.filename.padded(34)) \(entry.detail ?? "")")
         }
+        print("\nIMPORT (a file from outside the library)")
+        let outside = FileManager.default.temporaryDirectory
+            .appendingPathComponent("doctopus-import-\(UUID().uuidString).pdf")
+        if let sample = rows.first, let data = try? Data(contentsOf: sample.url),
+           (try? data.write(to: outside)) != nil {
+            let rootID = ((try? await store.roots()) ?? []).first?.id ?? 0
+            // No auto-routing: routing has its own dry run above, and this
+            // should not scatter folders through the fixture library.
+            var quiet = settings
+            quiet.autoRouteImports = false
+            quiet.deriveWhenNoRule = false
+            await indexer.update(settings: quiet)
+            await indexer.importFiles([outside], into: root.appendingPathComponent("Inbox"), rootID: rootID)
+            let copied = ((try? await store.listDocuments(selection: .all, query: SearchQuery(""),
+                                                          sort: .added, ascending: false)) ?? [])
+                .first { $0.filename == outside.lastPathComponent }
+            print("  imported \(outside.lastPathComponent) → \(copied?.directory ?? "nowhere")")
+            // The disk outside the library is never the app's to change: an
+            // import copies, and the original stays where the user left it.
+            Check.that("importing copies and leaves the original alone",
+                       FileManager.default.fileExists(atPath: outside.path) && copied != nil)
+            if let copied { try? FileManager.default.removeItem(at: copied.url) }
+            try? FileManager.default.removeItem(at: outside)
+        }
+
         Check.finish("pipeline self-test")
     }
 

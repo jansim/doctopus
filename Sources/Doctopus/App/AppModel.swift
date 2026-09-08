@@ -569,7 +569,7 @@ final class AppModel {
         return defaultImportDirectory
     }
 
-    func importFiles(_ urls: [URL], into destination: URL?) {
+    func importFiles(_ urls: [URL], into destination: URL?, movingSource: Bool = false) {
         guard let root = roots.first else {
             errorMessage = "Add a folder to index before importing."
             return
@@ -577,7 +577,7 @@ final class AppModel {
         // A scan started from the menu bar has no explicit destination; follow
         // whatever the sidebar has selected, then fall back to the inbox.
         let dest = destination ?? contextImportDirectory ?? URL(fileURLWithPath: root.path)
-        Task { await indexer.importFiles(urls, into: dest, rootID: root.id) }
+        Task { await indexer.importFiles(urls, into: dest, rootID: root.id, movingSource: movingSource) }
     }
 
     /// Writes scanner output into a folder and runs it through the pipeline.
@@ -593,7 +593,9 @@ final class AppModel {
             let url = tmp.appendingPathComponent(name)
             if (try? item.data.write(to: url)) != nil { urls.append(url) }
         }
-        importFiles(urls, into: destination)
+        // The scan was staged in the temporary directory by this app, so it is
+        // ours to move rather than copy.
+        importFiles(urls, into: destination, movingSource: true)
     }
 }
 
