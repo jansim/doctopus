@@ -234,9 +234,7 @@ private struct FolderRow: View {
     private var menu: some View {
         // Scan-in-place: the destination is pinned to this folder, so the
         // auto-routing engine is bypassed entirely.
-        Button("Scan from iPhone or iPad…") {
-            ScanCoordinator.shared.presentMenu(destination: URL(fileURLWithPath: node.path))
-        }
+        ScanMenu(destination: URL(fileURLWithPath: node.path))
         Button("Import Files Here…") { importHere() }
         Divider()
         Button("New Subfolder…") { newSubfolder() }

@@ -429,9 +429,7 @@ private struct BackgroundMenu: View {
     private var destination: URL? { model.contextImportDirectory }
 
     var body: some View {
-        Button(scanTitle) {
-            ScanCoordinator.shared.presentMenu(destination: destination)
-        }
+        ScanMenu(destination: destination)
         Button("Import Files…") { importFiles() }
         Divider()
         if let destination {
@@ -440,11 +438,6 @@ private struct BackgroundMenu: View {
             }
         }
         Button("Rescan All Folders") { model.reindex() }
-    }
-
-    private var scanTitle: String {
-        guard let name = destination?.lastPathComponent else { return "Scan from iPhone or iPad…" }
-        return "Scan from iPhone or iPad into “\(name)”…"
     }
 
     private func importFiles() {

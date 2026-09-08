@@ -17,6 +17,11 @@ enum Main {
             SelfTest.addRoot(CommandLine.arguments[i + 1])
             return
         }
+        if let i = CommandLine.arguments.firstIndex(of: "--scantest") {
+            let mode = CommandLine.arguments.count > i + 1 ? CommandLine.arguments[i + 1] : "menu"
+            MainActor.assumeIsolated { ScanTest.run(mode: mode) }
+            return
+        }
         DoctopusApp.main()
     }
 }
@@ -34,9 +39,6 @@ struct DoctopusApp: App {
                     ScanCoordinator.shared.onScan = { items, destination in
                         model.importScanned(items, into: destination)
                     }
-                    ScanCoordinator.shared.onImportFiles = { urls, destination in
-                        model.importFiles(urls, into: destination ?? model.contextImportDirectory)
-                    }
                     await model.bootstrap()
                 }
         }
@@ -52,22 +54,29 @@ struct DoctopusApp: App {
 final class AppDelegate: NSObject, NSApplicationDelegate, NSServicesMenuRequestor {
     var model: AppModel?
 
+    // Continuity Camera. The system looks for an import item in the main menu
+    // exactly once, while the app is still launching: installed any later —
+    // applicationDidFinishLaunching included — the item stays a dead, disabled
+    // leaf. SwiftUI has already built its menus by now, so File is there to
+    // amend. See ScanCoordinator and `--scantest`.
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        ScanCoordinator.shared.install()
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
-        // The main menu is only assembled once SwiftUI's commands are in place.
-        DispatchQueue.main.async { ScanCoordinator.shared.register() }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
 
     // The app delegate sits at the end of the responder chain, which is where
-    // AppKit looks for a Continuity Camera destination.
+    // AppKit looks for somewhere to put a capture. Only the return type
+    // matters: the send type says what we could hand *out*, and we hand out
+    // nothing.
     @objc func validRequestor(forSendType sendType: NSPasteboard.PasteboardType?,
                               returnType: NSPasteboard.PasteboardType?) -> Any? {
-        if let returnType, ScanCoordinator.returnTypes.contains(returnType), sendType == nil {
-            return self
-        }
-        return nil
+        guard let returnType, ScanCoordinator.accepts(returnType) else { return nil }
+        return self
     }
 
     func readSelection(from pasteboard: NSPasteboard) -> Bool {
@@ -103,10 +112,6 @@ struct DoctopusCommands: Commands {
                 .keyboardShortcut("o", modifiers: [.command])
             Button("Import Files…") { importPanel() }
                 .keyboardShortcut("i", modifiers: [.command])
-            Button("Scan from iPhone or iPad…") {
-                ScanCoordinator.shared.presentMenu(destination: model.contextImportDirectory)
-            }
-            .keyboardShortcut("i", modifiers: [.command, .shift])
         }
 
         CommandGroup(after: .toolbar) {
