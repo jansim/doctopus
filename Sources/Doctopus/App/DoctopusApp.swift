@@ -146,6 +146,9 @@ struct DoctopusCommands: Commands {
             Divider()
             Button("Reprocess") { model.reprocess(model.selectedRows) }
                 .disabled(model.selectedIDs.isEmpty)
+            Button("Analyze with Model") { model.analyze(model.selectedRows) }
+                .keyboardShortcut("l", modifiers: [.command, .shift])
+                .disabled(model.selectedIDs.isEmpty || !model.modelStatus.isReady)
             Button("Optimize") { model.optimize(model.selectedRows) }
                 .disabled(model.selectedIDs.isEmpty)
             Divider()

@@ -79,6 +79,7 @@ struct QueueInfo: Hashable, Sendable {
         case "renamed": return "character.cursor.ibeam"
         case "moved": return "folder"
         case "imported": return "tray.and.arrow.down"
+        case "analyzed": return "sparkles"
         default: return "doc.text.magnifyingglass"
         }
     }

@@ -155,6 +155,13 @@ actor Store {
             """, [.int(limit)]) { ($0.int(0), $0.string(1), $0.string(2)) }
     }
 
+    /// Every document still present on disk, newest first. The input for a
+    /// library-wide manual pass, which wants ids rather than whole rows.
+    func allDocumentIDs(limit: Int = 20000) throws -> [Int64] {
+        try db.map("SELECT id FROM documents WHERE missing=0 ORDER BY created_at DESC LIMIT ?",
+                   [.int(limit)]) { $0.int(0) }
+    }
+
     func documentPath(_ id: Int64) throws -> String? {
         try db.first("SELECT path FROM documents WHERE id=?", [.int(id)]) { $0.string(0) }
     }

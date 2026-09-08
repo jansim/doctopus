@@ -497,6 +497,10 @@ private struct DocumentMenu: View {
             Button("Move to Folder…") { model.moveToFolderPicker(rows) }
             Divider()
             Button("Reprocess") { model.reprocess(rows) }
+            Button(rows.count == 1 ? "Analyze with Model" : "Analyze \(rows.count) with Model") {
+                model.analyze(rows)
+            }
+            .disabled(!model.modelStatus.isReady)
             Button("Optimize") { model.optimize(rows) }
             Button("Copy Path") {
                 NSPasteboard.general.clearContents()

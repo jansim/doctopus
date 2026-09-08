@@ -24,9 +24,10 @@ A high-performance, native macOS document management utility inspired by the org
 
 ### Metadata & Search
 - Text Processing Pipeline: Apple Vision framework extracts text representations from PDFs and raster images. This all gets stored in a SQLite DB (see Storage) and indexed for deep full-text search.
-- (If available) Apple On-Device LLM: Summary: Generates a 1–2 sentence semantic document summary.
+- LLM enrichment, from either the Apple on-device model or any OpenAI-compatible API endpoint (LM Studio, Ollama, llama.cpp, vLLM, a hosted API). Both answer the same questions and are interchangeable; enrichment can also be turned off entirely. Summary: Generates a 1–2 sentence semantic document summary.
   - Metadata Discovery: Extracts correspondent/vendor, document category, document language, and intent.
   - Tags & Title Proposal: Recommends standard taxonomy tags and canonical document titles.
+  - On-Demand Runs: The model pass can be re-triggered by hand for a selection or the whole library, without re-running OCR or touching anything on disk — which is how a library indexed before a model was configured gets caught up, or asked again with a better one.
 - Hierarchical Naming Schemes: Flexible string interpolation templates (e.g., {date}_{correspondent}_{title}.{ext}). Fallback chains resolve missing attributes deterministically:
   - e.g. Date Extraction: OCR text date > embedded PDF metadata > EXIF (for images) > file creation date fallback.
 
@@ -68,6 +69,12 @@ build/Doctopus.app/Contents/MacOS/Doctopus --uitest Testing/DemoLibrary     # he
 build/Doctopus.app/Contents/MacOS/Doctopus --add-root <folder>              # register a folder without the UI
 ```
 
+Pointing `--selftest` at an API endpoint additionally runs a live enrichment against it, which is the quickest way to verify a server before configuring it in the app:
+
+```bash
+DOCTOPUS_LLM_ENDPOINT=http://localhost:1234/v1 DOCTOPUS_LLM_MODEL=qwen3-8b build/Doctopus.app/Contents/MacOS/Doctopus --selftest Testing/DemoLibrary
+```
+
 See [Testing/README.md](Testing/README.md) for generating a demo library.
 
 ## Implementation notes
@@ -76,5 +83,6 @@ See [Testing/README.md](Testing/README.md) for generating a demo library.
 - **OCR** — PDFs are read through their embedded text layer first, which is nearly free; only pages that come back empty are rasterized to grayscale at 200 DPI and sent through Vision. A digital-origin archive is indexed without invoking OCR at all. Per-document provenance (`pdf-layer` / `vision` / `mixed`) is shown in the inspector.
 - **Optimization** — a page is only ever rasterized if it has *no* text layer to lose; pages with real text are re-drawn into the output PDF context, which copies their text and vector operators through intact. If the result is not at least 15% smaller, the original is kept byte-for-byte.
 - **Disk is the source of truth** — FSEvents drives a debounced reconcile. A file that disappears is marked missing rather than deleted, so when it reappears elsewhere it is relinked by SHA-256 and keeps its tags, metadata and OCR text. Rows stay claimable for seven days.
-- **On-device model** — `FoundationModels` is weak-linked and every call site is behind `@available(macOS 26)` plus a runtime availability probe. Where it is unavailable the deterministic analyzer supplies dates, correspondents, types and titles, and the app behaves identically otherwise. Document text never leaves the machine either way.
+- **On-device model** — `FoundationModels` is weak-linked and every call site is behind `@available(macOS 26)` plus a runtime availability probe. Where it is unavailable the deterministic analyzer supplies dates, correspondents, types and titles, and the app behaves identically otherwise. Document text never leaves the machine.
+- **API model** — one OpenAI-compatible `chat/completions` request shape covers LM Studio, Ollama, llama.cpp, vLLM and hosted APIs, so there is no per-vendor code; the address is normalized however it was pasted, and the request steps down a ladder of `json_schema` → `json_object` → plain text, keeping whichever the endpoint actually answers. Insisting on a schema first is what makes a local reasoning model usable: constrained decoding stops it emitting a thinking trace at all, which on a Gemma-class model is four seconds per document instead of thirty, and no token budget spent on reasoning before the answer starts. Where the ladder does end in plain text, a fenced reply, a chatty preamble and a thinking trace that drafts JSON of its own are all still read correctly. Both backends are asked the same question and produce the same `DocumentInsight`, so routing, tagging and the inspector never know which one ran — only `metadata.source` records it. This backend does send document text to the endpoint you choose, which is why it is never the default, and the API key is stored in Doctopus's own index rather than the Keychain.
 - **Nothing moves uninvited** — auto-routing applies to imports and scans only. Files already in your library are never moved or renamed unless you ask, and anything below the confidence threshold stays put and lands in the review queue.
