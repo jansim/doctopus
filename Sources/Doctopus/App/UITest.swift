@@ -175,8 +175,8 @@ enum UITest {
         Check.that("inspector draws its content", inkedRows(host) > 20, "\(inkedRows(host)) rows with ink")
     }
 
-    /// The sidebar's collapsed folders and the list's column layout are meant
-    /// to survive a relaunch, so they have to reach the settings table.
+    /// Everything about how the library is being looked at is meant to survive
+    /// a relaunch, so it all has to reach the settings table.
     private static func uiStatePersists(_ model: AppModel) async {
         model.collapsedFolders = ["/tmp/one", "/tmp/two"]
         model.listColumns[visibility: "size"] = .hidden
@@ -187,17 +187,58 @@ enum UITest {
 
         let columns: TableColumnCustomization<DocumentRow>? = await settled(model, "list_columns_v1")
         Check.that("column layout is persisted", columns?[visibility: "size"] == .hidden)
+
+        model.setSort(.name, ascending: true)
+        let sort: StoredSort? = await settled(model, "list_sort_v1") {
+            $0.field == "name" && $0.ascending
+        }
+        Check.that("sort order is persisted", sort?.field == "name" && sort?.ascending == true,
+                   sort.map { "\($0.field) \($0.ascending ? "ascending" : "descending")" } ?? "nothing stored")
+
+        model.viewMode = .gallery
+        model.settings.galleryThumbnailSize = 190
+        let stored: AppSettings? = await settled(model, AppSettings.storageKey) {
+            $0.viewMode == .gallery && $0.galleryThumbnailSize == 190
+        }
+        Check.that("view mode and thumbnail size are persisted",
+                   stored?.viewMode == .gallery && stored?.galleryThumbnailSize == 190,
+                   stored.map { "\($0.viewMode.rawValue) at \(Int($0.galleryThumbnailSize))" } ?? "nothing stored")
+
+        // Regression: `AppSettings` decoded key by key or not at all, and `load`
+        // swallowed the failure — so the first release to add a setting reset
+        // every one the user had already chosen.
+        let partial = #"{"viewMode":"Gallery","galleryThumbnailSize":190}"#
+        let decoded = try? JSONDecoder().decode(AppSettings.self, from: Data(partial.utf8))
+        Check.that("settings stored by an older version still load",
+                   decoded?.viewMode == .gallery && decoded?.galleryThumbnailSize == 190
+                       && decoded?.namingTemplate == AppSettings().namingTemplate,
+                   decoded == nil ? "decode failed outright" : "decoded")
+
+        model.viewMode = .list
+        model.setSort(.docDate, ascending: false)
     }
 
-    private static func settled<T: Decodable>(_ model: AppModel, _ key: String) async -> T? {
+    /// Mirrors what `AppModel` writes for the sort, which is private to it.
+    private struct StoredSort: Codable {
+        var field: String
+        var ascending: Bool
+    }
+
+    /// Waits for a settings key to hold what is expected. `until` matters where
+    /// the key already carries a value from an earlier check: without it the
+    /// first read would return the old one and pass or fail on nothing.
+    private static func settled<T: Decodable>(_ model: AppModel, _ key: String,
+                                              until: (T) -> Bool = { _ in true }) async -> T? {
+        var last: T?
         for _ in 0..<20 {
             if let raw = try? await model.store.setting(key), let data = raw.data(using: .utf8),
                let decoded = try? JSONDecoder().decode(T.self, from: data) {
-                return decoded
+                last = decoded
+                if until(decoded) { return decoded }
             }
             try? await Task.sleep(for: .milliseconds(200))
         }
-        return nil
+        return last
     }
 
     /// Doctopus's tags and the Finder's are separate sections, and a document
@@ -266,8 +307,6 @@ enum UITest {
                               activating: Bool = false,
                               until condition: () -> Bool) async -> Bool {
         for _ in 0..<attempts {
-            // Only the checks that drive the list need this, and it is the one
-            // thing here that the person running them can feel.
             if activating {
                 NSApp.activate(ignoringOtherApps: true)
                 _ = await settle({ NSApp.isActive }, timeout: 2)

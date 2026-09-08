@@ -24,9 +24,30 @@ final class AppModel {
             // settings, and that first assignment is the one change that needs
             // neither half of this: it came *from* the store, and the indexer
             // is built with it a few lines later.
-            guard let indexer else { return }
-            let s = settings
-            Task { await s.save(to: store); await indexer.update(settings: s) }
+            guard indexer != nil else { return }
+            saveSettings()
+        }
+    }
+
+    private var settingsSave: Task<Void, Never>?
+    private var savedSettings: AppSettings?
+
+    /// Saves are chained rather than each spawning its own task. Two settings
+    /// changed in quick succession — the thumbnail slider does dozens — used to
+    /// race, and whichever write happened to reach the store last won, which is
+    /// how a chosen view could come back as the one before it. Reading
+    /// `settings` inside the task also collapses the run: once one save has
+    /// written the current value, the ones queued behind it have nothing left
+    /// to do.
+    private func saveSettings() {
+        let previous = settingsSave
+        settingsSave = Task { @MainActor [weak self] in
+            _ = await previous?.value
+            guard let self, let indexer, settings != savedSettings else { return }
+            let current = settings
+            savedSettings = current
+            await current.save(to: store)
+            await indexer.update(settings: current)
         }
     }
 
@@ -72,11 +93,27 @@ final class AppModel {
     private enum UIState {
         static let columns = "list_columns_v1"
         static let collapsed = "sidebar_collapsed_v1"
+        static let sort = "list_sort_v1"
     }
 
+    /// `SortField` carries an associated value, so it is written by its stable
+    /// storage key rather than by a synthesized encoding.
+    private struct StoredSort: Codable {
+        var field: String
+        var ascending: Bool
+    }
+
+    private var persistTasks: [String: Task<Void, Never>] = [:]
+
+    /// Chained per key for the same reason the settings blob is: two changes in
+    /// a row must not reach the store in whichever order the scheduler likes.
     private func persist(_ key: String, _ value: String?) {
         guard let value else { return }
-        Task { try? await store.setSetting(key, value) }
+        let previous = persistTasks[key]
+        persistTasks[key] = Task { @MainActor [store] in
+            _ = await previous?.value
+            try? await store.setSetting(key, value)
+        }
     }
 
     /// Mirrors a header-menu show/hide onto the field, which is what the rest
@@ -97,8 +134,8 @@ final class AppModel {
 
     /// Document date rather than added date, so the default order is the one
     /// the Date column shows — and its header carries the sort arrow.
-    var sort: SortField = .docDate { didSet { if !batchingSort { reloadDocuments() } } }
-    var sortAscending = false { didSet { if !batchingSort { reloadDocuments() } } }
+    var sort: SortField = .docDate { didSet { if !batchingSort { sortChanged() } } }
+    var sortAscending = false { didSet { if !batchingSort { sortChanged() } } }
     private var batchingSort = false
 
     /// Field and direction together, so a header click runs one query.
@@ -108,6 +145,12 @@ final class AppModel {
         sort = field
         sortAscending = ascending
         batchingSort = false
+        sortChanged()
+    }
+
+    private func sortChanged() {
+        persist(UIState.sort, JSONEncoder.string(
+            StoredSort(field: sort.storageKey, ascending: sortAscending)))
         reloadDocuments()
     }
     var selectedIDs: Set<Int64> = [] { didSet { if selectedIDs != oldValue { reloadDetail() } } }
@@ -165,6 +208,15 @@ final class AppModel {
         }
         if let saved: [String] = await decode(UIState.collapsed) {
             collapsedFolders = Set(saved)
+        }
+        // Restored without a reload: the first query has not run yet, and it
+        // is `refreshAll` below that will run it with this order.
+        if let saved: StoredSort = await decode(UIState.sort),
+           let field = SortField(storageKey: saved.field) {
+            batchingSort = true
+            sort = field
+            sortAscending = saved.ascending
+            batchingSort = false
         }
 
         // The callbacks hop back to the main actor; the actors themselves stay off it.

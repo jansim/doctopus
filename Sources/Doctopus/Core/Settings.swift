@@ -49,3 +49,36 @@ struct AppSettings: Codable, Sendable, Equatable {
         try? await store.setSetting(AppSettings.storageKey, raw)
     }
 }
+
+/// Decoded key by key, each one falling back to its default.
+///
+/// The synthesized `init(from:)` ignores the defaults above and throws on the
+/// first key it cannot find, and `load` turns any throw into a fresh
+/// `AppSettings` — so without this, every release that adds a setting silently
+/// resets all the others, view mode and thumbnail size included. Written in an
+/// extension so the memberwise initializer survives.
+extension AppSettings {
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let d = AppSettings()
+        func value<T: Decodable>(_ key: CodingKeys, _ fallback: T) -> T {
+            ((try? container.decodeIfPresent(T.self, forKey: key)) ?? nil) ?? fallback
+        }
+        self.init(
+            namingTemplate: value(.namingTemplate, d.namingTemplate),
+            derivedTemplate: value(.derivedTemplate, d.derivedTemplate),
+            routingThreshold: value(.routingThreshold, d.routingThreshold),
+            autoRouteImports: value(.autoRouteImports, d.autoRouteImports),
+            deriveWhenNoRule: value(.deriveWhenNoRule, d.deriveWhenNoRule),
+            optimizeOnImport: value(.optimizeOnImport, d.optimizeOnImport),
+            optimizeExisting: value(.optimizeExisting, d.optimizeExisting),
+            useOnDeviceModel: value(.useOnDeviceModel, d.useOnDeviceModel),
+            mirrorTagsAsAliases: value(.mirrorTagsAsAliases, d.mirrorTagsAsAliases),
+            ocrConcurrency: value(.ocrConcurrency, d.ocrConcurrency),
+            scanDestination: value(.scanDestination, d.scanDestination),
+            viewMode: value(.viewMode, d.viewMode),
+            galleryThumbnailSize: value(.galleryThumbnailSize, d.galleryThumbnailSize),
+            jpegQuality: value(.jpegQuality, d.jpegQuality),
+            targetDPI: value(.targetDPI, d.targetDPI))
+    }
+}

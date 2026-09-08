@@ -219,6 +219,30 @@ enum SortField: Hashable, Sendable {
         }
     }
 
+    /// Stable name for the settings table. The case names would do, except
+    /// that `field(_:)` carries a key, so the two are spelled out here rather
+    /// than left to a synthesized encoding that a later case could shift.
+    var storageKey: String {
+        switch self {
+        case .added: return "added"
+        case .docDate: return "docDate"
+        case .name: return "name"
+        case .size: return "size"
+        case .relevance: return "relevance"
+        case .field(let key): return "field:\(key)"
+        }
+    }
+
+    init?(storageKey: String) {
+        if storageKey.hasPrefix("field:") {
+            self = .field(String(storageKey.dropFirst("field:".count)))
+            return
+        }
+        guard let match = SortField.standard.first(where: { $0.storageKey == storageKey })
+        else { return nil }
+        self = match
+    }
+
     var column: String? {
         switch self {
         case .added: return "d.created_at"
