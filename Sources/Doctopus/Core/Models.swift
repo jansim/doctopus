@@ -98,6 +98,9 @@ struct DocumentDetail: Sendable {
     var ocrSource: String?
     var text: String = ""
     var tags: [Tag] = []
+    /// Tags the model proposed for this document that nobody has accepted
+    /// or discarded yet.
+    var tagSuggestions: [TagSuggestion] = []
     var aliases: [String] = []
 }
 
@@ -125,6 +128,14 @@ struct Tag: Identifiable, Hashable, Sendable {
     var mirrors: Bool
     var folder: String?
     var count: Int = 0
+}
+
+/// A tag the model proposed for a document but that has not been accepted
+/// (turned into a real `Tag` assignment) or discarded yet. Unlike `Tag`,
+/// it carries no id of its own — it is just a name until someone acts on it.
+struct TagSuggestion: Identifiable, Hashable, Sendable {
+    var id: String { name }
+    var name: String
 }
 
 struct Facet: Identifiable, Hashable, Sendable {

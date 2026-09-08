@@ -251,6 +251,7 @@ extension Store {
         d.row.values = values.compactMapValues { $0 }
         d.text = try ocrText(id)
         d.tags = try tags(for: id)
+        d.tagSuggestions = try tagSuggestions(for: id)
         d.row.finderTags = try finderTags(docID: id)
         d.aliases = try aliases(for: id).map(\.path)
         return d

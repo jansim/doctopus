@@ -13,6 +13,10 @@ struct Router: Sendable {
         var confidence: Double
         var rule: String
         var tags: [String]
+        /// True when `tags` came from an explicit user rule; false when there
+        /// was no matching rule and they fell back to the model's own
+        /// suggestions, which still deserve a human's sign-off.
+        var tagsFromRule: Bool = false
         var explanation: String
 
         var shouldMove: Bool { destination != nil }
@@ -44,13 +48,13 @@ struct Router: Sendable {
             let confidence = min(0.99, rule.weight * qualityFactor(findings, insight))
             guard confidence >= threshold else {
                 return Decision(destination: nil, confidence: confidence, rule: rule.name,
-                                tags: ruleTags(rule),
+                                tags: ruleTags(rule), tagsFromRule: true,
                                 explanation: "Matched “\(rule.name)” but confidence \(pct(confidence)) is below the \(pct(threshold)) threshold")
             }
             let dest = expand(rule.destination, correspondent: correspondent,
                               docType: docType, date: findings.date)
             return Decision(destination: dest, confidence: confidence, rule: rule.name,
-                            tags: ruleTags(rule),
+                            tags: ruleTags(rule), tagsFromRule: true,
                             explanation: "Rule “\(rule.name)” matched \(rule.field)")
         }
 

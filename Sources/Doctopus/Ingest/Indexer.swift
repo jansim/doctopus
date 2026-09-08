@@ -259,11 +259,11 @@ actor Indexer {
             source: insight?.source ?? "heuristic",
             amount: findings.amount))
 
-        // 5. Tags proposed by the model.
+        // 5. Tags proposed by the model — staged as suggestions, not assigned
+        // outright, unless they match a tag already in use and the setting
+        // says to accept those automatically.
         for tag in (insight?.tags ?? []).prefix(4) {
-            if let tagID = try? await store.tagID(named: tag) {
-                try? await store.assign(tag: tagID, to: id, auto: true)
-            }
+            try? await store.suggestTag(tag, for: id, autoAcceptMatching: settings.autoAcceptMatchingTagSuggestions)
         }
 
         // 6. Routing — imports only; existing files are never moved uninvited.
@@ -310,8 +310,12 @@ actor Indexer {
                                        currentDirectory: url.deletingLastPathComponent())
 
         for tag in decision.tags {
-            if let tagID = try? await store.tagID(named: tag) {
-                try? await store.assign(tag: tagID, to: id, auto: true)
+            if decision.tagsFromRule {
+                if let tagID = try? await store.tagID(named: tag) {
+                    try? await store.assign(tag: tagID, to: id, auto: true)
+                }
+            } else {
+                try? await store.suggestTag(tag, for: id, autoAcceptMatching: settings.autoAcceptMatchingTagSuggestions)
             }
         }
 
@@ -475,9 +479,7 @@ actor Indexer {
             amount: nil))
 
         for tag in insight.tags.prefix(4) {
-            if let tagID = try? await store.tagID(named: tag) {
-                try? await store.assign(tag: tagID, to: id, auto: true)
-            }
+            try? await store.suggestTag(tag, for: id, autoAcceptMatching: settings.autoAcceptMatchingTagSuggestions)
         }
         try? await store.logProcessing(docID: id, action: "analyzed", detail: analysisLine(insight),
                                        confidence: insight.confidence, rule: nil,
