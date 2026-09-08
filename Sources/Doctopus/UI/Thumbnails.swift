@@ -108,6 +108,10 @@ struct Thumbnail: View {
         }
         .frame(width: width, height: height)
         .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
+        // The rendered page is fitted inside the frame, so without this the
+        // letterboxed bands either side of it are dead to the mouse and a
+        // click near the edge of a thumbnail does nothing at all.
+        .contentShape(RoundedRectangle(cornerRadius: cornerRadius))
         .shadow(color: showsShadow ? .black.opacity(0.18) : .clear, radius: 3, y: 1)
         .task(id: "\(url.path)#\(mtime.timeIntervalSince1970)") {
             image = ThumbnailCache.shared.cached(url, size, mtime: mtime)

@@ -36,6 +36,7 @@ enum UITest {
             print("  ✓ indexed the library  (\(model.documents.count) documents)")
 
             await clickSelectsARow(model, snapshots: snapshots)
+            await clickSelectsAGalleryThumbnail(model, snapshots: snapshots)
             await headerClickSorts(model, snapshots: snapshots)
             await rowThumbnailIsAPage(model)
             await inspectorDraws(model, snapshots: snapshots)
@@ -75,7 +76,45 @@ enum UITest {
         Check.that("clicking a document's name selects it", selected,
                    model.documents.filter { model.selectedIDs.contains($0.id) }
                        .map(\.filename).joined(separator: ", "))
+
+        // The row thumbnail is hit-testable now, which must not mean it eats
+        // the click on its way to the row.
+        model.selectedIDs = []
+        let viaThumbnail = await click(window, at: NSPoint(x: 22, y: size.height - 43),
+                                       activating: true) {
+            !model.selectedIDs.isEmpty
+        }
+        Check.that("clicking a row's thumbnail selects it too", viaThumbnail)
         yieldFocus()
+    }
+
+    /// Regression: the gallery cell had no hit shape of its own, so only the
+    /// pixels the fitted page actually covered responded. The padding around
+    /// the thumbnail, the bands either side of a page narrower than its frame
+    /// and the gap above the title all swallowed clicks.
+    private static func clickSelectsAGalleryThumbnail(_ model: AppModel, snapshots: String?) async {
+        let size = NSSize(width: 760, height: 420)
+        model.viewMode = .gallery
+        defer { model.viewMode = .list }
+        let (window, host) = host(DocumentListView().environment(model), size: size)
+        defer { window.orderOut(nil) }
+        try? await Task.sleep(for: .seconds(2))
+        if let dir = snapshots { snapshot(host, to: dir + "/gallery.png") }
+
+        let cell = CGFloat(model.settings.galleryThumbnailSize)
+        // Middle of the first thumbnail, and its top-left corner — the corner
+        // is the one that used to do nothing.
+        for (where_, point) in [("middle", NSPoint(x: 18 + cell / 2, y: size.height - (18 + cell * 0.65))),
+                                ("corner", NSPoint(x: 22, y: size.height - 24))] {
+            model.selectedIDs = []
+            // One click, briefly: this is about a click landing, not about
+            // eventually landing after a few tries.
+            let selected = await click(window, at: point, attempts: 1, settling: 0.6) {
+                !model.selectedIDs.isEmpty
+            }
+            Check.that("clicking the \(where_) of a gallery thumbnail selects it", selected)
+        }
+        model.selectedIDs = []
     }
 
     /// Clicking a column header sorts by that column, and clicking it again
@@ -223,7 +262,8 @@ enum UITest {
     /// re-clicking is cheaper than guessing at a long enough delay.
     @discardableResult
     private static func click(_ window: NSWindow, at point: NSPoint,
-                              attempts: Int = 4, activating: Bool = false,
+                              attempts: Int = 4, settling: TimeInterval = 3,
+                              activating: Bool = false,
                               until condition: () -> Bool) async -> Bool {
         for _ in 0..<attempts {
             // Only the checks that drive the list need this, and it is the one
@@ -234,7 +274,7 @@ enum UITest {
             }
             window.makeKeyAndOrderFront(nil)
             post(window, at: point)
-            if await settle(condition, timeout: 3) { return true }
+            if await settle(condition, timeout: settling) { return true }
         }
         return false
     }

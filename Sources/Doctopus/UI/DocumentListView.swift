@@ -426,6 +426,9 @@ private struct GalleryCell: View {
                 }
                 .foregroundStyle(isSelected ? Color.white : Color.primary)
         }
+        // One target for the whole cell: the padding around the thumbnail and
+        // the gap above the title are part of what the user is aiming at.
+        .contentShape(.rect)
         .help(row.filename)
     }
 }
