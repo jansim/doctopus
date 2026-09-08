@@ -12,10 +12,13 @@ import QuickLookThumbnailing
 enum UITest {
     static func run(root: String, snapshots: String?) {
         let app = NSApplication.shared
-        // Regular rather than accessory: synthetic mouse events are only
-        // delivered reliably once the process is genuinely the active app.
-        app.setActivationPolicy(.regular)
-        app.activate(ignoringOtherApps: true)
+        // Accessory, and windows are hosted off-screen: nothing of this should
+        // appear in front of whoever is running it. The one unavoidable
+        // intrusion is that `NSTableView` ignores a synthetic click unless the
+        // process is genuinely frontmost, so the checks that drive the list ask
+        // for focus and hand it straight back to whatever had it.
+        app.setActivationPolicy(.accessory)
+        previousApp = NSWorkspace.shared.frontmostApplication
         let library = URL(fileURLWithPath: (root as NSString).expandingTildeInPath).standardizedFileURL
 
         Task { @MainActor in
@@ -43,6 +46,14 @@ enum UITest {
         app.run()
     }
 
+    private static var previousApp: NSRunningApplication?
+
+    /// Gives focus back to the app the checks took it from.
+    private static func yieldFocus() {
+        guard NSApp.isActive, let previousApp, !previousApp.isTerminated else { return }
+        previousApp.activate()
+    }
+
     // MARK: - Checks
 
     /// Regression: with the drag attached to the cell rather than the row, a
@@ -57,12 +68,14 @@ enum UITest {
 
         model.selectedIDs = []
         // Over the title text of the first row, well clear of the thumbnail.
-        let selected = await click(window, at: NSPoint(x: 140, y: size.height - 43)) {
+        let selected = await click(window, at: NSPoint(x: 140, y: size.height - 43),
+                                   activating: true) {
             !model.selectedIDs.isEmpty
         }
         Check.that("clicking a document's name selects it", selected,
                    model.documents.filter { model.selectedIDs.contains($0.id) }
                        .map(\.filename).joined(separator: ", "))
+        yieldFocus()
     }
 
     /// Clicking a column header sorts by that column, and clicking it again
@@ -75,16 +88,19 @@ enum UITest {
 
         // The Size header, at the far right of the header row.
         let header = NSPoint(x: size.width - 40, y: size.height - 14)
-        let sorted = await click(window, at: header) { model.sort == .size }
+        let sorted = await click(window, at: header, activating: true) { model.sort == .size }
         Check.that("clicking a column header sorts by it", sorted, "sort is \(model.sort.label)")
 
         let wasAscending = model.sortAscending
-        let flipped = await click(window, at: header) { model.sortAscending != wasAscending }
+        let flipped = await click(window, at: header, activating: true) {
+            model.sortAscending != wasAscending
+        }
         Check.that("clicking it again reverses the direction", flipped)
         if let dir = snapshots {
             try? await Task.sleep(for: .seconds(1))
             snapshot(host, to: dir + "/list-sorted.png")
         }
+        yieldFocus()
     }
 
     /// Regression: list rows asked Quick Look for `.icon`, which always returns
@@ -207,10 +223,15 @@ enum UITest {
     /// re-clicking is cheaper than guessing at a long enough delay.
     @discardableResult
     private static func click(_ window: NSWindow, at point: NSPoint,
-                              attempts: Int = 4, until condition: () -> Bool) async -> Bool {
+                              attempts: Int = 4, activating: Bool = false,
+                              until condition: () -> Bool) async -> Bool {
         for _ in 0..<attempts {
-            NSApp.activate(ignoringOtherApps: true)
-            _ = await settle({ NSApp.isActive }, timeout: 2)
+            // Only the checks that drive the list need this, and it is the one
+            // thing here that the person running them can feel.
+            if activating {
+                NSApp.activate(ignoringOtherApps: true)
+                _ = await settle({ NSApp.isActive }, timeout: 2)
+            }
             window.makeKeyAndOrderFront(nil)
             post(window, at: point)
             if await settle(condition, timeout: 3) { return true }
