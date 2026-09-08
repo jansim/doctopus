@@ -206,11 +206,15 @@ final class AppModel {
             async let tagList = (try? await store.tags()) ?? []
             async let fieldList = (try? await store.fields()) ?? []
             async let finder = (try? await store.finderTags()) ?? []
+            async let finderLabels = (try? await store.finderTagLabels()) ?? [:]
             async let q = (try? await store.processingQueue()) ?? []
             async let s = (try? await store.stats()) ?? Store.Stats()
 
             let (t, tg, fs, qq, ss) = await (tree, tagList, fieldList, q, s)
             let ft = await finder
+            // Before the tags themselves, so the first draw already has the
+            // Finder's colours to hand.
+            FinderTags.learn(await finderLabels)
             var facetMap: [String: [Facet]] = [:]
             for field in fs {
                 facetMap[field.key] = (try? await store.facets(field: field)) ?? []
@@ -471,7 +475,7 @@ final class AppModel {
         guard !clean.isEmpty else { return }
         Task {
             for row in rows where FinderTags.add(clean, to: row.url) {
-                try? await store.indexFinderTags(docID: row.id, names: FinderTags.read(row.url))
+                try? await store.indexFinderTags(docID: row.id, entries: FinderTags.entries(row.url))
             }
             refreshAll()
             reloadDetail()
@@ -481,7 +485,7 @@ final class AppModel {
     func removeFinderTag(_ name: String, from rows: [DocumentRow]) {
         Task {
             for row in rows where FinderTags.remove(name, from: row.url) {
-                try? await store.indexFinderTags(docID: row.id, names: FinderTags.read(row.url))
+                try? await store.indexFinderTags(docID: row.id, entries: FinderTags.entries(row.url))
             }
             if selection == .finderTag(name) { selection = .all }
             refreshAll()

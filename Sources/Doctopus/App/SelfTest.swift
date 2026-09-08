@@ -203,10 +203,11 @@ enum SelfTest {
 
         print("\nFINDER TAGS (written to the files themselves)")
         if let sample = rows.first {
-            let before = FinderTags.read(sample.url)
+            let before = FinderTags.entries(sample.url)
             _ = FinderTags.add("Doctopus Test", to: sample.url)
-            let onDisk = FinderTags.read(sample.url)
-            try? await store.indexFinderTags(docID: sample.id, names: onDisk)
+            let entries = FinderTags.entries(sample.url)
+            let onDisk = entries.map(\.name)
+            try? await store.indexFinderTags(docID: sample.id, entries: entries)
             let listed = (try? await store.finderTags()) ?? []
             let filtered = (try? await store.listDocuments(selection: .finderTag("Doctopus Test"),
                                                            query: SearchQuery(""), sort: .added,
@@ -221,10 +222,24 @@ enum SelfTest {
                                                            query: SearchQuery("finder:\"Doctopus Test\""),
                                                            sort: .added, ascending: false)) ?? []
             Check.that("finder: searches the Finder's tags", searched.contains { $0.id == sample.id })
-            // Put the file back exactly as it was found.
+
+            // Colours: a tag named after one of the Finder's own gets that
+            // label, and adding a second tag leaves the first one's colour be.
+            _ = FinderTags.add("Blue", to: sample.url)
+            _ = FinderTags.add("Doctopus Colour", to: sample.url)
+            let coloured = FinderTags.entries(sample.url)
+            print("  colours                 " + coloured.map { "\($0.name)=\($0.label)" }.joined(separator: ", "))
+            Check.that("a Finder colour tag keeps macOS's own label",
+                       coloured.contains { $0.name == "Blue" && $0.label == 4 },
+                       coloured.map { "\($0.name)=\($0.label)" }.joined(separator: ", "))
+            Check.that("adding a tag preserves the colours already on the file",
+                       coloured.first { $0.name == "Blue" }?.label == 4)
+
+            // Put the file back exactly as it was found, colours included.
             _ = FinderTags.write(before, to: sample.url)
-            try? await store.indexFinderTags(docID: sample.id, names: FinderTags.read(sample.url))
-            Check.that("removing it leaves the file as it was", FinderTags.read(sample.url) == before)
+            Check.that("removing them leaves the file as it was",
+                       FinderTags.entries(sample.url) == before)
+            try? await store.indexFinderTags(docID: sample.id, entries: FinderTags.entries(sample.url))
         }
 
         print("\nVALUE ICONS")

@@ -202,7 +202,7 @@ actor Indexer {
 
         // The Finder's tags are read straight off the file every pass, so the
         // index follows whatever was done in the Finder without owning it.
-        try? await store.indexFinderTags(docID: id, names: FinderTags.read(url))
+        try? await store.indexFinderTags(docID: id, entries: FinderTags.entries(url))
 
         // 1. Optimize before OCR so the indexed text matches the stored bytes.
         var optimized: Optimizer.Result?

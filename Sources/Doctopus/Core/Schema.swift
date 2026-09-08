@@ -2,14 +2,24 @@ import Foundation
 
 /// Versioned schema. Migrations are append-only: bump `current` and add a case.
 enum Schema {
-    static let current = 3
+    static let current = 4
 
     static func migrate(_ db: Database) throws {
         let version = try db.first("PRAGMA user_version") { Int($0.int(0)) } ?? 0
         if version < 1 { try v1(db) }
         if version < 2 { try v2(db) }
         if version < 3 { try v3(db) }
+        if version < 4 { try v4(db) }
         try db.exec("PRAGMA user_version=\(current)")
+    }
+
+    /// The colour label macOS gives each Finder tag, so the sidebar can draw a
+    /// tag in its own colour without re-reading every file at launch.
+    private static func v4(_ db: Database) throws {
+        let present = try db.first(
+            "SELECT COUNT(*) FROM pragma_table_info('finder_tags') WHERE name='label'") { $0.int(0) } ?? 0
+        guard present == 0 else { return }
+        try db.exec("ALTER TABLE finder_tags ADD COLUMN label INTEGER NOT NULL DEFAULT 0")
     }
 
     /// Per-value icons, and the mirror of the Finder's own tags. Finder tags

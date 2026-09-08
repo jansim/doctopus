@@ -31,12 +31,26 @@ extension Store {
     /// Replaces the indexed copy of one document's Finder tags. The file itself
     /// is the source of truth; this only mirrors it so the tags can be counted
     /// and filtered without reading every file.
-    func indexFinderTags(docID: Int64, names: [String]) throws {
+    func indexFinderTags(docID: Int64, entries: [FinderTags.Entry]) throws {
         try db.run("DELETE FROM finder_tags WHERE doc_id=?", [.int(docID)])
-        for name in Set(names.map { $0.trimmingCharacters(in: .whitespaces) }) where !name.isEmpty {
-            try db.run("INSERT OR IGNORE INTO finder_tags(doc_id, name) VALUES(?,?)",
-                       [.int(docID), .text(name)])
+        var seen: Set<String> = []
+        for entry in entries {
+            let name = entry.name.trimmingCharacters(in: .whitespaces)
+            guard !name.isEmpty, seen.insert(name.lowercased()).inserted else { continue }
+            try db.run("INSERT OR IGNORE INTO finder_tags(doc_id, name, label) VALUES(?,?,?)",
+                       [.int(docID), .text(name), .int(Int64(entry.label))])
         }
+    }
+
+    /// The colour label seen for each Finder tag across the library. The
+    /// maximum, so one untagged-by-colour copy cannot grey out a tag that
+    /// every other file carries in red.
+    func finderTagLabels() throws -> [String: Int] {
+        var out: [String: Int] = [:]
+        try db.query("SELECT name, MAX(label) FROM finder_tags GROUP BY name COLLATE NOCASE") {
+            out[$0.string(0)] = Int($0.int(1))
+        }
+        return out
     }
 
     func finderTags(docID: Int64) throws -> [String] {

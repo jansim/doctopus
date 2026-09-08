@@ -150,7 +150,7 @@ enum UITest {
     /// files, so everything is put back afterwards.
     private static func sidebarShowsBothTagSystems(_ model: AppModel, snapshots: String?) async {
         guard let row = model.documents.first else { return }
-        let originalFinderTags = FinderTags.read(row.url)
+        let originalFinderTags = FinderTags.entries(row.url)
 
         model.addTag("Receipts", to: [row])
         model.addFinderTag("Blue", to: [row])
