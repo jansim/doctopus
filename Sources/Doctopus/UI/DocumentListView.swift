@@ -311,19 +311,26 @@ struct AliasBadgedThumbnail: View {
     var cornerRadius: CGFloat = 2
     var showsShadow = false
 
+    private var isGallery: Bool { width > 60 }
+
+    /// The badge is a corner mark, not a second subject: at row size it has to
+    /// stay legible against a 20-point thumbnail, but at gallery size the same
+    /// proportion turns it into a button stuck over the page.
+    private var badge: CGFloat { max(6, width * (isGallery ? 0.14 : 0.28)) }
+
     var body: some View {
         Thumbnail(url: row.url, mtime: row.mtime,
-                  size: width > 60 ? .gallery : .row,
+                  size: isGallery ? .gallery : .row,
                   width: width, height: height,
                   cornerRadius: cornerRadius, showsShadow: showsShadow)
             .overlay(alignment: .bottomLeading) {
                 if row.isAliasHere {
                     Image(systemName: "arrow.up.forward")
-                        .font(.system(size: max(6, width * 0.28), weight: .bold))
+                        .font(.system(size: badge, weight: .bold))
                         .foregroundStyle(.white)
-                        .padding(max(1, width * 0.06))
+                        .padding(max(1, badge * 0.22))
                         .background(Circle().fill(Color.secondary.opacity(0.85)))
-                        .padding(max(1, width * 0.04))
+                        .padding(max(1, badge * 0.14))
                         .help("Alias — the original lives in \((row.directory as NSString).lastPathComponent)")
                 }
             }
