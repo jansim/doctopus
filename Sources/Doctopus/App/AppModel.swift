@@ -20,6 +20,11 @@ final class AppModel {
     var settings = AppSettings() {
         didSet {
             guard settings != oldValue else { return }
+            // `indexer` only exists once `bootstrap` has read the stored
+            // settings, and that first assignment is the one change that needs
+            // neither half of this: it came *from* the store, and the indexer
+            // is built with it a few lines later.
+            guard let indexer else { return }
             let s = settings
             Task { await s.save(to: store); await indexer.update(settings: s) }
         }
