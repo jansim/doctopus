@@ -14,6 +14,8 @@ struct DocumentInsight: Sendable {
     var title: String?
     var tags: [String] = []
     var confidence: Double = 0
+    /// Which backend produced this, stored verbatim in `metadata.source`.
+    var source: String = "llm"
 }
 
 #if canImport(FoundationModels)
@@ -50,13 +52,7 @@ private struct GeneratedInsight {
 /// other machine `isAvailable` is false and the pipeline keeps its heuristic
 /// results — the app never degrades into a broken state.
 actor LLMService {
-    enum Status: Sendable, Equatable {
-        case unsupported(String)
-        case unavailable(String)
-        case ready
-    }
-
-    private(set) var status: Status = .unsupported("Requires macOS 26 with Apple Intelligence")
+    private(set) var status: LLMStatus = .unsupported("Requires macOS 26 with Apple Intelligence")
     private var probed = false
 
     #if canImport(FoundationModels)
@@ -68,21 +64,14 @@ actor LLMService {
     #endif
     private var _session: AnyObject?
 
-    private static let instructions = """
-    You classify scanned personal and business documents for a filing system. \
-    Answer only from the text you are given. If a field is genuinely not \
-    determinable, return an empty string rather than guessing. Never invent \
-    names, amounts or dates. Be terse.
-    """
-
-    func probe() -> Status {
+    func probe() -> LLMStatus {
         if probed { return status }
         probed = true
         #if canImport(FoundationModels)
         if #available(macOS 26.0, *) {
             switch SystemLanguageModel.default.availability {
             case .available:
-                status = .ready
+                status = .ready("Apple on-device model")
             case .unavailable(let reason):
                 status = .unavailable(Self.describe(reason))
             @unknown default:
@@ -95,22 +84,13 @@ actor LLMService {
         return status
     }
 
-    var isAvailable: Bool { probe() == .ready }
+    var isAvailable: Bool { probe().isReady }
 
-    func enrich(text: String, filename: String) async -> DocumentInsight? {
-        guard probe() == .ready else { return nil }
+    func enrich(text: String, filename: String, limit: Int) async -> DocumentInsight? {
+        guard probe().isReady else { return nil }
         #if canImport(FoundationModels)
         if #available(macOS 26.0, *) {
-            // Head and tail carry the letterhead and the totals/signature block;
-            // the middle of a long document rarely changes the classification.
-            let excerpt = Self.excerpt(text)
-            guard excerpt.count > 40 else { return nil }
-            let prompt = """
-            File name: \(filename)
-
-            Document text:
-            \(excerpt)
-            """
+            let prompt = LLMPrompt.user(text: text, filename: filename, limit: limit)
             do {
                 let session = try currentSession()
                 let response = try await session.respond(to: prompt, generating: GeneratedInsight.self)
@@ -125,7 +105,8 @@ actor LLMService {
                     tags: g.tags.split(separator: ",")
                         .map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
                         .filter { !$0.isEmpty && $0.count < 32 },
-                    confidence: 0.9)
+                    confidence: 0.9,
+                    source: "llm")
             } catch {
                 // A single failure (context overflow, guardrail, model unloaded)
                 // must not poison the rest of the batch.
@@ -141,7 +122,7 @@ actor LLMService {
     @available(macOS 26.0, *)
     private func currentSession() throws -> LanguageModelSession {
         if let existing = sessionBox { return existing }
-        let s = LanguageModelSession(instructions: Self.instructions)
+        let s = LanguageModelSession(instructions: LLMPrompt.instructions)
         sessionBox = s
         return s
     }
@@ -156,22 +137,4 @@ actor LLMService {
         }
     }
     #endif
-
-    private static func excerpt(_ text: String, limit: Int = 6000) -> String {
-        guard text.count > limit else { return text }
-        let head = text.prefix(limit * 2 / 3)
-        let tail = text.suffix(limit / 3)
-        return head + "\n…\n" + tail
-    }
-}
-
-extension LLMService.Status {
-    var label: String {
-        switch self {
-        case .ready: return "On-device model ready"
-        case .unavailable(let r): return r
-        case .unsupported(let r): return r
-        }
-    }
-    var isReady: Bool { self == .ready }
 }

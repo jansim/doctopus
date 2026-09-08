@@ -34,14 +34,7 @@ private struct DetailInspector: View {
             VStack(alignment: .leading, spacing: 14) {
                 header
                 Divider()
-                if let summary = row.summary {
-                    Section2("Summary") {
-                        Text(summary)
-                            .font(.callout)
-                            .textSelection(.enabled)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
+                summarySection
                 metadataSection
                 tagsSection
                 finderTagsSection
@@ -52,6 +45,37 @@ private struct DetailInspector: View {
             .padding(14)
         }
         .id(row.id)
+    }
+
+    /// The model's own output, with the button that produced it. Documents
+    /// indexed before a model was configured land here with nothing to show,
+    /// which is exactly when someone wants to run it by hand.
+    @ViewBuilder
+    private var summarySection: some View {
+        let analyzing = model.progress.phase == "Analyzing"
+        Section2("Summary") {
+            if let summary = row.summary {
+                Text(summary)
+                    .font(.callout)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                Text(model.modelStatus.isReady
+                     ? "Not analyzed yet."
+                     : "No model configured — \(model.modelStatus.label).")
+                    .font(.callout).foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Button {
+                model.analyze([row])
+            } label: {
+                Label(row.summary == nil ? "Analyze with Model" : "Analyze Again",
+                      systemImage: "sparkles")
+                    .font(.callout)
+            }
+            .buttonStyle(.link)
+            .disabled(!model.modelStatus.isReady || analyzing)
+        }
     }
 
     // MARK: - Header
@@ -117,7 +141,7 @@ private struct DetailInspector: View {
                 if let source = detail.metadataSource {
                     InfoRow("Extracted by") {
                         HStack(spacing: 5) {
-                            Text(source == "llm" ? "On-device model" : "Heuristics")
+                            Text(Self.sourceLabel(source))
                             if let c = detail.metadataConfidence {
                                 ConfidenceBadge(value: c)
                             }
@@ -125,6 +149,14 @@ private struct DetailInspector: View {
                     }
                 }
             }
+        }
+    }
+
+    private static func sourceLabel(_ s: String) -> String {
+        switch s {
+        case "llm": return "On-device model"
+        case "remote": return "API model"
+        default: return "Heuristics"
         }
     }
 
@@ -338,6 +370,8 @@ private struct MultiSelectionInspector: View {
             Divider()
             Button("Optimize All") { model.optimize(model.selectedRows) }
             Button("Reprocess All") { model.reprocess(model.selectedRows) }
+            Button("Analyze All with Model") { model.analyze(model.selectedRows) }
+                .disabled(!model.modelStatus.isReady)
             Button("Reveal in Finder") { model.reveal(model.selectedRows) }
             Spacer()
         }

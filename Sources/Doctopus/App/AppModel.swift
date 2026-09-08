@@ -12,7 +12,7 @@ import AppKit
 final class AppModel {
     // Backing services
     let store: Store
-    let llm = LLMService()
+    let intelligence = Intelligence()
     private(set) var indexer: Indexer!
     private var watcher: FileWatcher?
 
@@ -166,7 +166,7 @@ final class AppModel {
 
     // Transient UI state
     var progress = IndexProgress()
-    var modelStatus: LLMService.Status = .unsupported("Checking…")
+    var modelStatus: LLMStatus = .unsupported("Checking…")
     var errorMessage: String?
 
     private var searchTask: Task<Void, Never>?
@@ -220,8 +220,9 @@ final class AppModel {
         }
 
         // The callbacks hop back to the main actor; the actors themselves stay off it.
+        await intelligence.update(settings: settings)
         indexer = Indexer(
-            store: store, llm: llm, settings: settings,
+            store: store, intelligence: intelligence, settings: settings,
             onProgress: { [weak self] p in Task { @MainActor in self?.progress = p } },
             onDataChanged: { [weak self] in Task { @MainActor in self?.refreshAll() } })
 
@@ -229,7 +230,7 @@ final class AppModel {
             for rule in Router.starterRules { _ = try? await store.upsertRule(rule) }
         }
 
-        modelStatus = await llm.probe()
+        modelStatus = await intelligence.status()
 
         // Load the roots before anything reads them: `refreshAll` runs in a
         // detached task, so checking `roots` right after it would always lose
@@ -391,6 +392,64 @@ final class AppModel {
 
     func reprocess(_ rows: [DocumentRow]) {
         Task { await indexer.reprocess(ids: rows.map(\.id)) }
+    }
+
+    // MARK: - Model enrichment
+
+    /// Manual trigger for the model pass over documents that are already
+    /// indexed. Deliberately separate from Reprocess: this asks the model
+    /// again and touches nothing else.
+    func analyze(_ rows: [DocumentRow]) {
+        analyze(ids: rows.map(\.id), subject: rows.count == 1
+                ? rows[0].url.lastPathComponent : "\(rows.count) documents")
+    }
+
+    /// Runs the model over the whole library. The expensive one, so the caller
+    /// is expected to have asked first.
+    func analyzeLibrary() {
+        Task {
+            let ids = (try? await store.allDocumentIDs()) ?? []
+            guard !ids.isEmpty else {
+                errorMessage = "There is nothing indexed yet."
+                return
+            }
+            analyze(ids: ids, subject: "\(ids.count) documents")
+        }
+    }
+
+    private func analyze(ids: [Int64], subject: String) {
+        guard !ids.isEmpty else { return }
+        Task {
+            // Settings are saved on a chained task, so a run started right
+            // after a change in the settings pane could otherwise ask the
+            // backend the user just switched away from.
+            await indexer.update(settings: settings)
+            let summary = await indexer.analyze(ids: ids)
+            // Re-probing costs a round trip, but a run that just failed is
+            // exactly when the status shown in Settings is worth correcting.
+            modelStatus = await intelligence.status()
+            errorMessage = Self.describe(summary, subject: subject)
+        }
+    }
+
+    private static func describe(_ s: Indexer.AnalyzeSummary, subject: String) -> String {
+        if let blocked = s.blocked { return "Could not analyze \(subject): \(blocked)" }
+        if s.updated == 0, s.failed == 0 {
+            return "Nothing to analyze — no indexed text in \(subject)."
+        }
+        var parts = ["Analyzed \(s.updated) document\(s.updated == 1 ? "" : "s")"]
+        if s.skipped > 0 { parts.append("\(s.skipped) had no text") }
+        if s.failed > 0 { parts.append("\(s.failed) the model could not answer for") }
+        return parts.joined(separator: ", ") + "."
+    }
+
+    /// Re-asks the configured backend whether it is reachable. The Test button
+    /// in Settings, and anything else that wants a fresh answer.
+    func refreshModelStatus() {
+        Task {
+            await intelligence.update(settings: settings)
+            modelStatus = await intelligence.refreshStatus()
+        }
     }
 
     func optimize(_ rows: [DocumentRow]) {
