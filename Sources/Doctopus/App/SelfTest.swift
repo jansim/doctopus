@@ -201,6 +201,49 @@ enum SelfTest {
             try? await store.deleteField(id)
         }
 
+        print("\nFINDER TAGS (written to the files themselves)")
+        if let sample = rows.first {
+            let before = FinderTags.read(sample.url)
+            _ = FinderTags.add("Doctopus Test", to: sample.url)
+            let onDisk = FinderTags.read(sample.url)
+            try? await store.indexFinderTags(docID: sample.id, names: onDisk)
+            let listed = (try? await store.finderTags()) ?? []
+            let filtered = (try? await store.listDocuments(selection: .finderTag("Doctopus Test"),
+                                                           query: SearchQuery(""), sort: .added,
+                                                           ascending: false)) ?? []
+            print("  \(sample.filename) → \(onDisk.joined(separator: ", "))")
+            print("  library-wide            \(listed.map { "\($0.value) (\($0.count))" }.joined(separator: ", "))")
+            Check.that("a Finder tag is written to the file and indexed",
+                       onDisk.contains("Doctopus Test")
+                           && listed.contains { $0.value == "Doctopus Test" }
+                           && filtered.contains { $0.id == sample.id })
+            let searched = (try? await store.listDocuments(selection: .all,
+                                                           query: SearchQuery("finder:\"Doctopus Test\""),
+                                                           sort: .added, ascending: false)) ?? []
+            Check.that("finder: searches the Finder's tags", searched.contains { $0.id == sample.id })
+            // Put the file back exactly as it was found.
+            _ = FinderTags.write(before, to: sample.url)
+            try? await store.indexFinderTags(docID: sample.id, names: FinderTags.read(sample.url))
+            Check.that("removing it leaves the file as it was", FinderTags.read(sample.url) == before)
+        }
+
+        print("\nVALUE ICONS")
+        if let typeField = fields.first(where: { $0.key == "doc_type" }),
+           let first = ((try? await store.facets(field: typeField)) ?? []).first {
+            try? await store.setValueIcon(field: typeField, value: first.value, icon: "banknote")
+            let withIcon = ((try? await store.facets(field: typeField)) ?? [])
+                .first { $0.value == first.value }
+            print("  \(first.value.padded(20)) icon=\(withIcon?.icon ?? "—") (field default \(typeField.icon))")
+            Check.that("a value can carry its own icon", withIcon?.icon == "banknote")
+
+            // Renaming carries the icon across with the value.
+            _ = try? await store.renameFieldValue(field: typeField, from: first.value, to: "Icon Test")
+            let renamed = ((try? await store.facets(field: typeField)) ?? []).first { $0.value == "Icon Test" }
+            Check.that("the icon follows a renamed value", renamed?.icon == "banknote")
+            _ = try? await store.renameFieldValue(field: typeField, from: "Icon Test", to: first.value)
+            try? await store.setValueIcon(field: typeField, value: first.value, icon: nil)
+        }
+
         print("\nTAG MERGE")
         let invoiceTag = (try? await store.tagID(named: "invoice")) ?? 0
         let billTag = (try? await store.tagID(named: "bills")) ?? 0

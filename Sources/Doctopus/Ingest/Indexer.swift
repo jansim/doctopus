@@ -200,6 +200,10 @@ actor Indexer {
 
         if let hash = FileScanner.hash(url) { try? await store.setHash(id, hash) }
 
+        // The Finder's tags are read straight off the file every pass, so the
+        // index follows whatever was done in the Finder without owning it.
+        try? await store.indexFinderTags(docID: id, names: FinderTags.read(url))
+
         // 1. Optimize before OCR so the indexed text matches the stored bytes.
         var optimized: Optimizer.Result?
         if (isImport && settings.optimizeOnImport) || (!isImport && settings.optimizeExisting) {

@@ -28,6 +28,9 @@ extension Store {
         case .tag(let id):
             wheres.append("d.id IN (SELECT doc_id FROM document_tags WHERE tag_id=?)")
             args.append(.int(id))
+        case .finderTag(let name):
+            wheres.append("d.id IN (SELECT doc_id FROM finder_tags WHERE name = ? COLLATE NOCASE)")
+            args.append(.text(name))
         case .field(let key, let value):
             if let field = allFields.first(where: { $0.key == key }) {
                 appendFieldFilter(field, value, exact: true, to: &wheres, args: &args)
@@ -41,6 +44,10 @@ extension Store {
         for t in query.tags {
             wheres.append("d.id IN (SELECT dt.doc_id FROM document_tags dt JOIN tags tg ON tg.id=dt.tag_id WHERE tg.name=? COLLATE NOCASE)")
             args.append(.text(t))
+        }
+        for name in query.finderTags {
+            wheres.append("d.id IN (SELECT doc_id FROM finder_tags WHERE name = ? COLLATE NOCASE)")
+            args.append(.text(name))
         }
         for filter in query.fieldFilters {
             guard let field = allFields.first(where: { $0.key == filter.key }) else { continue }
@@ -151,6 +158,13 @@ extension Store {
             }
         }
 
+        // Both tag systems, so either can be shown as a column.
+        let tagged = try tags(forDocuments: rows.map(\.id))
+        for i in rows.indices {
+            rows[i].tags = tagged.own[rows[i].id] ?? []
+            rows[i].finderTags = tagged.finder[rows[i].id] ?? []
+        }
+
         // Fold every field's value into one uniform dictionary so the views
         // never need to know whether a field is built in or user-defined.
         let custom = try customValues(for: rows.map(\.id), fields: allFields)
@@ -237,6 +251,7 @@ extension Store {
         d.row.values = values.compactMapValues { $0 }
         d.text = try ocrText(id)
         d.tags = try tags(for: id)
+        d.row.finderTags = try finderTags(docID: id)
         d.aliases = try aliases(for: id).map(\.path)
         return d
     }

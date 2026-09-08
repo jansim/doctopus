@@ -201,6 +201,24 @@ private struct DocumentTableView: View {
             .width(min: 80, ideal: 100)
             .customizationID("date")
 
+            // Both tag systems can be shown, and are deliberately separate
+            // columns: one is Doctopus's, the other is the Finder's.
+            TableColumn("Tags") { (row: DocumentRow) in
+                TagChips(names: row.tags.map(\.name),
+                         colors: row.tags.map { TagColor.color($0.color) })
+            }
+            .width(min: 80, ideal: 160)
+            .customizationID("tags")
+            .defaultVisibility(.hidden)
+
+            TableColumn("Finder Tags") { (row: DocumentRow) in
+                TagChips(names: row.finderTags,
+                         colors: row.finderTags.map { FinderTags.color(for: $0) ?? .secondary })
+            }
+            .width(min: 80, ideal: 160)
+            .customizationID("finderTags")
+            .defaultVisibility(.hidden)
+
             // Off by default: the sort menu offers "Added" too, and a sort with
             // no column on screen would have nowhere to put its arrow.
             TableColumn("Added", sortUsing: DocumentSort(field: .added)) { row in
@@ -443,6 +461,28 @@ private struct DocumentMenu: View {
                         Button(tag.name) { model.addTag(tag.name, to: rows) }
                     }
                 }
+                Menu("Finder Tags") {
+                    Button("Add Finder Tag…") {
+                        guard let name = TextPrompt.ask(
+                            title: "Add Finder Tag",
+                            message: "Finder tags are written to the files themselves and are visible everywhere in macOS.",
+                            initial: "", confirm: "Add") else { return }
+                        model.addFinderTag(name, to: rows)
+                    }
+                    if !model.finderTags.isEmpty {
+                        Divider()
+                        ForEach(model.finderTags) { tag in
+                            Button(tag.value) { model.addFinderTag(tag.value, to: rows) }
+                        }
+                    }
+                    let present = Set(rows.flatMap(\.finderTags))
+                    if !present.isEmpty {
+                        Divider()
+                        ForEach(present.sorted(), id: \.self) { name in
+                            Button("Remove “\(name)”") { model.removeFinderTag(name, from: rows) }
+                        }
+                    }
+                }
             }
             Divider()
             Button(rows.count == 1 ? "Rename…" : "Rename \(rows.count) Files…") { renameSheet = true }
@@ -579,6 +619,30 @@ private extension ComparisonResult {
         case .orderedAscending: return .orderedDescending
         case .orderedDescending: return .orderedAscending
         case .orderedSame: return .orderedSame
+        }
+    }
+}
+
+/// A row's tags, small enough to sit in a table cell. Tags are a set, so the
+/// column is not sortable — there is no sensible order to put them in.
+private struct TagChips: View {
+    let names: [String]
+    let colors: [Color]
+
+    var body: some View {
+        if names.isEmpty {
+            Text("—").foregroundStyle(.tertiary)
+        } else {
+            HStack(spacing: 3) {
+                ForEach(Array(names.enumerated()), id: \.offset) { index, name in
+                    Text(name)
+                        .font(.caption)
+                        .lineLimit(1)
+                        .padding(.horizontal, 5).padding(.vertical, 1)
+                        .background(colors[index].opacity(0.16), in: Capsule())
+                        .overlay(Capsule().strokeBorder(colors[index].opacity(0.4)))
+                }
+            }
         }
     }
 }

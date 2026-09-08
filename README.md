@@ -40,6 +40,8 @@ A high-performance, native macOS document management utility inspired by the org
   - ocr_content: FTS5 full-text search table with tokenized OCR contents and confidence vectors.
   - metadata: Correspondents, document dates, language, one-sentence LLM summary.
  - tags & document_tags: Relational junction for multi-tag assignment.
+- finder_tags: Index of the Finder's own tags, which live on the files themselves.
+- value_icons: Per-value icons, so “Invoice” and “Tax” can look different in the sidebar.
  - aliases: Registry of generated macOS Finder aliases for automated pruning when tags change.
 
 ---

@@ -1,11 +1,14 @@
 import Foundation
 
 /// Parses the center-pane search field into FTS5 terms plus structured token
-/// filters (`tag:`, `in:`, `ext:`, `is:`, and one token per configured field —
+/// filters (`tag:`, `finder:`, `in:`, `ext:`, `is:`, and one token per field —
 /// `type:`, `from:`, `lang:` and anything the user adds).
 struct SearchQuery: Sendable, Equatable {
     var terms: [String] = []
     var tags: [String] = []
+    /// The Finder's tags, searched with `finder:` to keep them distinct from
+    /// Doctopus's own `tag:`.
+    var finderTags: [String] = []
     var folders: [String] = []
     var exts: [String] = []
     var flags: Set<String> = []
@@ -23,11 +26,11 @@ struct SearchQuery: Sendable, Equatable {
         "language": "language", "correspondent": "correspondent", "amount": "amount",
     ]
 
-    static let reserved: Set<String> = ["tag", "in", "ext", "is"]
+    static let reserved: Set<String> = ["tag", "finder", "in", "ext", "is"]
 
     var isEmpty: Bool {
-        terms.isEmpty && tags.isEmpty && folders.isEmpty && exts.isEmpty
-            && flags.isEmpty && fieldFilters.isEmpty
+        terms.isEmpty && tags.isEmpty && finderTags.isEmpty && folders.isEmpty
+            && exts.isEmpty && flags.isEmpty && fieldFilters.isEmpty
     }
     var hasText: Bool { !terms.isEmpty }
 
@@ -47,6 +50,7 @@ struct SearchQuery: Sendable, Equatable {
 
             switch prefix {
             case "tag": tags.append(value)
+            case "finder": finderTags.append(value)
             case "in": folders.append(value)
             case "ext": exts.append(value.lowercased())
             case "is": flags.insert(value.lowercased())

@@ -29,6 +29,9 @@ final class AppModel {
     var roots: [Store.Root] = []
     var folders: [FolderNode] = []
     var tags: [Tag] = []
+    /// The Finder's own tags across the library. Distinct from `tags`, which
+    /// are Doctopus's — the two systems are deliberately kept apart.
+    var finderTags: [Facet] = []
     var fields: [Field] = []
     /// Facet values per field key, for the sidebar and search completions.
     var facets: [String: [Facet]] = [:]
@@ -197,10 +200,12 @@ final class AppModel {
             async let tree = (try? await store.folderTree(roots: paths)) ?? []
             async let tagList = (try? await store.tags()) ?? []
             async let fieldList = (try? await store.fields()) ?? []
+            async let finder = (try? await store.finderTags()) ?? []
             async let q = (try? await store.processingQueue()) ?? []
             async let s = (try? await store.stats()) ?? Store.Stats()
 
             let (t, tg, fs, qq, ss) = await (tree, tagList, fieldList, q, s)
+            let ft = await finder
             var facetMap: [String: [Facet]] = [:]
             for field in fs {
                 facetMap[field.key] = (try? await store.facets(field: field)) ?? []
@@ -209,6 +214,7 @@ final class AppModel {
             self.roots = rootList
             self.folders = t
             self.tags = tg
+            self.finderTags = ft
             self.fields = fs
             self.facets = facetMap
             self.queue = qq
@@ -448,6 +454,40 @@ final class AppModel {
 
     func setTagColor(_ tag: Tag, _ color: Int64) {
         Task { try? await store.setTagColor(tag.id, color); refreshAll(); reloadDetail() }
+    }
+
+    // MARK: - Finder tags
+
+    /// Writing one changes the file's extended attributes, so it only ever
+    /// happens on an explicit action, and the index is refreshed from whatever
+    /// the disk ends up saying rather than from what we asked for.
+    func addFinderTag(_ name: String, to rows: [DocumentRow]) {
+        let clean = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clean.isEmpty else { return }
+        Task {
+            for row in rows where FinderTags.add(clean, to: row.url) {
+                try? await store.indexFinderTags(docID: row.id, names: FinderTags.read(row.url))
+            }
+            refreshAll()
+            reloadDetail()
+        }
+    }
+
+    func removeFinderTag(_ name: String, from rows: [DocumentRow]) {
+        Task {
+            for row in rows where FinderTags.remove(name, from: row.url) {
+                try? await store.indexFinderTags(docID: row.id, names: FinderTags.read(row.url))
+            }
+            if selection == .finderTag(name) { selection = .all }
+            refreshAll()
+            reloadDetail()
+        }
+    }
+
+    // MARK: - Value icons
+
+    func setValueIcon(_ field: Field, value: String, icon: String?) {
+        Task { try? await store.setValueIcon(field: field, value: value, icon: icon); refreshAll() }
     }
 
     func deleteTag(_ tag: Tag) {

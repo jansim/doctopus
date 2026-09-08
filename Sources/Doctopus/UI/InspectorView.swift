@@ -25,6 +25,7 @@ private struct DetailInspector: View {
     let detail: DocumentDetail
     @State private var showRawText = false
     @State private var tagInput = ""
+    @State private var finderTagInput = ""
 
     private var row: DocumentRow { detail.row }
 
@@ -43,6 +44,7 @@ private struct DetailInspector: View {
                 }
                 metadataSection
                 tagsSection
+                finderTagsSection
                 fileSection
                 if !detail.aliases.isEmpty { aliasSection }
                 textSection
@@ -170,6 +172,48 @@ private struct DetailInspector: View {
                     .disabled(tagInput.nilIfBlank == nil)
             }
         }
+    }
+
+    /// The Finder's tags live on the file and are shared with every other app,
+    /// so they get their own section rather than being mixed in above.
+    private var finderTagsSection: some View {
+        Section2("Finder Tags") {
+            if row.finderTags.isEmpty {
+                Text("No Finder tags").font(.callout).foregroundStyle(.tertiary)
+            } else {
+                FlowLayout(spacing: 5) {
+                    ForEach(row.finderTags, id: \.self) { name in
+                        let tint = FinderTags.color(for: name) ?? .secondary
+                        HStack(spacing: 3) {
+                            Text(name).font(.caption)
+                            Button {
+                                model.removeFinderTag(name, from: [row])
+                            } label: {
+                                Image(systemName: "xmark").font(.system(size: 7, weight: .bold))
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        .padding(.horizontal, 7).padding(.vertical, 3)
+                        .background(tint.opacity(0.16), in: Capsule())
+                        .overlay(Capsule().strokeBorder(tint.opacity(0.45)))
+                    }
+                }
+            }
+            HStack(spacing: 6) {
+                TextField("Add Finder tag", text: $finderTagInput)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.callout)
+                    .onSubmit(commitFinderTag)
+                Button("Add", action: commitFinderTag)
+                    .disabled(finderTagInput.nilIfBlank == nil)
+            }
+        }
+    }
+
+    private func commitFinderTag() {
+        guard let name = finderTagInput.nilIfBlank else { return }
+        model.addFinderTag(name, to: [row])
+        finderTagInput = ""
     }
 
     private func commitTag() {

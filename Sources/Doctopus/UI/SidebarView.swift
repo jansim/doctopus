@@ -3,6 +3,7 @@ import AppKit
 
 struct SidebarView: View {
     @Environment(AppModel.self) private var model
+    @State private var iconTarget: IconTarget?
 
     var body: some View {
         @Bindable var model = model
@@ -43,6 +44,30 @@ struct SidebarView: View {
                 Text("Tags")
             }
 
+            // The Finder's tags, kept clearly apart from Doctopus's own: these
+            // live on the files themselves and are shared with every other app.
+            if !model.finderTags.isEmpty {
+                Section("Finder Tags") {
+                    ForEach(model.finderTags) { tag in
+                        Label {
+                            HStack {
+                                Text(tag.value).lineLimit(1)
+                                Spacer()
+                                CountBadge(tag.count)
+                            }
+                        } icon: {
+                            Image(systemName: "tag")
+                                .foregroundStyle(FinderTags.color(for: tag.value) ?? .secondary)
+                        }
+                        .tag(Selection.finderTag(tag.value))
+                        .dropDestination(for: DocumentDragItem.self) { items, _ in
+                            model.addFinderTag(tag.value, to: model.rows(forDropped: items))
+                            return true
+                        }
+                    }
+                }
+            }
+
             // Facet sections are entirely configuration-driven: which fields
             // appear here, in what order, and under what name comes from
             // Settings rather than being wired into the view.
@@ -58,7 +83,7 @@ struct SidebarView: View {
                                     CountBadge(facet.count)
                                 }
                             } icon: {
-                                Image(systemName: field.icon)
+                                Image(systemName: facet.icon ?? field.icon)
                             }
                             .tag(Selection.field(field.key, facet.value))
                             .contextMenu { facetMenu(field, facet) }
@@ -72,6 +97,13 @@ struct SidebarView: View {
         }
         .listStyle(.sidebar)
         .safeAreaInset(edge: .bottom, spacing: 0) { StatusFooter() }
+        .sheet(item: $iconTarget) { target in
+            IconPicker(title: target.facet.value,
+                       current: target.facet.icon ?? target.field.icon,
+                       fallback: target.field.icon) { icon in
+                model.setValueIcon(target.field, value: target.facet.value, icon: icon)
+            }
+        }
     }
 
     // MARK: - Rows
@@ -98,6 +130,7 @@ struct SidebarView: View {
 
     @ViewBuilder
     private func facetMenu(_ field: Field, _ facet: Facet) -> some View {
+        Button("Change Icon…") { iconTarget = IconTarget(field: field, facet: facet) }
         Button("Rename “\(facet.value)”…") {
             guard let new = TextPrompt.ask(
                 title: "Rename \(field.name)",
@@ -356,4 +389,12 @@ enum TagColor {
     static func color(_ index: Int64) -> Color {
         palette[Int(abs(index)) % palette.count]
     }
+}
+
+/// The facet whose icon is being chosen. Wrapped because `sheet(item:)` needs
+/// something identifiable.
+struct IconTarget: Identifiable {
+    var field: Field
+    var facet: Facet
+    var id: String { "\(field.key)/\(facet.value)" }
 }

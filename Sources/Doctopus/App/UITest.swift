@@ -37,6 +37,7 @@ enum UITest {
             await rowThumbnailIsAPage(model)
             await inspectorDraws(model, snapshots: snapshots)
             await uiStatePersists(model)
+            await sidebarShowsBothTagSystems(model, snapshots: snapshots)
             Check.finish("ui checks")
         }
         app.run()
@@ -142,6 +143,46 @@ enum UITest {
             try? await Task.sleep(for: .milliseconds(200))
         }
         return nil
+    }
+
+    /// Doctopus's tags and the Finder's are separate sections, and a document
+    /// type can carry its own icon. Mutating state here touches the library's
+    /// files, so everything is put back afterwards.
+    private static func sidebarShowsBothTagSystems(_ model: AppModel, snapshots: String?) async {
+        guard let row = model.documents.first else { return }
+        let originalFinderTags = FinderTags.read(row.url)
+
+        model.addTag("Receipts", to: [row])
+        model.addFinderTag("Blue", to: [row])
+        if let type = model.fields.first(where: { $0.key == "doc_type" }),
+           let value = row.values["doc_type"] {
+            model.setValueIcon(type, value: value, icon: "banknote")
+        }
+        let indexed = await settle {
+            model.finderTags.contains { $0.value == "Blue" } && model.tags.contains { $0.name == "Receipts" }
+        }
+        Check.that("both tag systems reach the sidebar", indexed,
+                   "own: \(model.tags.map(\.name)), finder: \(model.finderTags.map(\.value))")
+
+        let (sidebarWindow, sidebar) = host(SidebarView().environment(model),
+                                            size: NSSize(width: 260, height: 700))
+        defer { sidebarWindow.orderOut(nil) }
+        try? await Task.sleep(for: .seconds(2))
+        if let dir = snapshots { snapshot(sidebar, to: dir + "/sidebar.png") }
+        Check.that("sidebar draws its sections", inkedRows(sidebar) > 20)
+
+        // Both tag columns, which are off by default.
+        model.listColumns[visibility: "tags"] = .visible
+        model.listColumns[visibility: "finderTags"] = .visible
+        let (listWindow, listHost) = host(DocumentListView().environment(model),
+                                          size: NSSize(width: 900, height: 300))
+        defer { listWindow.orderOut(nil) }
+        try? await Task.sleep(for: .seconds(2))
+        if let dir = snapshots { snapshot(listHost, to: dir + "/list-tags.png") }
+
+        // The index is a throwaway, but the Finder tag was written to the
+        // user's own file and has to go back the way it was found.
+        FinderTags.write(originalFinderTags, to: row.url)
     }
 
     // MARK: - Harness

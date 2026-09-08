@@ -2,13 +2,35 @@ import Foundation
 
 /// Versioned schema. Migrations are append-only: bump `current` and add a case.
 enum Schema {
-    static let current = 2
+    static let current = 3
 
     static func migrate(_ db: Database) throws {
         let version = try db.first("PRAGMA user_version") { Int($0.int(0)) } ?? 0
         if version < 1 { try v1(db) }
         if version < 2 { try v2(db) }
+        if version < 3 { try v3(db) }
         try db.exec("PRAGMA user_version=\(current)")
+    }
+
+    /// Per-value icons, and the mirror of the Finder's own tags. Finder tags
+    /// live on the file itself, in extended attributes; this table is only an
+    /// index of them so they can be counted and filtered without touching the
+    /// disk for every query.
+    private static func v3(_ db: Database) throws {
+        try db.exec("""
+        CREATE TABLE IF NOT EXISTS value_icons (
+            field_id INTEGER NOT NULL REFERENCES fields(id) ON DELETE CASCADE,
+            value    TEXT NOT NULL,
+            icon     TEXT NOT NULL,
+            PRIMARY KEY (field_id, value)
+        );
+        CREATE TABLE IF NOT EXISTS finder_tags (
+            doc_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+            name   TEXT NOT NULL,
+            PRIMARY KEY (doc_id, name)
+        );
+        CREATE INDEX IF NOT EXISTS idx_finder_tags_name ON finder_tags(name);
+        """)
     }
 
     /// Configurable fields. Built-ins keep their dedicated `metadata` column so

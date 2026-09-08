@@ -114,14 +114,21 @@ extension Store {
     // MARK: - Facets
 
     func facets(field: Field) throws -> [Facet] {
-        if let column = field.builtinColumn { return try facets(column: column) }
-        return try db.map("""
-            SELECT v.value, COUNT(*) FROM field_values v
-            JOIN documents d ON d.id = v.doc_id AND d.missing = 0
-            WHERE v.field_id = ? AND TRIM(v.value) <> ''
-            GROUP BY v.value COLLATE NOCASE
-            ORDER BY COUNT(*) DESC, v.value COLLATE NOCASE
-            """, [.int(field.id)]) { Facet(value: $0.string(0), count: Int($0.int(1))) }
+        var values: [Facet]
+        if let column = field.builtinColumn {
+            values = try facets(column: column)
+        } else {
+            values = try db.map("""
+                SELECT v.value, COUNT(*) FROM field_values v
+                JOIN documents d ON d.id = v.doc_id AND d.missing = 0
+                WHERE v.field_id = ? AND TRIM(v.value) <> ''
+                GROUP BY v.value COLLATE NOCASE
+                ORDER BY COUNT(*) DESC, v.value COLLATE NOCASE
+                """, [.int(field.id)]) { Facet(value: $0.string(0), count: Int($0.int(1))) }
+        }
+        let icons = try valueIcons(field: field)
+        for i in values.indices { values[i].icon = icons[values[i].value] }
+        return values
     }
 
     /// Renames one value of a field across the whole library. Renaming two
@@ -132,6 +139,12 @@ extension Store {
     func renameFieldValue(field: Field, from old: String, to new: String) throws -> Int {
         let clean = new.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !clean.isEmpty, clean != old else { return 0 }
+        // An icon belongs to the value, so it travels with a rename — and a
+        // merge keeps whichever icon the target already had.
+        try db.run("""
+            UPDATE OR IGNORE value_icons SET value=? WHERE field_id=? AND value=?
+            """, [.text(clean), .int(field.id), .text(old)])
+        try db.run("DELETE FROM value_icons WHERE field_id=? AND value=?", [.int(field.id), .text(old)])
         if let column = field.builtinColumn {
             let allowed = ["correspondent", "doc_type", "language", "amount", "intent"]
             guard allowed.contains(column) else { return 0 }
@@ -153,6 +166,7 @@ extension Store {
     }
 
     func deleteFieldValue(field: Field, value: String) throws {
+        try db.run("DELETE FROM value_icons WHERE field_id=? AND value=?", [.int(field.id), .text(value)])
         if let column = field.builtinColumn {
             let allowed = ["correspondent", "doc_type", "language", "amount", "intent"]
             guard allowed.contains(column) else { return }

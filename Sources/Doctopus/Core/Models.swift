@@ -49,6 +49,11 @@ struct DocumentRow: Identifiable, Hashable, Sendable {
     /// Populated only in queue mode: the most recent pipeline event.
     var queue: QueueInfo?
 
+    /// Doctopus's own tags, and the Finder's. Loaded alongside the list query
+    /// so both can be shown as columns.
+    var tags: [Tag] = []
+    var finderTags: [String] = []
+
     var url: URL { URL(fileURLWithPath: path) }
     var displayTitle: String { title?.nilIfBlank ?? filename }
     var savings: Double? {
@@ -125,6 +130,9 @@ struct Facet: Identifiable, Hashable, Sendable {
     var id: String { value }
     var value: String
     var count: Int
+    /// Set when this particular value has been given its own icon; otherwise
+    /// the field's icon stands in.
+    var icon: String?
 }
 
 struct ProcessingEntry: Identifiable, Hashable, Sendable {
@@ -172,6 +180,8 @@ enum Selection: Hashable, Sendable {
     case queue
     case folder(String)
     case tag(Int64)
+    /// One of the Finder's own tags, by name.
+    case finderTag(String)
     /// A field value facet: (field key, value).
     case field(String, String)
     case untagged
