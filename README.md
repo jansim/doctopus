@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="Resources/doctopus_detailed.png" width="350"/>
+  <img src="Resources/doctopus_detailed.png" width="250"/>
 </div>
 
 # doctopus
