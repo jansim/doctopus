@@ -174,7 +174,7 @@ struct ScanMenu: View {
 
     var body: some View {
         let devices = ScanCoordinator.shared.devices()
-        Menu(title) {
+        Menu("Import from iPhone or iPad") {
             if devices.isEmpty {
                 Button("No iPhone or iPad Nearby") {}.disabled(true)
             } else {
@@ -189,10 +189,5 @@ struct ScanMenu: View {
                 }
             }
         }
-    }
-
-    private var title: String {
-        guard let name = destination?.lastPathComponent else { return "Import from iPhone or iPad" }
-        return "Import from iPhone or iPad into “\(name)”"
     }
 }
