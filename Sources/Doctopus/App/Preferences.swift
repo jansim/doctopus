@@ -12,6 +12,27 @@ enum Preferences {
     private enum Key {
         static let openLibraries = "openLibraries_v1"
         static let libraryFolderName = "libraryFolderName"
+        static let appWide = "appSettings_v1"
+    }
+
+    /// False until the app-wide settings have been written once — the signal
+    /// that a library opened before the split still holds the only copy.
+    static var hasAppWide: Bool { defaults.string(forKey: Key.appWide) != nil }
+
+    /// The half of the settings that is not tied to a library. See
+    /// `AppWideSettings` for why these live out here.
+    static var appWide: AppWideSettings {
+        get {
+            guard let raw = defaults.string(forKey: Key.appWide),
+                  let decoded = try? JSONDecoder().decode(AppWideSettings.self, from: Data(raw.utf8))
+            else { return AppWideSettings() }
+            return decoded
+        }
+        set {
+            guard let data = try? JSONEncoder().encode(newValue),
+                  let raw = String(data: data, encoding: .utf8) else { return }
+            defaults.set(raw, forKey: Key.appWide)
+        }
     }
 
     /// Security-scoped bookmarks to each open `library.doctopus` directory.

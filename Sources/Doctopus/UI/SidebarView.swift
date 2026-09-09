@@ -9,7 +9,8 @@ struct SidebarView: View {
         @Bindable var model = model
 
         List(selection: $model.selection) {
-            Section("Library") {
+            // Everything in this first section spans every open library.
+            Section(model.libraries.count > 1 ? "All Libraries" : "Library") {
                 row(.all, "All Documents", "tray.full", model.stats.total)
                 // Needs Review is the queue filtered to undecided entries, so
                 // its count comes from the same place the queue's does.
@@ -19,29 +20,32 @@ struct SidebarView: View {
                 row(.queue, "Recent Processing", "clock.arrow.circlepath", model.queue.count)
             }
 
-            if !model.folders.isEmpty {
-                Section("Folders") {
-                    ForEach(model.folders) { node in
-                        FolderRow(node: node, depth: 0)
+            // Folders and tags belong to one library each, so with more than
+            // one open they are grouped under it. A single library needs no
+            // such header — its name is the window's, and the plain Folders /
+            // Tags sections read better.
+            if model.libraries.count == 1, let library = model.libraries.first {
+                if !library.folders.isEmpty {
+                    Section("Folders") {
+                        ForEach(library.folders) { node in
+                            FolderRow(node: node, depth: 0)
+                        }
                     }
                 }
-            }
-
-            Section {
-                ForEach(model.tags) { tag in
-                    TagRow(tag: tag)
+                Section("Tags") {
+                    tagRows(library)
                 }
-                Button {
-                    guard let name = TextPrompt.ask(title: "New Tag", message: "Tags can be dragged onto from the document list.", initial: "", confirm: "Create") else { return }
-                    model.createTag(named: name)
-                } label: {
-                    Label("New Tag…", systemImage: "plus")
-                        .foregroundStyle(.secondary)
-                        .font(.callout)
+            } else {
+                ForEach(model.libraries) { library in
+                    Section {
+                        ForEach(library.folders) { node in
+                            FolderRow(node: node, depth: 0)
+                        }
+                        tagRows(library)
+                    } header: {
+                        LibraryHeader(library: library)
+                    }
                 }
-                .buttonStyle(.plain)
-            } header: {
-                Text("Tags")
             }
 
             // The Finder's tags, kept clearly apart from Doctopus's own: these
@@ -107,6 +111,25 @@ struct SidebarView: View {
 
     // MARK: - Rows
 
+    /// A library's tags, and the button that adds one to that same library.
+    @ViewBuilder
+    private func tagRows(_ library: Library) -> some View {
+        ForEach(library.tags) { tag in
+            TagRow(tag: tag)
+        }
+        Button {
+            guard let name = TextPrompt.ask(title: "New Tag",
+                                            message: "Tags can be dragged onto from the document list.",
+                                            initial: "", confirm: "Create") else { return }
+            model.createTag(named: name, in: library)
+        } label: {
+            Label("New Tag…", systemImage: "plus")
+                .foregroundStyle(.secondary)
+                .font(.callout)
+        }
+        .buttonStyle(.plain)
+    }
+
     private func row(_ selection: Selection, _ title: String, _ icon: String, _ count: Int?) -> some View {
         Label {
             HStack {
@@ -148,6 +171,28 @@ struct SidebarView: View {
         }
     }
 
+}
+
+/// The header of one library's group of sections, and where that library as a
+/// whole is acted on.
+private struct LibraryHeader: View {
+    @Environment(AppModel.self) private var model
+    let library: Library
+
+    var body: some View {
+        Text(library.displayName)
+            .help(library.root.path)
+            .contextMenu {
+                Button("Rescan Library") { model.reindex(library) }
+                Button("Reveal in Finder") {
+                    NSWorkspace.shared.activateFileViewerSelecting([library.root])
+                }
+                Divider()
+                // Closing forgets the library; the `.doctopus` folder it is
+                // named after stays on disk, so it can be reopened as it was.
+                Button("Close Library", role: .destructive) { model.closeLibrary(library) }
+            }
+    }
 }
 
 /// A tag row: selectable, renameable, colourable, and a drop target that
@@ -217,6 +262,9 @@ private struct FolderRow: View {
     /// Expanded unless the user has said otherwise, and the exceptions are
     /// remembered across launches.
     private var isExpanded: Bool { !model.collapsedFolders.contains(node.path) }
+    /// Which library this folder is in — a rescan started here should not run
+    /// over the others.
+    private var owningLibrary: Library? { model.libraries.first { $0.owns(path: node.path) } }
 
     var body: some View {
         Label {
@@ -278,10 +326,10 @@ private struct FolderRow: View {
             NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: node.path)])
         }
         Divider()
-        Button("Rescan This Folder") { model.reindex() }
-        if node.isRoot, let library = model.libraries.first(where: { $0.root.path == node.path }) {
+        Button("Rescan This Folder") { model.reindex(owningLibrary) }
+        if node.isRoot, let owningLibrary {
             Divider()
-            Button("Close Library", role: .destructive) { model.closeLibrary(library) }
+            Button("Close Library", role: .destructive) { model.closeLibrary(owningLibrary) }
         }
     }
 

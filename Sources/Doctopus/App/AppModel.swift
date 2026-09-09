@@ -81,6 +81,12 @@ final class AppModel {
             lib.settings = current
             await current.save(to: lib.store)
             await lib.indexer.update(settings: current)
+            // The app-wide half is the same everywhere, so every other open
+            // library takes it without its own ingest settings being touched.
+            for other in self.libraries where other !== lib {
+                other.settings.appWide = current.appWide
+                await other.indexer?.update(settings: other.settings)
+            }
         }
     }
 
@@ -660,7 +666,11 @@ final class AppModel {
         lib.watcher = watcher
     }
 
-    func reindex() { Task { for lib in libraries { await lib.indexer.indexAll() } } }
+    /// Rescans one library, or every open one when none is named.
+    func reindex(_ lib: Library? = nil) {
+        let targets = lib.map { [$0] } ?? libraries
+        Task { for lib in targets { await lib.indexer.indexAll() } }
+    }
     func cancelIndexing() { Task { for lib in libraries { await lib.indexer.cancel() } } }
 
     // MARK: - Document actions
@@ -1067,9 +1077,14 @@ final class AppModel {
         }
     }
 
-    func addCustomField(named name: String, in lib: Library? = nil) {
-        guard let lib = lib ?? settingsLibrary else { return }
-        Task { _ = try? await lib.store.addCustomField(name: name); refreshAll() }
+    /// Fields are a vocabulary the open libraries share — the centre pane shows
+    /// one column per key however many libraries fill it — so a new one is
+    /// added to every library rather than to a chosen one.
+    func addCustomField(named name: String) {
+        Task {
+            for lib in libraries { _ = try? await lib.store.addCustomField(name: name) }
+            refreshAll()
+        }
     }
 
     func deleteField(_ field: Field) {

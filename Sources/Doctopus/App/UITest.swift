@@ -50,6 +50,7 @@ enum UITest {
             await intelligencePaneDraws(model, snapshots: snapshots)
             await uiStatePersists(model)
             await sidebarShowsBothTagSystems(model, snapshots: snapshots)
+            await secondLibraryMerges(model, alongside: library)
             Check.finish("ui checks")
         }
         app.run()
@@ -203,14 +204,22 @@ enum UITest {
         Check.that("sort order is persisted", sort?.field == "name" && sort?.ascending == true,
                    sort.map { "\($0.field) \($0.ascending ? "ascending" : "descending")" } ?? "nothing stored")
 
+        // How documents are looked at is about this Mac rather than about a
+        // folder, so it is written to preferences and not into any library.
         model.viewMode = .gallery
         model.settings.galleryThumbnailSize = 190
-        let stored: AppSettings? = await settled(model, AppSettings.storageKey) {
-            $0.viewMode == .gallery && $0.galleryThumbnailSize == 190
+        _ = await settle {
+            Preferences.appWide.viewMode == .gallery && Preferences.appWide.galleryThumbnailSize == 190
         }
+        let stored = Preferences.appWide
         Check.that("view mode and thumbnail size are persisted",
-                   stored?.viewMode == .gallery && stored?.galleryThumbnailSize == 190,
-                   stored.map { "\($0.viewMode.rawValue) at \(Int($0.galleryThumbnailSize))" } ?? "nothing stored")
+                   stored.viewMode == .gallery && stored.galleryThumbnailSize == 190,
+                   "\(stored.viewMode.rawValue) at \(Int(stored.galleryThumbnailSize))")
+
+        let inLibrary: AppSettings? = await settled(model, AppSettings.storageKey)
+        Check.that("a library's own copy carries no app-wide settings",
+                   inLibrary?.viewMode == AppSettings().viewMode && inLibrary?.remoteAPIKey == "",
+                   inLibrary.map { "library blob says \($0.viewMode.rawValue)" } ?? "nothing stored")
 
         // Regression: `AppSettings` decoded key by key or not at all, and `load`
         // swallowed the failure — so the first release to add a setting reset
@@ -321,6 +330,63 @@ enum UITest {
         // The index is a throwaway, but the Finder tag was written to the
         // user's own file and has to go back the way it was found.
         FinderTags.write(originalFinderTags, to: row.url)
+    }
+
+    /// Two libraries open at once: the centre pane merges them, the sort still
+    /// holds across the join, and tags stay with the library they were made in.
+    private static func secondLibraryMerges(_ model: AppModel, alongside fixture: URL) async {
+        let alone = model.documents.count
+        let second = FileManager.default.temporaryDirectory
+            .appendingPathComponent("doctopus-uitest-2-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: second) }
+        try? FileManager.default.copyItem(at: fixture, to: second)
+
+        model.selection = .all
+        model.openLibrary(at: second)
+        let opened = await settle { model.libraries.count == 2 && model.documents.count > alone }
+        Check.that("a second library opens alongside the first",
+                   opened, "\(model.libraries.count) libraries, \(model.documents.count) documents")
+        guard model.libraries.count == 2 else { return }
+
+        Check.that("the centre pane merges both libraries",
+                   model.documents.count == alone * 2,
+                   "\(model.documents.count) of an expected \(alone * 2)")
+        Check.that("every row knows which library it came from",
+                   Set(model.documents.map(\.library)).count == 2)
+
+        // Rows arrive already sorted per library; the merge is what has to keep
+        // them in order once they are one list.
+        func ascendingByName() -> Bool {
+            let titles = model.documents.map(\.displayTitle)
+            guard titles.count == alone * 2 else { return false }
+            return zip(titles, titles.dropFirst()).allSatisfy {
+                $0.localizedStandardCompare($1) != .orderedDescending
+            }
+        }
+        model.setSort(.name, ascending: true)
+        let ordered = await settle(ascendingByName)
+        Check.that("the merged list is still in sort order", ordered,
+                   model.documents.map(\.displayTitle).prefix(3).joined(separator: " · "))
+
+        // A tag belongs to the library it was made in, even when the same name
+        // exists in both.
+        let newer = model.libraries[1]
+        guard let row = model.documents.first(where: { $0.library == newer.id }) else { return }
+        model.addTag("OnlyHere", to: [row])
+        _ = await settle { newer.tags.contains { $0.name == "OnlyHere" } }
+        Check.that("a tag is made in the library of the row it was dropped on",
+                   newer.tags.contains { $0.name == "OnlyHere" }
+                       && !model.libraries[0].tags.contains { $0.name == "OnlyHere" },
+                   "first: \(model.libraries[0].tags.map(\.name)), second: \(newer.tags.map(\.name))")
+
+        model.closeLibrary(newer)
+        let closed = await settle { model.libraries.count == 1 && model.documents.count == alone }
+        Check.that("closing a library takes its rows out of the pane", closed,
+                   "\(model.documents.count) documents left")
+        Check.that("closing a library leaves its folder on disk",
+                   FileManager.default.fileExists(
+                       atPath: second.appendingPathComponent("library.doctopus").path))
+        model.setSort(.docDate, ascending: false)
     }
 
     // MARK: - Harness
