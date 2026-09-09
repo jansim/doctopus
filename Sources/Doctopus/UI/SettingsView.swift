@@ -415,6 +415,13 @@ struct IntelligenceSettings: View {
                     Label("Proposed tags and a canonical title", systemImage: "tag")
                 }
                 .font(.callout)
+
+                Section("Tag Suggestions") {
+                    Text("Proposed tags appear in a document's inspector as suggestions you accept or dismiss individually — they never show up in the sidebar on their own.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Toggle("Automatically accept suggestions that match an existing tag",
+                           isOn: $model.settings.autoAcceptMatchingTagSuggestions)
+                }
             }
 
             Section("Run it now") {

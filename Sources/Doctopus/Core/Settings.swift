@@ -21,6 +21,9 @@ struct AppSettings: Codable, Sendable, Equatable {
     /// small fixed window; a server's is whatever it was loaded with, so this
     /// is worth turning up when the machine on the other end can take it.
     var llmExcerptLimit = 6000
+    /// When a model-proposed tag exactly matches one already in the library,
+    /// assign it directly instead of leaving it for the user to accept.
+    var autoAcceptMatchingTagSuggestions = false
     /// Global default for mirroring tag membership as Finder aliases.
     var mirrorTagsAsAliases = false
     var ocrConcurrency = 0        // 0 = auto
@@ -106,6 +109,7 @@ extension AppSettings {
             remoteTimeout: value(.remoteTimeout, d.remoteTimeout),
             remoteParallelRequests: value(.remoteParallelRequests, d.remoteParallelRequests),
             llmExcerptLimit: value(.llmExcerptLimit, d.llmExcerptLimit),
+            autoAcceptMatchingTagSuggestions: value(.autoAcceptMatchingTagSuggestions, d.autoAcceptMatchingTagSuggestions),
             mirrorTagsAsAliases: value(.mirrorTagsAsAliases, d.mirrorTagsAsAliases),
             ocrConcurrency: value(.ocrConcurrency, d.ocrConcurrency),
             scanDestination: value(.scanDestination, d.scanDestination),

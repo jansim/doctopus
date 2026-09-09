@@ -548,6 +548,24 @@ final class AppModel {
         }
     }
 
+    /// Turns a tag the model proposed into a real assignment.
+    func acceptTagSuggestion(_ suggestion: TagSuggestion, for row: DocumentRow) {
+        Task {
+            try? await store.acceptTagSuggestion(suggestion.name, for: row.id)
+            await indexer.syncAliases(docID: row.id, target: row.url)
+            refreshAll()
+            reloadDetail()
+        }
+    }
+
+    /// Dismisses a proposed tag without ever making it a real one.
+    func discardTagSuggestion(_ suggestion: TagSuggestion, for row: DocumentRow) {
+        Task {
+            try? await store.discardTagSuggestion(suggestion.name, for: row.id)
+            reloadDetail()
+        }
+    }
+
     func setTagMirroring(_ tag: Tag, enabled: Bool) {
         Task {
             try? await store.setTagMirroring(tag.id, enabled, folder: tag.folder)

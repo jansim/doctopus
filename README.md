@@ -26,7 +26,7 @@ A high-performance, native macOS document management utility inspired by the org
 - Text Processing Pipeline: Apple Vision framework extracts text representations from PDFs and raster images. This all gets stored in a SQLite DB (see Storage) and indexed for deep full-text search.
 - LLM enrichment, from either the Apple on-device model or any OpenAI-compatible API endpoint (LM Studio, Ollama, llama.cpp, vLLM, a hosted API). Both answer the same questions and are interchangeable; enrichment can also be turned off entirely. Summary: Generates a 1–2 sentence semantic document summary.
   - Metadata Discovery: Extracts correspondent/vendor, document category, document language, and intent.
-  - Tags & Title Proposal: Recommends standard taxonomy tags and canonical document titles.
+  - Tags & Title Proposal: Recommends standard taxonomy tags and canonical document titles. Proposed tags are staged as suggestions in the inspector rather than assigned outright — click one to accept it, or dismiss it with the × — and never appear in the sidebar until accepted. A suggestion that exactly matches a tag already in use can optionally be accepted automatically (Settings › Intelligence). Rule-based and manually typed tags are assigned immediately, since there is nothing to review.
   - On-Demand Runs: The model pass can be re-triggered by hand for a selection or the whole library, without re-running OCR or touching anything on disk — which is how a library indexed before a model was configured gets caught up, or asked again with a better one.
 - Hierarchical Naming Schemes: Flexible string interpolation templates (e.g., {date}_{correspondent}_{title}.{ext}). Fallback chains resolve missing attributes deterministically:
   - e.g. Date Extraction: OCR text date > embedded PDF metadata > EXIF (for images) > file creation date fallback.
@@ -45,6 +45,7 @@ A high-performance, native macOS document management utility inspired by the org
   - ocr_content: FTS5 full-text search table with tokenized OCR contents and confidence vectors.
   - metadata: Correspondents, document dates, language, one-sentence LLM summary.
  - tags & document_tags: Relational junction for multi-tag assignment.
+ - tag_suggestions: Model-proposed tags awaiting acceptance or dismissal, kept apart from `document_tags` so they never count toward a tag's sidebar total.
 - finder_tags: Index of the Finder's own tags, which live on the files themselves.
 - value_icons: Per-value icons, so “Invoice” and “Tax” can look different in the sidebar.
  - aliases: Registry of generated macOS Finder aliases for automated pruning when tags change.

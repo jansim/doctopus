@@ -37,6 +37,7 @@ private struct DetailInspector: View {
                 summarySection
                 metadataSection
                 tagsSection
+                if !detail.tagSuggestions.isEmpty { tagSuggestionsSection }
                 finderTagsSection
                 fileSection
                 if !detail.aliases.isEmpty { aliasSection }
@@ -208,6 +209,46 @@ private struct DetailInspector: View {
                     .disabled(tagInput.nilIfBlank == nil)
             }
         }
+    }
+
+    /// Tags the model proposed. These are not real tags yet — they carry no
+    /// count and never appear in the sidebar — until someone clicks them to
+    /// accept, or dismisses them with the ×.
+    private var tagSuggestionsSection: some View {
+        Section2("Suggested Tags") {
+            FlowLayout(spacing: 5) {
+                ForEach(detail.tagSuggestions) { suggestion in
+                    let color = suggestionColor(suggestion.name)
+                    HStack(spacing: 4) {
+                        Image(systemName: "sparkles")
+                            .font(.system(size: 9))
+                            .foregroundStyle(color)
+                        Text(suggestion.name).font(.caption)
+                        Button {
+                            model.discardTagSuggestion(suggestion, for: row)
+                        } label: {
+                            Image(systemName: "xmark").font(.system(size: 7, weight: .bold))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(.horizontal, 7).padding(.vertical, 3)
+                    .background(color.opacity(0.10), in: Capsule())
+                    .overlay(Capsule().strokeBorder(color.opacity(0.5), style: StrokeStyle(lineWidth: 1, dash: [3, 2])))
+                    .contentShape(Capsule())
+                    .onTapGesture { model.acceptTagSuggestion(suggestion, for: row) }
+                    .help("Click to accept “\(suggestion.name)”, or dismiss it with ×")
+                }
+            }
+        }
+    }
+
+    /// A suggestion already in use elsewhere borrows that tag's colour, so it
+    /// previews exactly how it will look once accepted.
+    private func suggestionColor(_ name: String) -> Color {
+        if let existing = model.tags.first(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame }) {
+            return TagColor.color(existing.color)
+        }
+        return .secondary
     }
 
     /// The Finder's tags live on the file and are shared with every other app,
