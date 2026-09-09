@@ -152,7 +152,7 @@ final class AppModel {
             StoredSort(field: sort.storageKey, ascending: sortAscending)))
         reloadDocuments()
     }
-    var selectedIDs: Set<Int64> = [] { didSet { if selectedIDs != oldValue { reloadDetail() } } }
+    var selectedIDs: Set<DocumentRef> = [] { didSet { if selectedIDs != oldValue { reloadDetail() } } }
     var viewMode: ViewMode = .list {
         didSet {
             guard viewMode != oldValue else { return }
@@ -428,12 +428,14 @@ final class AppModel {
         let sel = selection, text = searchText, sortField = sort, asc = sortAscending
         let keys = Set(fields.map(\.key))
         guard let lib = activeLibrary else { documents = []; return }
+        let libID = lib.id
         reloadDocsTask?.cancel()
         reloadDocsTask = Task { [weak self] in
             guard let self else { return }
             let query = SearchQuery(text, fieldKeys: keys)
-            let rows = (try? await lib.store.listDocuments(selection: sel, query: query,
+            var rows = (try? await lib.store.listDocuments(selection: sel, query: query,
                                                            sort: sortField, ascending: asc)) ?? []
+            for i in rows.indices { rows[i].library = libID }
             guard !Task.isCancelled else { return }
             self.documents = rows
             // Drop selections that no longer exist so the inspector cannot go stale.
@@ -456,15 +458,33 @@ final class AppModel {
 
     private func reloadDetail() {
         detailTask?.cancel()
-        guard selectedIDs.count == 1, let id = selectedIDs.first, let lib = activeLibrary else {
+        guard selectedIDs.count == 1, let ref = selectedIDs.first,
+              let lib = library(ref.library) ?? activeLibrary else {
             if selectedIDs.isEmpty { detail = nil }
             return
         }
         detailTask = Task { [weak self] in
             guard let self else { return }
-            let d = try? await lib.store.detail(id)
+            let d = try? await lib.store.detail(ref.doc)
             guard !Task.isCancelled else { return }
             self.detail = d
+        }
+    }
+
+    // MARK: - Per-row dispatch
+
+    /// The store + pipeline that own a row.
+    private func services(for row: DocumentRow) -> (store: Store, indexer: Indexer)? {
+        guard let lib = library(row.library) ?? activeLibrary else { return nil }
+        return (lib.store, lib.indexer)
+    }
+
+    /// Row ids grouped by the library that owns them, for the batch pipeline
+    /// operations that run inside one `Indexer`.
+    private func grouped(_ rows: [DocumentRow]) -> [(library: Library, ids: [Int64])] {
+        Dictionary(grouping: rows, by: \.library).compactMap { libID, rows in
+            guard let lib = library(libID) ?? activeLibrary else { return nil }
+            return (lib, rows.map(\.doc))
         }
     }
 

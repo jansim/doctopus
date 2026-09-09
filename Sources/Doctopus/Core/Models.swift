@@ -26,7 +26,13 @@ enum OCRState: Int64, Sendable {
 
 /// Row of the center pane. Kept flat and value-typed so list diffing is cheap.
 struct DocumentRow: Identifiable, Hashable, Sendable {
-    var id: Int64
+    /// Row id within its library's database — only unique per library.
+    var doc: Int64
+    /// Which library the row came from. Stamped by `AppModel`; the `Store`
+    /// leaves it empty.
+    var library: LibraryID = ""
+    /// Cross-library identity, used everywhere a row could be from any library.
+    var id: DocumentRef { DocumentRef(library: library, doc: doc) }
     var path: String
     var directory: String
     var filename: String

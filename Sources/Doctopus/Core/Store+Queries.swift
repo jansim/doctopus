@@ -139,7 +139,7 @@ extension Store {
 
         var rows = try db.map(sql, args) { r in
             DocumentRow(
-                id: r.int(0), path: absPath(r.string(1)), directory: absPath(r.string(2)),
+                doc: r.int(0), path: absPath(r.string(1)), directory: absPath(r.string(2)),
                 filename: r.string(3),
                 ext: r.string(4), size: r.int(5), originalSize: r.intOrNil(6),
                 createdAt: Date(timeIntervalSince1970: r.double(7)),
@@ -165,15 +165,15 @@ extension Store {
         }
 
         // Both tag systems, so either can be shown as a column.
-        let tagged = try tags(forDocuments: rows.map(\.id))
+        let tagged = try tags(forDocuments: rows.map(\.doc))
         for i in rows.indices {
-            rows[i].tags = tagged.own[rows[i].id] ?? []
-            rows[i].finderTags = tagged.finder[rows[i].id] ?? []
+            rows[i].tags = tagged.own[rows[i].doc] ?? []
+            rows[i].finderTags = tagged.finder[rows[i].doc] ?? []
         }
 
         // Fold every field's value into one uniform dictionary so the views
         // never need to know whether a field is built in or user-defined.
-        let custom = try customValues(for: rows.map(\.id), fields: allFields)
+        let custom = try customValues(for: rows.map(\.doc), fields: allFields)
         for i in rows.indices {
             var values: [String: String] = [:]
             for field in allFields {
@@ -184,7 +184,7 @@ extension Store {
                 default: break
                 }
             }
-            if let extra = custom[rows[i].id] { values.merge(extra) { _, new in new } }
+            if let extra = custom[rows[i].doc] { values.merge(extra) { _, new in new } }
             rows[i].values = values.compactMapValues { $0 }
         }
         return rows
@@ -222,7 +222,7 @@ extension Store {
             WHERE d.id=?
             """, [.int(id)], { r -> DocumentDetail in
             let row = DocumentRow(
-                id: r.int(0), path: absPath(r.string(1)), directory: absPath(r.string(2)),
+                doc: r.int(0), path: absPath(r.string(1)), directory: absPath(r.string(2)),
                 filename: r.string(3),
                 ext: r.string(4), size: r.int(5), originalSize: r.intOrNil(6),
                 createdAt: Date(timeIntervalSince1970: r.double(7)),
