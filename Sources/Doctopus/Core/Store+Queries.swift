@@ -30,9 +30,9 @@ extension Store {
                 args.append(.text(rel + "/%"))
             }
             // rel == "" means the library root itself: no directory filter.
-        case .tag(_, let id):
+        case .tag(let ref):
             wheres.append("d.id IN (SELECT doc_id FROM document_tags WHERE tag_id=?)")
-            args.append(.int(id))
+            args.append(.int(ref.tag))
         case .finderTag(let name):
             wheres.append("d.id IN (SELECT doc_id FROM finder_tags WHERE name = ? COLLATE NOCASE)")
             args.append(.text(name))
@@ -204,7 +204,7 @@ extension Store {
         } else {
             let comparison = exact ? "v.value = ?" : "v.value LIKE ?"
             wheres.append("d.id IN (SELECT v.doc_id FROM field_values v WHERE v.field_id=? AND \(comparison))")
-            args.append(.int(field.id))
+            args.append(.int(field.fieldID))
             args.append(.text(exact ? value : "%\(value)%"))
         }
     }

@@ -303,7 +303,7 @@ actor Store {
             LEFT JOIN documents d ON d.id = dt.doc_id AND d.missing=0
             GROUP BY t.id ORDER BY t.name COLLATE NOCASE
             """) {
-            Tag(id: $0.int(0), name: $0.string(1), color: $0.int(2),
+            Tag(tagID: $0.int(0), name: $0.string(1), color: $0.int(2),
                 mirrors: $0.bool(3), folder: $0.stringOrNil(4), count: Int($0.int(5)))
         }
     }
@@ -343,7 +343,7 @@ actor Store {
             JOIN document_tags dt ON dt.tag_id=t.id WHERE dt.doc_id=?
             ORDER BY t.name COLLATE NOCASE
             """, [.int(docID)]) {
-            Tag(id: $0.int(0), name: $0.string(1), color: $0.int(2), mirrors: $0.bool(3), folder: $0.stringOrNil(4))
+            Tag(tagID: $0.int(0), name: $0.string(1), color: $0.int(2), mirrors: $0.bool(3), folder: $0.stringOrNil(4))
         }
     }
 

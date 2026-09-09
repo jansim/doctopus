@@ -175,7 +175,7 @@ private struct TagRow: View {
                 .foregroundStyle(TagColor.color(tag.color))
         }
         .dropHighlight(targeted)
-        .tag(Selection.tag(tag.library, tag.id))
+        .tag(Selection.tag(tag.id))
         .contextMenu { menu }
         .dropDestination(for: DocumentDragItem.self) { items, _ in
             model.handleDrop(items, action: .tag(tag))

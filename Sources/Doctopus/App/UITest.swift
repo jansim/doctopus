@@ -270,7 +270,7 @@ enum UITest {
             // Column/collapsed/sort state lives in UserDefaults now; the settings
             // blob still lives in the library's database.
             var raw = Preferences.uiState(key)
-            if raw == nil, let store = model.store {
+            if raw == nil, let store = model.activeLibrary?.store {
                 raw = (try? await store.setting(key)) ?? nil
             }
             if let raw, let data = raw.data(using: .utf8),

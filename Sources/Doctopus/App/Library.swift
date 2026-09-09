@@ -29,6 +29,7 @@ final class Library: Identifiable {
     var finderTags: [Facet] = []
     var fields: [Field] = []
     var facets: [String: [Facet]] = [:]
+    var queue: [ProcessingEntry] = []
     var stats = Store.Stats()
 
     var displayName: String { root.lastPathComponent }

@@ -251,7 +251,7 @@ private struct DocumentTableView: View {
             }
         }
         .tableStyle(.inset(alternatesRowBackgrounds: true))
-        .contextMenu(forSelectionType: Int64.self) { ids in
+        .contextMenu(forSelectionType: DocumentRef.self) { ids in
             DocumentMenu(rows: model.documents.filter { ids.contains($0.id) },
                          renameSheet: $renameSheet, tagSheet: $tagSheet)
         } primaryAction: { ids in

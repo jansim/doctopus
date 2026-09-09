@@ -13,24 +13,40 @@ final class AppModel {
     // Backing services
     let intelligence = Intelligence()
 
-    /// Every open library. Phase 1 keeps exactly one open at a time; the array
-    /// makes room for several without another reshape later.
+    /// Every open library, in the order they were opened. Several can be open
+    /// at once and the centre pane merges across all of them.
     private(set) var libraries: [Library] = []
-    var activeLibrary: Library? { libraries.first }
     func library(_ id: LibraryID) -> Library? { libraries.first { $0.id == id } }
 
-    /// The active library's database and pipeline. Implicitly unwrapped because
-    /// every path that reaches them is gated on a library being open (the views
-    /// show `WelcomeView` until one is).
-    var store: Store! { activeLibrary?.store }
-    var indexer: Indexer! { activeLibrary?.indexer }
-    var roots: [Library] { libraries }
+    /// The library an action with no row of its own belongs to: the one the
+    /// current selection names, else the first open library. Imports, new tags
+    /// and "rescan everything" all land here.
+    var activeLibrary: Library? {
+        switch selection {
+        case .tag(let ref): return library(ref.library) ?? libraries.first
+        case .folder(let path): return libraries.first { $0.owns(path: path) } ?? libraries.first
+        default: return libraries.first
+        }
+    }
 
-    // Persisted configuration of the active library.
+    /// Which library the Settings window is configuring. `nil` follows the
+    /// selection; the picker in Settings pins it to one.
+    var settingsLibraryID: LibraryID? {
+        didSet {
+            guard settingsLibraryID != oldValue else { return }
+            adoptSettings(of: settingsLibrary)
+        }
+    }
+    var settingsLibrary: Library? {
+        settingsLibraryID.flatMap(library) ?? activeLibrary
+    }
+
+    /// The settings library's configuration. Editing it writes back to that
+    /// library (and, for the app-wide half, to `Preferences`).
     var settings = AppSettings() {
         didSet {
             guard settings != oldValue, !applyingSettings else { return }
-            activeLibrary?.settings = settings
+            settingsLibrary?.settings = settings
             saveSettings()
         }
     }
@@ -41,15 +57,25 @@ final class AppModel {
     private var settingsSave: Task<Void, Never>?
     private var savedSettings: AppSettings?
 
+    /// Shows a library's settings without treating the swap as an edit.
+    private func adoptSettings(of lib: Library?) {
+        let next = lib?.settings ?? AppSettings()
+        guard next != settings else { return }
+        applyingSettings = true
+        settings = next
+        applyingSettings = false
+        savedSettings = next
+    }
+
     /// Saves are chained rather than each spawning its own task, so a burst of
     /// changes — the thumbnail slider does dozens — cannot reach the store out
     /// of order.
     private func saveSettings() {
-        guard let lib = activeLibrary else { return }
+        guard let lib = settingsLibrary else { return }
         let previous = settingsSave
         settingsSave = Task { @MainActor [weak self] in
             _ = await previous?.value
-            guard let self, self.activeLibrary === lib, self.settings != self.savedSettings else { return }
+            guard let self, self.settingsLibrary === lib, self.settings != self.savedSettings else { return }
             let current = self.settings
             self.savedSettings = current
             lib.settings = current
@@ -72,7 +98,15 @@ final class AppModel {
 
     // Center pane
     var documents: [DocumentRow] = []
-    var selection: Selection = .all { didSet { if selection != oldValue { reloadDocuments() } } }
+    var selection: Selection = .all {
+        didSet {
+            guard selection != oldValue else { return }
+            // Settings follow the selection unless the Settings window has
+            // pinned a library of its own.
+            if settingsLibraryID == nil { adoptSettings(of: activeLibrary) }
+            reloadDocuments()
+        }
+    }
     var searchText = "" { didSet { if searchText != oldValue { scheduleSearch() } } }
     /// Which columns the list shows, and in what order. Persisted, so a chosen
     /// layout survives a relaunch. A field column toggled here writes back to
@@ -125,9 +159,17 @@ final class AppModel {
             guard visibility != .automatic else { continue }
             let shown = visibility == .visible
             guard shown != field.showInList else { continue }
-            var updated = field
-            updated.showInList = shown
-            Task { try? await store?.updateField(updated); refreshAll() }
+            // Written straight to each library rather than through
+            // `updateField`, which clears the header's own choice — the choice
+            // being adopted here.
+            Task {
+                for (lib, owned) in librariesDefining(field) {
+                    var updated = owned
+                    updated.showInList = shown
+                    try? await lib.store.updateField(updated)
+                }
+                refreshAll()
+            }
         }
     }
 
@@ -230,8 +272,8 @@ final class AppModel {
     }
 
     /// Opens — creating it if needed — the library whose container is at
-    /// `container`. Phase 1 keeps a single library open, so this replaces any
-    /// currently-open one.
+    /// `container`, alongside any already open. Opening one that is already
+    /// open is a no-op rather than a second copy.
     private func openLibrary(container: URL, rootBookmark: Data? = nil,
                              persist: Bool = true, index: Bool = true) async {
         let root = container.deletingLastPathComponent()
@@ -242,6 +284,14 @@ final class AppModel {
 
         guard let store = try? Store(directory: container) else {
             errorMessage = "Could not open a library at \(root.lastPathComponent)."
+            return
+        }
+
+        // Identity is the id in `meta.json`, so the same library reached by two
+        // different paths — a bookmark and a Finder open, say — is one library.
+        if let already = library(store.libraryID) {
+            if let bookmark { already.bookmark = bookmark }
+            if persist { persistOpenLibraries() }
             return
         }
 
@@ -257,19 +307,18 @@ final class AppModel {
             for rule in Router.starterRules { _ = try? await store.upsertRule(rule) }
         }
 
-        for existing in libraries { existing.watcher?.stop() }
-        libraries = [lib]
+        libraries.append(lib)
+        startWatching(lib)
 
-        applyingSettings = true
-        settings = lib.settings
-        applyingSettings = false
-        savedSettings = lib.settings
-        viewMode = settings.viewMode
+        // The first library decides what the settings pane and the view mode
+        // show; later ones join without disturbing either.
+        if libraries.count == 1 {
+            adoptSettings(of: lib)
+            viewMode = settings.viewMode
+            await intelligence.update(settings: settings)
+            modelStatus = await intelligence.status()
+        }
 
-        await intelligence.update(settings: settings)
-        modelStatus = await intelligence.status()
-
-        startWatching()
         refreshAll()
         if persist { persistOpenLibraries() }
         if index { await lib.indexer.indexAll() }
@@ -317,18 +366,17 @@ final class AppModel {
     func closeLibrary(_ lib: Library) {
         lib.watcher?.stop()
         libraries.removeAll { $0 === lib }
+        if settingsLibraryID == lib.id { settingsLibraryID = nil }
         if selectionBelongs(to: lib) { selection = .all }
+        selectedIDs = selectedIDs.filter { $0.library != lib.id }
         persistOpenLibraries()
-        applyingSettings = true
-        settings = activeLibrary?.settings ?? AppSettings()
-        applyingSettings = false
-        startWatching()
+        adoptSettings(of: settingsLibrary)
         refreshAll()
     }
 
     private func selectionBelongs(to lib: Library) -> Bool {
         switch selection {
-        case .tag(let libID, _): return libID == lib.id
+        case .tag(let ref): return ref.library == lib.id
         case .folder(let path): return lib.owns(path: path)
         default: return false
         }
@@ -382,6 +430,7 @@ final class AppModel {
                 lib.fields = stampedFields
                 lib.finderTags = ftg
                 lib.facets = facetMap
+                lib.queue = qq
                 lib.stats = ss
 
                 folders += t
@@ -401,7 +450,7 @@ final class AppModel {
             self.folders = folders
             self.tags = tags
             self.finderTags = finderTags
-            self.fields = fields
+            self.fields = Self.mergeFields(fields)
             self.facets = facets
             self.queue = queue
             self.stats = stats
@@ -426,19 +475,69 @@ final class AppModel {
         return byValue.values.sorted { $0.count > $1.count || ($0.count == $1.count && $0.value < $1.value) }
     }
 
+    /// One entry per field key for the merged surfaces — columns, the inspector,
+    /// the facet sections. Every library seeds the same built-ins, so a shared
+    /// key is the same field wherever it came from; the first library to define
+    /// one supplies its name, icon and position, and the per-library copies stay
+    /// on `Library.fields` for anything that has to write to a specific database.
+    private static func mergeFields(_ fields: [Field]) -> [Field] {
+        var seen = Set<String>()
+        var merged: [Field] = []
+        for field in fields where seen.insert(field.key).inserted {
+            merged.append(field)
+        }
+        return merged.sorted { $0.position < $1.position }
+    }
+
+    /// Which libraries a selection can possibly match. Tag and folder
+    /// selections name one; everything else fans out across all of them.
+    private func librariesInScope(for selection: Selection) -> [Library] {
+        switch selection {
+        case .tag(let ref): return library(ref.library).map { [$0] } ?? []
+        case .folder(let path): return libraries.filter { $0.owns(path: path) }
+        default: return libraries
+        }
+    }
+
+    /// How many rows the centre pane holds at once. Each library is queried for
+    /// this many, so the merge always has enough to fill the window whichever
+    /// library the top of the list comes from.
+    private static let listLimit = 500
+
     func reloadDocuments() {
         let sel = selection, text = searchText, sortField = sort, asc = sortAscending
         let keys = Set(fields.map(\.key))
-        guard let lib = activeLibrary else { documents = []; return }
-        let libID = lib.id
+        let libs = librariesInScope(for: sel)
+        guard !libs.isEmpty else { documents = []; selectedIDs = []; detail = nil; return }
         reloadDocsTask?.cancel()
         reloadDocsTask = Task { [weak self] in
             guard let self else { return }
             let query = SearchQuery(text, fieldKeys: keys)
-            var rows = (try? await lib.store.listDocuments(selection: sel, query: query,
-                                                           sort: sortField, ascending: asc)) ?? []
-            for i in rows.indices { rows[i].library = libID }
+            let limit = Self.listLimit
+
+            // Each library answers in parallel and keeps its own order; the
+            // merge below is what turns them into one list.
+            var byIndex: [Int: [DocumentRow]] = [:]
+            await withTaskGroup(of: (Int, [DocumentRow]).self) { group in
+                for (i, lib) in libs.enumerated() {
+                    let libID = lib.id, store = lib.store
+                    group.addTask {
+                        var rows = (try? await store.listDocuments(
+                            selection: sel, query: query, sort: sortField,
+                            ascending: asc, limit: limit)) ?? []
+                        for j in rows.indices {
+                            rows[j].library = libID
+                            for k in rows[j].tags.indices { rows[j].tags[k].library = libID }
+                        }
+                        return (i, rows)
+                    }
+                }
+                for await (i, rows) in group { byIndex[i] = rows }
+            }
             guard !Task.isCancelled else { return }
+
+            let rows = Self.merge((0..<libs.count).map { byIndex[$0] ?? [] },
+                                  sort: sortField, ascending: asc, limit: limit)
             self.documents = rows
             // Drop selections that no longer exist so the inspector cannot go stale.
             let live = Set(rows.map(\.id))
@@ -448,6 +547,56 @@ final class AppModel {
         }
     }
     private var reloadDocsTask: Task<Void, Never>?
+
+    /// k-way merge of per-library results that are each already sorted the way
+    /// the user asked for.
+    ///
+    /// The comparison has to happen here rather than in SQL because no single
+    /// database sees all the rows. `DocumentSort` is the same comparator the
+    /// table headers use, so the merged order matches what a column header
+    /// promises.
+    static func merge(_ lists: [[DocumentRow]], sort: SortField,
+                      ascending: Bool, limit: Int) -> [DocumentRow] {
+        let lists = lists.filter { !$0.isEmpty }
+        if lists.count <= 1 { return Array((lists.first ?? []).prefix(limit)) }
+
+        // Relevance is an FTS rank, and two indexes' ranks are not on the same
+        // scale — comparing them would silently favour the smaller library. So
+        // search results are interleaved in each library's own order instead.
+        if sort == .relevance {
+            var out: [DocumentRow] = []
+            var depth = 0
+            while out.count < limit {
+                let round = lists.filter { depth < $0.count }
+                if round.isEmpty { break }
+                for list in round {
+                    out.append(list[depth])
+                    if out.count == limit { break }
+                }
+                depth += 1
+            }
+            return out
+        }
+
+        let comparator = DocumentSort(field: sort, order: ascending ? .forward : .reverse)
+        var cursors = [Int](repeating: 0, count: lists.count)
+        var out: [DocumentRow] = []
+        out.reserveCapacity(min(limit, lists.reduce(0) { $0 + $1.count }))
+        while out.count < limit {
+            var pick: Int?
+            for i in lists.indices where cursors[i] < lists[i].count {
+                guard let best = pick else { pick = i; continue }
+                if comparator.compare(lists[i][cursors[i]],
+                                      lists[best][cursors[best]]) == .orderedAscending {
+                    pick = i
+                }
+            }
+            guard let pick else { break }
+            out.append(lists[pick][cursors[pick]])
+            cursors[pick] += 1
+        }
+        return out
+    }
 
     private func scheduleSearch() {
         searchTask?.cancel()
@@ -461,47 +610,54 @@ final class AppModel {
     private func reloadDetail() {
         detailTask?.cancel()
         guard selectedIDs.count == 1, let ref = selectedIDs.first,
-              let lib = library(ref.library) ?? activeLibrary else {
+              let lib = library(ref.library) else {
             if selectedIDs.isEmpty { detail = nil }
             return
         }
+        let libID = lib.id
         detailTask = Task { [weak self] in
             guard let self else { return }
-            let d = try? await lib.store.detail(ref.doc)
+            var d = try? await lib.store.detail(ref.doc)
+            if d != nil {
+                d!.row.library = libID
+                for i in d!.tags.indices { d!.tags[i].library = libID }
+                for i in d!.row.tags.indices { d!.row.tags[i].library = libID }
+            }
             guard !Task.isCancelled else { return }
             self.detail = d
         }
     }
 
-    // MARK: - Per-row dispatch
+    // MARK: - Per-library dispatch
 
-    /// The store + pipeline that own a row.
-    private func services(for row: DocumentRow) -> (store: Store, indexer: Indexer)? {
-        guard let lib = library(row.library) ?? activeLibrary else { return nil }
-        return (lib.store, lib.indexer)
-    }
+    /// The library a row came from. Rows always carry their library, so a miss
+    /// means the library was closed between the fetch and the action.
+    private func library(of row: DocumentRow) -> Library? { library(row.library) }
 
-    /// Row ids grouped by the library that owns them, for the batch pipeline
-    /// operations that run inside one `Indexer`.
-    private func grouped(_ rows: [DocumentRow]) -> [(library: Library, ids: [Int64])] {
-        Dictionary(grouping: rows, by: \.library).compactMap { libID, rows in
-            guard let lib = library(libID) ?? activeLibrary else { return nil }
-            return (lib, rows.map(\.doc))
+    /// Rows grouped by owning library, for the actions that run as one batch
+    /// inside a single `Indexer` or `Store`.
+    private func grouped(_ rows: [DocumentRow]) -> [(library: Library, rows: [DocumentRow])] {
+        var order: [LibraryID] = []
+        var byLibrary: [LibraryID: [DocumentRow]] = [:]
+        for row in rows {
+            if byLibrary[row.library] == nil { order.append(row.library) }
+            byLibrary[row.library, default: []].append(row)
         }
+        return order.compactMap { id in library(id).map { ($0, byLibrary[id] ?? []) } }
     }
 
     // MARK: - Watching
 
-    private func startWatching() {
-        for lib in libraries {
-            lib.watcher?.stop()
-            let indexer = lib.indexer!
-            let watcher = FileWatcher { changed in
-                Task { await indexer.handleChanges(paths: changed) }
-            }
-            watcher.start(paths: [lib.root.path])
-            lib.watcher = watcher
+    /// One watcher per library, over that library's root, feeding that
+    /// library's pipeline. Libraries never see each other's changes.
+    private func startWatching(_ lib: Library) {
+        lib.watcher?.stop()
+        guard let indexer = lib.indexer else { return }
+        let watcher = FileWatcher { changed in
+            Task { await indexer.handleChanges(paths: changed) }
         }
+        watcher.start(paths: [lib.root.path])
+        lib.watcher = watcher
     }
 
     func reindex() { Task { for lib in libraries { await lib.indexer.indexAll() } } }
@@ -526,7 +682,11 @@ final class AppModel {
     }
 
     func reprocess(_ rows: [DocumentRow]) {
-        Task { await indexer.reprocess(ids: rows.map(\.id)) }
+        Task {
+            for (lib, rows) in grouped(rows) {
+                await lib.indexer.reprocess(ids: rows.map(\.doc))
+            }
+        }
     }
 
     // MARK: - Model enrichment
@@ -535,35 +695,51 @@ final class AppModel {
     /// indexed. Deliberately separate from Reprocess: this asks the model
     /// again and touches nothing else.
     func analyze(_ rows: [DocumentRow]) {
-        analyze(ids: rows.map(\.id), subject: rows.count == 1
+        analyze(grouped(rows).map { ($0.library, $0.rows.map(\.doc)) },
+                subject: rows.count == 1
                 ? rows[0].url.lastPathComponent : "\(rows.count) documents")
     }
 
-    /// Runs the model over the whole library. The expensive one, so the caller
+    /// Runs the model over every open library. The expensive one, so the caller
     /// is expected to have asked first.
     func analyzeLibrary() {
         Task {
-            let ids = (try? await store.allDocumentIDs()) ?? []
-            guard !ids.isEmpty else {
+            var work: [(Library, [Int64])] = []
+            var total = 0
+            for lib in libraries {
+                let ids = (try? await lib.store.allDocumentIDs()) ?? []
+                guard !ids.isEmpty else { continue }
+                work.append((lib, ids))
+                total += ids.count
+            }
+            guard !work.isEmpty else {
                 errorMessage = "There is nothing indexed yet."
                 return
             }
-            analyze(ids: ids, subject: "\(ids.count) documents")
+            analyze(work, subject: "\(total) documents")
         }
     }
 
-    private func analyze(ids: [Int64], subject: String) {
-        guard !ids.isEmpty else { return }
+    private func analyze(_ work: [(Library, [Int64])], subject: String) {
+        let work = work.filter { !$0.1.isEmpty }
+        guard !work.isEmpty else { return }
         Task {
-            // Settings are saved on a chained task, so a run started right
-            // after a change in the settings pane could otherwise ask the
-            // backend the user just switched away from.
-            await indexer.update(settings: settings)
-            let summary = await indexer.analyze(ids: ids)
+            var combined = Indexer.AnalyzeSummary()
+            for (lib, ids) in work {
+                // Settings are saved on a chained task, so a run started right
+                // after a change in the settings pane could otherwise ask the
+                // backend the user just switched away from.
+                await lib.indexer.update(settings: lib.settings)
+                let summary = await lib.indexer.analyze(ids: ids)
+                combined.updated += summary.updated
+                combined.skipped += summary.skipped
+                combined.failed += summary.failed
+                combined.blocked = combined.blocked ?? summary.blocked
+            }
             // Re-probing costs a round trip, but a run that just failed is
             // exactly when the status shown in Settings is worth correcting.
             modelStatus = await intelligence.status()
-            errorMessage = Self.describe(summary, subject: subject)
+            errorMessage = Self.describe(combined, subject: subject)
         }
     }
 
@@ -589,7 +765,13 @@ final class AppModel {
 
     func optimize(_ rows: [DocumentRow]) {
         Task {
-            let (count, saved) = await indexer.optimize(ids: rows.map(\.id))
+            var count = 0
+            var saved: Int64 = 0
+            for (lib, rows) in grouped(rows) {
+                let result = await lib.indexer.optimize(ids: rows.map(\.doc))
+                count += result.count
+                saved += result.saved
+            }
             if count == 0 { errorMessage = "Nothing to optimize — these files are already compact." }
             else { errorMessage = "Optimized \(count) file\(count == 1 ? "" : "s"), saved \(ByteFormat.string(saved))." }
         }
@@ -597,13 +779,20 @@ final class AppModel {
 
     func rename(_ rows: [DocumentRow], template: String) {
         Task {
-            let n = await indexer.rename(ids: rows.map(\.id), template: template)
+            var n = 0
+            for (lib, rows) in grouped(rows) {
+                n += await lib.indexer.rename(ids: rows.map(\.doc), template: template)
+            }
             errorMessage = n == 0 ? "No files needed renaming." : "Renamed \(n) file\(n == 1 ? "" : "s")."
         }
     }
 
     func move(_ rows: [DocumentRow], to destination: URL) {
-        Task { _ = await indexer.move(ids: rows.map(\.id), to: destination) }
+        Task {
+            for (lib, rows) in grouped(rows) {
+                _ = await lib.indexer.move(ids: rows.map(\.doc), to: destination)
+            }
+        }
     }
 
     func moveToFolderPicker(_ rows: [DocumentRow]) {
@@ -618,9 +807,11 @@ final class AppModel {
 
     func moveToTrash(_ rows: [DocumentRow]) {
         Task {
-            for row in rows {
-                try? FileManager.default.trashItem(at: row.url, resultingItemURL: nil)
-                try? await store.deleteDocument(row.id)
+            for (lib, rows) in grouped(rows) {
+                for row in rows {
+                    try? FileManager.default.trashItem(at: row.url, resultingItemURL: nil)
+                    try? await lib.store.deleteDocument(row.doc)
+                }
             }
             refreshAll()
         }
@@ -631,15 +822,17 @@ final class AppModel {
     func createAliases(_ rows: [DocumentRow], in folder: URL) {
         Task {
             var made = 0
-            for row in rows {
-                guard row.url.deletingLastPathComponent().path != folder.path else { continue }
-                guard let created = try? AliasManager.createAlias(to: row.url, in: folder) else { continue }
-                try? await store.recordAlias(docID: row.id, tagID: nil, path: created.path)
-                try? await store.logProcessing(docID: row.id, action: "aliased",
-                                               detail: "Also filed under \(folder.lastPathComponent)",
-                                               confidence: nil, rule: nil, from: row.path,
-                                               to: created.path, approved: true)
-                made += 1
+            for (lib, rows) in grouped(rows) {
+                for row in rows {
+                    guard row.url.deletingLastPathComponent().path != folder.path else { continue }
+                    guard let created = try? AliasManager.createAlias(to: row.url, in: folder) else { continue }
+                    try? await lib.store.recordAlias(docID: row.doc, tagID: nil, path: created.path)
+                    try? await lib.store.logProcessing(docID: row.doc, action: "aliased",
+                                                       detail: "Also filed under \(folder.lastPathComponent)",
+                                                       confidence: nil, rule: nil, from: row.path,
+                                                       to: created.path, approved: true)
+                    made += 1
+                }
             }
             refreshAll()
             if made == 0 { errorMessage = "Those documents are already in that folder." }
@@ -648,11 +841,12 @@ final class AppModel {
 
     /// Removes an alias placement without touching the master file.
     func removeAlias(_ row: DocumentRow, inFolder folder: String) {
+        guard let lib = library(of: row) else { return }
         Task {
-            for alias in ((try? await store.aliases(for: row.id)) ?? [])
+            for alias in ((try? await lib.store.aliases(for: row.doc)) ?? [])
             where alias.path.hasPrefix(folder + "/") {
                 AliasManager.removeAlias(at: alias.path)
-                try? await store.deleteAlias(id: alias.id)
+                try? await lib.store.deleteAlias(id: alias.id)
             }
             refreshAll()
         }
@@ -660,23 +854,30 @@ final class AppModel {
 
     // MARK: - Tags
 
+    /// Tagging a mixed selection tags each row in its own library, creating the
+    /// tag there if it is missing. Two libraries can carry the same tag name
+    /// without it being one tag.
     func addTag(_ name: String, to rows: [DocumentRow]) {
         Task {
-            guard let id = try? await store.tagID(named: name), id > 0 else { return }
-            for row in rows {
-                try? await store.assign(tag: id, to: row.id)
-                await indexer.syncAliases(docID: row.id, target: row.url)
+            for (lib, rows) in grouped(rows) {
+                guard let id = try? await lib.store.tagID(named: name), id > 0 else { continue }
+                for row in rows {
+                    try? await lib.store.assign(tag: id, to: row.doc)
+                    await lib.indexer.syncAliases(docID: row.doc, target: row.url)
+                }
             }
             refreshAll()
             reloadDetail()
         }
     }
 
+    /// A tag belongs to one library, so this only touches the rows from it.
     func removeTag(_ tag: Tag, from rows: [DocumentRow]) {
+        guard let lib = library(tag.library) else { return }
         Task {
-            for row in rows {
-                try? await store.unassign(tag: tag.id, from: row.id)
-                await indexer.syncAliases(docID: row.id, target: row.url)
+            for row in rows where row.library == tag.library {
+                try? await lib.store.unassign(tag: tag.tagID, from: row.doc)
+                await lib.indexer.syncAliases(docID: row.doc, target: row.url)
             }
             refreshAll()
             reloadDetail()
@@ -685,9 +886,10 @@ final class AppModel {
 
     /// Turns a tag the model proposed into a real assignment.
     func acceptTagSuggestion(_ suggestion: TagSuggestion, for row: DocumentRow) {
+        guard let lib = library(of: row) else { return }
         Task {
-            try? await store.acceptTagSuggestion(suggestion.name, for: row.id)
-            await indexer.syncAliases(docID: row.id, target: row.url)
+            try? await lib.store.acceptTagSuggestion(suggestion.name, for: row.doc)
+            await lib.indexer.syncAliases(docID: row.doc, target: row.url)
             refreshAll()
             reloadDetail()
         }
@@ -695,38 +897,55 @@ final class AppModel {
 
     /// Dismisses a proposed tag without ever making it a real one.
     func discardTagSuggestion(_ suggestion: TagSuggestion, for row: DocumentRow) {
+        guard let lib = library(of: row) else { return }
         Task {
-            try? await store.discardTagSuggestion(suggestion.name, for: row.id)
+            try? await lib.store.discardTagSuggestion(suggestion.name, for: row.doc)
             reloadDetail()
         }
     }
 
     func setTagMirroring(_ tag: Tag, enabled: Bool) {
+        guard let lib = library(tag.library) else { return }
         Task {
-            try? await store.setTagMirroring(tag.id, enabled, folder: tag.folder)
+            try? await lib.store.setTagMirroring(tag.tagID, enabled, folder: tag.folder)
             // Re-sync every document carrying the tag so disk matches immediately.
-            let rows = (try? await store.listDocuments(selection: .tag(tag.library, tag.id), query: SearchQuery(""),
-                                                       sort: .added, ascending: false, limit: 5000)) ?? []
-            for row in rows { await indexer.syncAliases(docID: row.id, target: row.url) }
+            let rows = (try? await lib.store.listDocuments(selection: .tag(tag.id), query: SearchQuery(""),
+                                                           sort: .added, ascending: false, limit: 5000)) ?? []
+            for row in rows { await lib.indexer.syncAliases(docID: row.doc, target: row.url) }
             refreshAll()
         }
     }
 
-    func createTag(named name: String) {
-        Task { _ = try? await store.tagID(named: name); refreshAll() }
+    /// New tags go to the library the sidebar selection belongs to.
+    func createTag(named name: String, in lib: Library? = nil) {
+        guard let lib = lib ?? activeLibrary else { return }
+        Task { _ = try? await lib.store.tagID(named: name); refreshAll() }
     }
 
     func renameTag(_ tag: Tag, to name: String) {
+        guard let lib = library(tag.library) else { return }
         Task {
-            let survivor = (try? await store.renameTag(tag.id, to: name)) ?? tag.id
-            if selection == .tag(tag.library, tag.id) { selection = .tag(tag.library, survivor) }
+            let survivor = (try? await lib.store.renameTag(tag.tagID, to: name)) ?? tag.tagID
+            if selection == .tag(tag.id) {
+                selection = .tag(TagRef(library: tag.library, tag: survivor))
+            }
             refreshAll()
             reloadDetail()
         }
     }
 
     func setTagColor(_ tag: Tag, _ color: Int64) {
-        Task { try? await store.setTagColor(tag.id, color); refreshAll(); reloadDetail() }
+        guard let lib = library(tag.library) else { return }
+        Task { try? await lib.store.setTagColor(tag.tagID, color); refreshAll(); reloadDetail() }
+    }
+
+    func deleteTag(_ tag: Tag) {
+        guard let lib = library(tag.library) else { return }
+        Task {
+            try? await lib.store.deleteTag(tag.tagID)
+            if selection == .tag(tag.id) { selection = .all }
+            refreshAll()
+        }
     }
 
     // MARK: - Finder tags
@@ -738,8 +957,10 @@ final class AppModel {
         let clean = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !clean.isEmpty else { return }
         Task {
-            for row in rows where FinderTags.add(clean, to: row.url) {
-                try? await store.indexFinderTags(docID: row.id, entries: FinderTags.entries(row.url))
+            for (lib, rows) in grouped(rows) {
+                for row in rows where FinderTags.add(clean, to: row.url) {
+                    try? await lib.store.indexFinderTags(docID: row.doc, entries: FinderTags.entries(row.url))
+                }
             }
             refreshAll()
             reloadDetail()
@@ -748,8 +969,10 @@ final class AppModel {
 
     func removeFinderTag(_ name: String, from rows: [DocumentRow]) {
         Task {
-            for row in rows where FinderTags.remove(name, from: row.url) {
-                try? await store.indexFinderTags(docID: row.id, entries: FinderTags.entries(row.url))
+            for (lib, rows) in grouped(rows) {
+                for row in rows where FinderTags.remove(name, from: row.url) {
+                    try? await lib.store.indexFinderTags(docID: row.doc, entries: FinderTags.entries(row.url))
+                }
             }
             if selection == .finderTag(name) { selection = .all }
             refreshAll()
@@ -759,33 +982,45 @@ final class AppModel {
 
     // MARK: - Value icons
 
+    /// Field values are matched across libraries, so an icon chosen for one is
+    /// set everywhere the field exists.
     func setValueIcon(_ field: Field, value: String, icon: String?) {
-        Task { try? await store.setValueIcon(field: field, value: value, icon: icon); refreshAll() }
-    }
-
-    func deleteTag(_ tag: Tag) {
         Task {
-            try? await store.deleteTag(tag.id)
-            if selection == .tag(tag.library, tag.id) { selection = .all }
+            for (lib, field) in librariesDefining(field) {
+                try? await lib.store.setValueIcon(field: field, value: value, icon: icon)
+            }
             refreshAll()
         }
     }
 
     // MARK: - Fields
 
+    /// Each library's own copy of a field key, for the actions the merged field
+    /// list has to apply everywhere at once.
+    private func librariesDefining(_ field: Field) -> [(Library, Field)] {
+        libraries.compactMap { lib in
+            lib.fields.first { $0.key == field.key }.map { (lib, $0) }
+        }
+    }
+
     func setFieldValue(_ rows: [DocumentRow], field: Field, value: String?) {
         Task {
-            for row in rows {
-                try? await store.setFieldValue(docID: row.id, field: field, value: value)
+            for (lib, rows) in grouped(rows) {
+                guard let owned = lib.fields.first(where: { $0.key == field.key }) else { continue }
+                for row in rows {
+                    try? await lib.store.setFieldValue(docID: row.doc, field: owned, value: value)
+                }
             }
             reloadDetail()
             refreshAll()
         }
     }
 
-    func setFieldValue(_ docID: Int64, field: Field, value: String?) {
+    func setFieldValue(_ ref: DocumentRef, field: Field, value: String?) {
+        guard let lib = library(ref.library),
+              let owned = lib.fields.first(where: { $0.key == field.key }) else { return }
         Task {
-            try? await store.setFieldValue(docID: docID, field: field, value: value)
+            try? await lib.store.setFieldValue(docID: ref.doc, field: owned, value: value)
             reloadDetail()
             refreshAll()
         }
@@ -794,7 +1029,10 @@ final class AppModel {
     /// Renaming a value onto an existing one merges every matching document.
     func renameFieldValue(_ field: Field, from old: String, to new: String) {
         Task {
-            let n = (try? await store.renameFieldValue(field: field, from: old, to: new)) ?? 0
+            var n = 0
+            for (lib, field) in librariesDefining(field) {
+                n += (try? await lib.store.renameFieldValue(field: field, from: old, to: new)) ?? 0
+            }
             if case .field(let key, let value) = selection, key == field.key, value == old {
                 selection = .field(field.key, new)
             }
@@ -805,7 +1043,9 @@ final class AppModel {
 
     func deleteFieldValue(_ field: Field, value: String) {
         Task {
-            try? await store.deleteFieldValue(field: field, value: value)
+            for (lib, field) in librariesDefining(field) {
+                try? await lib.store.deleteFieldValue(field: field, value: value)
+            }
             if selection == .field(field.key, value) { selection = .all }
             refreshAll()
         }
@@ -814,16 +1054,29 @@ final class AppModel {
     func updateField(_ field: Field) {
         // An explicit choice in Settings supersedes one made in the list header.
         listColumns[visibility: "field.\(field.key)"] = .automatic
-        Task { try? await store.updateField(field); refreshAll() }
+        Task {
+            // The list shows one column per key, so a change to it has to reach
+            // every library that has that key or the next refresh would undo it.
+            for (lib, owned) in librariesDefining(field) {
+                var updated = field
+                updated.fieldID = owned.fieldID
+                updated.library = lib.id
+                try? await lib.store.updateField(updated)
+            }
+            refreshAll()
+        }
     }
 
-    func addCustomField(named name: String) {
-        Task { _ = try? await store.addCustomField(name: name); refreshAll() }
+    func addCustomField(named name: String, in lib: Library? = nil) {
+        guard let lib = lib ?? settingsLibrary else { return }
+        Task { _ = try? await lib.store.addCustomField(name: name); refreshAll() }
     }
 
     func deleteField(_ field: Field) {
         Task {
-            try? await store.deleteField(field.id)
+            for (lib, owned) in librariesDefining(field) {
+                try? await lib.store.deleteField(owned.fieldID)
+            }
             if case .field(let key, _) = selection, key == field.key { selection = .all }
             refreshAll()
         }
@@ -831,17 +1084,19 @@ final class AppModel {
 
     // MARK: - Metadata editing
 
-    func editMetadata(_ docID: Int64, column: String, value: String?) {
+    func editMetadata(_ ref: DocumentRef, column: String, value: String?) {
+        guard let lib = library(ref.library) else { return }
         Task {
-            try? await store.overwriteMetadataField(docID, column: column, value: value?.nilIfBlank)
+            try? await lib.store.overwriteMetadataField(ref.doc, column: column, value: value?.nilIfBlank)
             reloadDetail()
             reloadDocuments()
         }
     }
 
-    func setDocumentDate(_ docID: Int64, _ date: Date?) {
+    func setDocumentDate(_ ref: DocumentRef, _ date: Date?) {
+        guard let lib = library(ref.library) else { return }
         Task {
-            try? await store.setDocumentDate(docID, date)
+            try? await lib.store.setDocumentDate(ref.doc, date)
             reloadDetail()
             reloadDocuments()
         }
@@ -851,8 +1106,10 @@ final class AppModel {
 
     func approveAll() {
         Task {
-            for entry in queue where !entry.approved {
-                try? await store.setProcessingApproved(entry.id, true)
+            for lib in libraries {
+                for entry in lib.queue where !entry.approved {
+                    try? await lib.store.setProcessingApproved(entry.id, true)
+                }
             }
             refreshAll()
         }
@@ -860,9 +1117,11 @@ final class AppModel {
 
     func setApproved(_ rows: [DocumentRow], _ approved: Bool) {
         Task {
-            for row in rows {
-                guard let entry = row.queue else { continue }
-                try? await store.setProcessingApproved(entry.entryID, approved)
+            for (lib, rows) in grouped(rows) {
+                for row in rows {
+                    guard let entry = row.queue else { continue }
+                    try? await lib.store.setProcessingApproved(entry.entryID, approved)
+                }
             }
             refreshAll()
         }
@@ -872,7 +1131,7 @@ final class AppModel {
 
     var defaultImportDirectory: URL? {
         guard let lib = activeLibrary else { return nil }
-        return lib.root.appendingPathComponent(settings.scanDestination, isDirectory: true)
+        return lib.root.appendingPathComponent(lib.settings.scanDestination, isDirectory: true)
     }
 
     /// Where a scan or import triggered from the center pane should land: the
@@ -883,13 +1142,18 @@ final class AppModel {
     }
 
     func importFiles(_ urls: [URL], into destination: URL?, movingSource: Bool = false) {
-        guard let lib = activeLibrary else {
+        // A scan started from the menu bar has no explicit destination; follow
+        // whatever the sidebar has selected, then fall back to the inbox.
+        guard let dest = destination ?? contextImportDirectory else {
             errorMessage = "Open a library before importing."
             return
         }
-        // A scan started from the menu bar has no explicit destination; follow
-        // whatever the sidebar has selected, then fall back to the inbox.
-        let dest = destination ?? contextImportDirectory ?? lib.root
+        // Files land in whichever library owns the destination, so a drop into
+        // one library's folder never ends up indexed by another.
+        guard let lib = libraries.first(where: { $0.owns(path: dest.path) }) ?? activeLibrary else {
+            errorMessage = "Open a library before importing."
+            return
+        }
         Task { await lib.indexer.importFiles(urls, into: dest, movingSource: movingSource) }
     }
 

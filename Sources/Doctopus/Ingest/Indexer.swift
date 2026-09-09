@@ -343,7 +343,7 @@ actor Indexer {
         let root = store.root
 
         var wanted: [Int64: URL] = [:]
-        for tag in mirroring { wanted[tag.id] = AliasManager.tagFolder(root: root, tag: tag) }
+        for tag in mirroring { wanted[tag.tagID] = AliasManager.tagFolder(root: root, tag: tag) }
 
         // Prune aliases for tags that are gone, or whose file vanished.
         for alias in existing {

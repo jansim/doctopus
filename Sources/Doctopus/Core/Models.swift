@@ -11,6 +11,13 @@ struct DocumentRef: Hashable, Codable, Sendable {
     var doc: Int64
 }
 
+/// Composite tag identity. Tags are per-library — two libraries can both have
+/// an "invoice" tag and they are not the same tag.
+struct TagRef: Hashable, Codable, Sendable {
+    var library: LibraryID
+    var tag: Int64
+}
+
 enum OCRState: Int64, Sendable {
     case pending = 0, done = 1, failed = 2, skipped = 3
 
@@ -125,7 +132,8 @@ struct DocumentDetail: Sendable {
 /// user-defined ones live in `field_values`. Both are renameable and can be
 /// shown or hidden per surface.
 struct Field: Identifiable, Hashable, Sendable {
-    var id: Int64
+    /// Row id within its library's database.
+    var fieldID: Int64
     var key: String
     var name: String
     var builtinColumn: String?
@@ -137,11 +145,17 @@ struct Field: Identifiable, Hashable, Sendable {
     /// Which library this field belongs to. Stamped by `AppModel`.
     var library: LibraryID = ""
 
+    /// Field keys are unique within a library, and the merged list `AppModel`
+    /// hands the views is deduplicated by key — a "Correspondent" column shows
+    /// correspondents from every open library, so it is one field there.
+    var id: String { key }
+
     var isBuiltin: Bool { builtinColumn != nil }
 }
 
 struct Tag: Identifiable, Hashable, Sendable {
-    var id: Int64
+    /// Row id within its library's database.
+    var tagID: Int64
     var name: String
     var color: Int64
     var mirrors: Bool
@@ -149,6 +163,8 @@ struct Tag: Identifiable, Hashable, Sendable {
     var count: Int = 0
     /// Which library this tag belongs to. Stamped by `AppModel`.
     var library: LibraryID = ""
+
+    var id: TagRef { TagRef(library: library, tag: tagID) }
 }
 
 /// A tag the model proposed for a document but that has not been accepted
@@ -214,7 +230,7 @@ enum Selection: Hashable, Sendable {
     case folder(String)
     /// A Doctopus tag. Tag ids are per-library, so the library is part of the
     /// selection.
-    case tag(LibraryID, Int64)
+    case tag(TagRef)
     /// One of the Finder's own tags, by name. Matched across every open library.
     case finderTag(String)
     /// A field value facet: (field key, value). Matched across every open library.
