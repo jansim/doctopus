@@ -25,17 +25,20 @@ build/Doctopus.app/Contents/MacOS/Doctopus --uitest Testing/DemoLibrary build/sn
 Passing a directory to `--uitest` writes PNGs of the panes there, which is a
 quick way to eyeball a layout change; CI keeps them as build artifacts.
 
-The checks write a Finder tag to one fixture and put it back afterwards, so a
-run leaves the library exactly as it found it.
+Each suite copies the fixture library to a temporary folder first and creates
+its `library.doctopus` index there, so `DemoLibrary/` itself is never written
+to. (The checks also write a Finder tag to one fixture and put it back
+afterwards.)
 
 Continuity Camera cannot be checked this way — it needs a real iPhone or iPad
 in the room. `--scantest` reports which devices the system is offering, and
 `--scantest fire` starts a capture and reports what comes back.
 
-To try the demo library in the real app:
+To try the demo library in the real app (this creates
+`Testing/DemoLibrary/library.doctopus`):
 
 ```bash
-build/Doctopus.app/Contents/MacOS/Doctopus --add-root Testing/DemoLibrary && open build/Doctopus.app
+build/Doctopus.app/Contents/MacOS/Doctopus --new-library Testing/DemoLibrary && open build/Doctopus.app
 ```
 
-`DemoLibrary/` is generated and git-ignored.
+`DemoLibrary/` is generated and git-ignored, as is any `library.doctopus`.

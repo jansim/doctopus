@@ -11,48 +11,54 @@ import AppKit
 @Observable
 final class AppModel {
     // Backing services
-    let store: Store
     let llm = LLMService()
-    private(set) var indexer: Indexer!
-    private var watcher: FileWatcher?
 
-    // Persisted configuration
+    /// Every open library. Phase 1 keeps exactly one open at a time; the array
+    /// makes room for several without another reshape later.
+    private(set) var libraries: [Library] = []
+    var activeLibrary: Library? { libraries.first }
+    func library(_ id: LibraryID) -> Library? { libraries.first { $0.id == id } }
+
+    /// The active library's database and pipeline. Implicitly unwrapped because
+    /// every path that reaches them is gated on a library being open (the views
+    /// show `WelcomeView` until one is).
+    var store: Store! { activeLibrary?.store }
+    var indexer: Indexer! { activeLibrary?.indexer }
+    var roots: [Library] { libraries }
+
+    // Persisted configuration of the active library.
     var settings = AppSettings() {
         didSet {
-            guard settings != oldValue else { return }
-            // `indexer` only exists once `bootstrap` has read the stored
-            // settings, and that first assignment is the one change that needs
-            // neither half of this: it came *from* the store, and the indexer
-            // is built with it a few lines later.
-            guard indexer != nil else { return }
+            guard settings != oldValue, !applyingSettings else { return }
+            activeLibrary?.settings = settings
             saveSettings()
         }
     }
 
+    /// True while `settings` is being replaced from a library rather than by the
+    /// user, so the didSet does not write it straight back.
+    private var applyingSettings = false
     private var settingsSave: Task<Void, Never>?
     private var savedSettings: AppSettings?
 
-    /// Saves are chained rather than each spawning its own task. Two settings
-    /// changed in quick succession — the thumbnail slider does dozens — used to
-    /// race, and whichever write happened to reach the store last won, which is
-    /// how a chosen view could come back as the one before it. Reading
-    /// `settings` inside the task also collapses the run: once one save has
-    /// written the current value, the ones queued behind it have nothing left
-    /// to do.
+    /// Saves are chained rather than each spawning its own task, so a burst of
+    /// changes — the thumbnail slider does dozens — cannot reach the store out
+    /// of order.
     private func saveSettings() {
+        guard let lib = activeLibrary else { return }
         let previous = settingsSave
         settingsSave = Task { @MainActor [weak self] in
             _ = await previous?.value
-            guard let self, let indexer, settings != savedSettings else { return }
-            let current = settings
-            savedSettings = current
-            await current.save(to: store)
-            await indexer.update(settings: current)
+            guard let self, self.activeLibrary === lib, self.settings != self.savedSettings else { return }
+            let current = self.settings
+            self.savedSettings = current
+            lib.settings = current
+            await current.save(to: lib.store)
+            await lib.indexer.update(settings: current)
         }
     }
 
     // Sidebar data
-    var roots: [Store.Root] = []
     var folders: [FolderNode] = []
     var tags: [Tag] = []
     /// The Finder's own tags across the library. Distinct from `tags`, which
@@ -103,17 +109,12 @@ final class AppModel {
         var ascending: Bool
     }
 
-    private var persistTasks: [String: Task<Void, Never>] = [:]
-
-    /// Chained per key for the same reason the settings blob is: two changes in
-    /// a row must not reach the store in whichever order the scheduler likes.
+    /// How the library is being looked at — column layout, collapsed folders,
+    /// sort — is app-wide UI state rather than library data, so it lives in
+    /// `UserDefaults` and survives switching libraries.
     private func persist(_ key: String, _ value: String?) {
         guard let value else { return }
-        let previous = persistTasks[key]
-        persistTasks[key] = Task { @MainActor [store] in
-            _ = await previous?.value
-            try? await store.setSetting(key, value)
-        }
+        Preferences.setUIState(key, value)
     }
 
     /// Mirrors a header-menu show/hide onto the field, which is what the rest
@@ -124,11 +125,9 @@ final class AppModel {
             guard visibility != .automatic else { continue }
             let shown = visibility == .visible
             guard shown != field.showInList else { continue }
-            let updated = Field(id: field.id, key: field.key, name: field.name,
-                                builtinColumn: field.builtinColumn, icon: field.icon,
-                                showInSidebar: field.showInSidebar, showInList: shown,
-                                position: field.position, enabled: field.enabled)
-            Task { try? await store.updateField(updated); refreshAll() }
+            var updated = field
+            updated.showInList = shown
+            Task { try? await store?.updateField(updated); refreshAll() }
         }
     }
 
@@ -181,37 +180,23 @@ final class AppModel {
 
     // MARK: - Lifecycle
 
-    /// `storeURL` exists for the headless UI checks, which drive a real model
-    /// against a throwaway index instead of the user's own.
-    init(storeURL: URL? = nil) {
-        let support = (try? FileManager.default.url(for: .applicationSupportDirectory,
-                                                    in: .userDomainMask, appropriateFor: nil, create: true))
-            ?? FileManager.default.temporaryDirectory
-        let dir = support.appendingPathComponent("Doctopus", isDirectory: true)
-        let url = storeURL ?? dir.appendingPathComponent("index.sqlite")
-        do {
-            store = try Store(url: url)
-        } catch {
-            // A corrupt index is recoverable — the disk still holds every document.
-            let backup = url.deletingLastPathComponent()
-                .appendingPathComponent("index-\(Int(Date().timeIntervalSince1970)).sqlite")
-            try? FileManager.default.moveItem(at: url, to: backup)
-            store = try! Store(url: url)
-        }
+    /// `openingLibraryAt` (a `library.doctopus` directory) is for the headless
+    /// checks, which drive a real model against a throwaway library.
+    private let explicitLibrary: URL?
+
+    init(openingLibraryAt url: URL? = nil) {
+        self.explicitLibrary = url
     }
 
     func bootstrap() async {
-        settings = await AppSettings.load(from: store)
-        viewMode = settings.viewMode
-        if let saved: TableColumnCustomization<DocumentRow> = await decode(UIState.columns) {
+        // App-wide UI state is restored before any library opens.
+        if let saved: TableColumnCustomization<DocumentRow> = decode(UIState.columns) {
             listColumns = saved
         }
-        if let saved: [String] = await decode(UIState.collapsed) {
+        if let saved: [String] = decode(UIState.collapsed) {
             collapsedFolders = Set(saved)
         }
-        // Restored without a reload: the first query has not run yet, and it
-        // is `refreshAll` below that will run it with this order.
-        if let saved: StoredSort = await decode(UIState.sort),
+        if let saved: StoredSort = decode(UIState.sort),
            let field = SortField(storageKey: saved.field) {
             batchingSort = true
             sort = field
@@ -219,9 +204,53 @@ final class AppModel {
             batchingSort = false
         }
 
-        // The callbacks hop back to the main actor; the actors themselves stay off it.
-        indexer = Indexer(
-            store: store, llm: llm, settings: settings,
+        modelStatus = await llm.probe()
+
+        if let explicit = explicitLibrary {
+            await openLibrary(container: explicit, persist: false)
+        } else {
+            for bookmark in Preferences.libraryBookmarks {
+                var stale = false
+                guard let root = try? URL(resolvingBookmarkData: bookmark,
+                                          relativeTo: nil, bookmarkDataIsStale: &stale),
+                      FileManager.default.fileExists(atPath: root.path) else { continue }
+                let container = existingContainer(in: root)
+                    ?? root.appendingPathComponent(Preferences.libraryFolderName, isDirectory: true)
+                await openLibrary(container: container, rootBookmark: bookmark, persist: false)
+            }
+        }
+        persistOpenLibraries()
+    }
+
+    // MARK: - Libraries
+
+    /// A `*.doctopus` directory sitting directly inside `folder`, if any.
+    func existingContainer(in folder: URL) -> URL? {
+        (try? FileManager.default.contentsOfDirectory(
+            at: folder, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles]))?
+            .first { $0.lastPathComponent.hasSuffix(".doctopus") }
+    }
+
+    /// Opens — creating it if needed — the library whose container is at
+    /// `container`. Phase 1 keeps a single library open, so this replaces any
+    /// currently-open one.
+    private func openLibrary(container: URL, rootBookmark: Data? = nil,
+                             persist: Bool = true, index: Bool = true) async {
+        let root = container.deletingLastPathComponent()
+        // The app is not sandboxed, so a plain bookmark is enough to survive the
+        // folder being moved between launches.
+        let bookmark = rootBookmark ?? (try? root.bookmarkData(
+            includingResourceValuesForKeys: nil, relativeTo: nil))
+
+        guard let store = try? Store(directory: container) else {
+            errorMessage = "Could not open a library at \(root.lastPathComponent)."
+            return
+        }
+
+        let lib = Library(store: store, bookmark: bookmark)
+        lib.settings = await AppSettings.load(from: store)
+        lib.attachIndexer(
+            llm: llm,
             onProgress: { [weak self] p in Task { @MainActor in self?.progress = p } },
             onDataChanged: { [weak self] in Task { @MainActor in self?.refreshAll() } })
 
@@ -229,69 +258,182 @@ final class AppModel {
             for rule in Router.starterRules { _ = try? await store.upsertRule(rule) }
         }
 
-        modelStatus = await llm.probe()
+        for existing in libraries { existing.watcher?.stop() }
+        libraries = [lib]
 
-        // Load the roots before anything reads them: `refreshAll` runs in a
-        // detached task, so checking `roots` right after it would always lose
-        // the race and skip the first index.
-        roots = (try? await store.roots()) ?? []
-        refreshAll()
+        applyingSettings = true
+        settings = lib.settings
+        applyingSettings = false
+        savedSettings = lib.settings
+        viewMode = settings.viewMode
+
         startWatching()
+        refreshAll()
+        if persist { persistOpenLibraries() }
+        if index { await lib.indexer.indexAll() }
+    }
 
-        if !roots.isEmpty { await indexer.indexAll() }
+    /// Choose a folder to index; its index lives in a `library.doctopus` inside.
+    func addLibrary() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Choose Folder"
+        panel.message = "Choose a folder to index in place. Doctopus keeps its index in a “\(Preferences.libraryFolderName)” folder inside it — nothing else is moved or renamed."
+        guard panel.runModal() == .OK, let folder = panel.url else { return }
+        openLibrary(at: folder)
+    }
+
+    func openLibraryPicker() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Open Library"
+        panel.message = "Choose a “\(Preferences.libraryFolderName)” folder, or a folder that contains one."
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        openLibrary(at: url)
+    }
+
+    /// Open an existing library, given either its `library.doctopus` directory
+    /// or the folder that contains one.
+    func openLibrary(at url: URL) {
+        let container: URL
+        if url.lastPathComponent.hasSuffix(".doctopus") {
+            container = url
+        } else if let existing = existingContainer(in: url) {
+            container = existing
+        } else {
+            container = url.appendingPathComponent(Preferences.libraryFolderName, isDirectory: true)
+        }
+        Task { await openLibrary(container: container) }
+    }
+
+    /// Stops watching and forgets a library. The `library.doctopus` directory is
+    /// left on disk untouched.
+    func closeLibrary(_ lib: Library) {
+        lib.watcher?.stop()
+        libraries.removeAll { $0 === lib }
+        if selectionBelongs(to: lib) { selection = .all }
+        persistOpenLibraries()
+        applyingSettings = true
+        settings = activeLibrary?.settings ?? AppSettings()
+        applyingSettings = false
+        startWatching()
+        refreshAll()
+    }
+
+    private func selectionBelongs(to lib: Library) -> Bool {
+        switch selection {
+        case .tag(let libID, _): return libID == lib.id
+        case .folder(let path): return lib.owns(path: path)
+        default: return false
+        }
+    }
+
+    private func persistOpenLibraries() {
+        Preferences.libraryBookmarks = libraries.compactMap(\.bookmark)
     }
 
     // MARK: - Refresh
 
-    private func decode<T: Decodable>(_ key: String) async -> T? {
-        guard let raw = try? await store.setting(key), let data = raw.data(using: .utf8) else { return nil }
+    private func decode<T: Decodable>(_ key: String) -> T? {
+        guard let raw = Preferences.uiState(key), let data = raw.data(using: .utf8) else { return nil }
         return try? JSONDecoder().decode(T.self, from: data)
     }
 
     func refreshAll() {
         reloadTask?.cancel()
+        let libs = libraries
         reloadTask = Task { [weak self] in
             guard let self else { return }
-            let rootList = (try? await store.roots()) ?? []
-            let paths = rootList.map(\.path)
-            async let tree = (try? await store.folderTree(roots: paths)) ?? []
-            async let tagList = (try? await store.tags()) ?? []
-            async let fieldList = (try? await store.fields()) ?? []
-            async let finder = (try? await store.finderTags()) ?? []
-            async let finderLabels = (try? await store.finderTagLabels()) ?? [:]
-            async let q = (try? await store.processingQueue()) ?? []
-            async let s = (try? await store.stats()) ?? Store.Stats()
 
-            let (t, tg, fs, qq, ss) = await (tree, tagList, fieldList, q, s)
-            let ft = await finder
-            // Before the tags themselves, so the first draw already has the
-            // Finder's colours to hand.
-            FinderTags.learn(await finderLabels)
-            var facetMap: [String: [Facet]] = [:]
-            for field in fs {
-                facetMap[field.key] = (try? await store.facets(field: field)) ?? []
+            var folders: [FolderNode] = []
+            var tags: [Tag] = []
+            var fields: [Field] = []
+            var finderTags: [Facet] = []
+            var facets: [String: [Facet]] = [:]
+            var queue: [ProcessingEntry] = []
+            var stats = Store.Stats()
+            var finderLabels: [String: Int] = [:]
+
+            for lib in libs {
+                let store = lib.store
+                async let tree = (try? await store.folderTree()) ?? []
+                async let tagList = (try? await store.tags()) ?? []
+                async let fieldList = (try? await store.fields()) ?? []
+                async let finder = (try? await store.finderTags()) ?? []
+                async let labels = (try? await store.finderTagLabels()) ?? [:]
+                async let q = (try? await store.processingQueue()) ?? []
+                async let s = (try? await store.stats()) ?? Store.Stats()
+
+                let (t, tg, fs, ftg, lbl, qq, ss) = await (tree, tagList, fieldList, finder, labels, q, s)
+                var facetMap: [String: [Facet]] = [:]
+                for field in fs { facetMap[field.key] = (try? await store.facets(field: field)) ?? [] }
+
+                let libID = lib.id
+                let stampedTags = tg.map { var x = $0; x.library = libID; return x }
+                let stampedFields = fs.map { var x = $0; x.library = libID; return x }
+                lib.folders = t
+                lib.tags = stampedTags
+                lib.fields = stampedFields
+                lib.finderTags = ftg
+                lib.facets = facetMap
+                lib.stats = ss
+
+                folders += t
+                tags += stampedTags
+                fields += stampedFields
+                finderTags = Self.mergeFacets(finderTags, ftg)
+                for (k, v) in facetMap { facets[k] = Self.mergeFacets(facets[k] ?? [], v) }
+                queue += qq
+                stats = stats + ss
+                finderLabels.merge(lbl) { max($0, $1) }
             }
+
+            FinderTags.learn(finderLabels)
+            queue.sort { $0.at > $1.at }
+
             guard !Task.isCancelled else { return }
-            self.roots = rootList
-            self.folders = t
-            self.tags = tg
-            self.finderTags = ft
-            self.fields = fs
-            self.facets = facetMap
-            self.queue = qq
-            self.stats = ss
+            self.folders = folders
+            self.tags = tags
+            self.finderTags = finderTags
+            self.fields = fields
+            self.facets = facets
+            self.queue = queue
+            self.stats = stats
             self.reloadDocuments()
         }
+    }
+
+    /// Sums facet counts by value, so a doc-type value spanning two libraries
+    /// shows as one row.
+    private static func mergeFacets(_ a: [Facet], _ b: [Facet]) -> [Facet] {
+        guard !a.isEmpty else { return b }
+        var byValue: [String: Facet] = [:]
+        for f in a + b {
+            if var existing = byValue[f.value] {
+                existing.count += f.count
+                existing.icon = existing.icon ?? f.icon
+                byValue[f.value] = existing
+            } else {
+                byValue[f.value] = f
+            }
+        }
+        return byValue.values.sorted { $0.count > $1.count || ($0.count == $1.count && $0.value < $1.value) }
     }
 
     func reloadDocuments() {
         let sel = selection, text = searchText, sortField = sort, asc = sortAscending
         let keys = Set(fields.map(\.key))
-        Task { [weak self] in
+        guard let lib = activeLibrary else { documents = []; return }
+        reloadDocsTask?.cancel()
+        reloadDocsTask = Task { [weak self] in
             guard let self else { return }
             let query = SearchQuery(text, fieldKeys: keys)
-            let rows = (try? await store.listDocuments(selection: sel, query: query,
-                                                       sort: sortField, ascending: asc)) ?? []
+            let rows = (try? await lib.store.listDocuments(selection: sel, query: query,
+                                                           sort: sortField, ascending: asc)) ?? []
             guard !Task.isCancelled else { return }
             self.documents = rows
             // Drop selections that no longer exist so the inspector cannot go stale.
@@ -301,6 +443,7 @@ final class AppModel {
             if self.selectedIDs.isEmpty { self.detail = nil }
         }
     }
+    private var reloadDocsTask: Task<Void, Never>?
 
     private func scheduleSearch() {
         searchTask?.cancel()
@@ -313,63 +456,34 @@ final class AppModel {
 
     private func reloadDetail() {
         detailTask?.cancel()
-        guard selectedIDs.count == 1, let id = selectedIDs.first else {
+        guard selectedIDs.count == 1, let id = selectedIDs.first, let lib = activeLibrary else {
             if selectedIDs.isEmpty { detail = nil }
             return
         }
         detailTask = Task { [weak self] in
             guard let self else { return }
-            let d = try? await store.detail(id)
+            let d = try? await lib.store.detail(id)
             guard !Task.isCancelled else { return }
             self.detail = d
         }
     }
 
-    // MARK: - Roots & watching
+    // MARK: - Watching
 
     private func startWatching() {
-        watcher?.stop()
-        guard !roots.isEmpty else { return }
-        let paths = roots.map(\.path)
-        watcher = FileWatcher { [weak self] changed in
-            Task { @MainActor in
-                guard let self else { return }
-                await self.indexer.handleChanges(paths: changed)
+        for lib in libraries {
+            lib.watcher?.stop()
+            let indexer = lib.indexer!
+            let watcher = FileWatcher { changed in
+                Task { await indexer.handleChanges(paths: changed) }
             }
-        }
-        watcher?.start(paths: paths)
-    }
-
-    func addRoot() {
-        let panel = NSOpenPanel()
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
-        panel.allowsMultipleSelection = false
-        panel.prompt = "Index Folder"
-        panel.message = "Choose a folder to index in place. Nothing will be moved or renamed."
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        Task {
-            let bookmark = try? url.bookmarkData(options: .withSecurityScope,
-                                                 includingResourceValuesForKeys: nil, relativeTo: nil)
-            _ = try? await store.addRoot(path: url.path, bookmark: bookmark)
-            roots = (try? await store.roots()) ?? []
-            refreshAll()
-            startWatching()
-            await indexer.indexAll()
+            watcher.start(paths: [lib.root.path])
+            lib.watcher = watcher
         }
     }
 
-    func removeRoot(_ root: Store.Root) {
-        Task {
-            try? await store.removeRoot(id: root.id)
-            roots = (try? await store.roots()) ?? []
-            refreshAll()
-            startWatching()
-        }
-    }
-
-    func reindex() { Task { await indexer.indexAll() } }
-    func cancelIndexing() { Task { await indexer.cancel() } }
+    func reindex() { Task { for lib in libraries { await lib.indexer.indexAll() } } }
+    func cancelIndexing() { Task { for lib in libraries { await lib.indexer.cancel() } } }
 
     // MARK: - Document actions
 
@@ -493,7 +607,7 @@ final class AppModel {
         Task {
             try? await store.setTagMirroring(tag.id, enabled, folder: tag.folder)
             // Re-sync every document carrying the tag so disk matches immediately.
-            let rows = (try? await store.listDocuments(selection: .tag(tag.id), query: SearchQuery(""),
+            let rows = (try? await store.listDocuments(selection: .tag(tag.library, tag.id), query: SearchQuery(""),
                                                        sort: .added, ascending: false, limit: 5000)) ?? []
             for row in rows { await indexer.syncAliases(docID: row.id, target: row.url) }
             refreshAll()
@@ -507,7 +621,7 @@ final class AppModel {
     func renameTag(_ tag: Tag, to name: String) {
         Task {
             let survivor = (try? await store.renameTag(tag.id, to: name)) ?? tag.id
-            if selection == .tag(tag.id) { selection = .tag(survivor) }
+            if selection == .tag(tag.library, tag.id) { selection = .tag(tag.library, survivor) }
             refreshAll()
             reloadDetail()
         }
@@ -554,7 +668,7 @@ final class AppModel {
     func deleteTag(_ tag: Tag) {
         Task {
             try? await store.deleteTag(tag.id)
-            if selection == .tag(tag.id) { selection = .all }
+            if selection == .tag(tag.library, tag.id) { selection = .all }
             refreshAll()
         }
     }
@@ -659,8 +773,8 @@ final class AppModel {
     // MARK: - Import
 
     var defaultImportDirectory: URL? {
-        guard let root = roots.first else { return nil }
-        return URL(fileURLWithPath: root.path).appendingPathComponent(settings.scanDestination, isDirectory: true)
+        guard let lib = activeLibrary else { return nil }
+        return lib.root.appendingPathComponent(settings.scanDestination, isDirectory: true)
     }
 
     /// Where a scan or import triggered from the center pane should land: the
@@ -671,14 +785,14 @@ final class AppModel {
     }
 
     func importFiles(_ urls: [URL], into destination: URL?, movingSource: Bool = false) {
-        guard let root = roots.first else {
-            errorMessage = "Add a folder to index before importing."
+        guard let lib = activeLibrary else {
+            errorMessage = "Open a library before importing."
             return
         }
         // A scan started from the menu bar has no explicit destination; follow
         // whatever the sidebar has selected, then fall back to the inbox.
-        let dest = destination ?? contextImportDirectory ?? URL(fileURLWithPath: root.path)
-        Task { await indexer.importFiles(urls, into: dest, rootID: root.id, movingSource: movingSource) }
+        let dest = destination ?? contextImportDirectory ?? lib.root
+        Task { await lib.indexer.importFiles(urls, into: dest, movingSource: movingSource) }
     }
 
     /// Writes scanner output into a folder and runs it through the pipeline.

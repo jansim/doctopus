@@ -22,12 +22,19 @@ enum UITest {
         let library = URL(fileURLWithPath: (root as NSString).expandingTildeInPath).standardizedFileURL
 
         Task { @MainActor in
-            let dbURL = FileManager.default.temporaryDirectory
-                .appendingPathComponent("doctopus-uitest-\(UUID().uuidString).sqlite")
-            defer { try? FileManager.default.removeItem(at: dbURL) }
+            // Work on a throwaway copy so the checked-in fixture is never
+            // written to, and keep persisted UI state out of real preferences.
+            let suite = "doctopus-uitest-\(UUID().uuidString)"
+            Preferences.defaults = UserDefaults(suiteName: suite) ?? .standard
+            defer { UserDefaults().removePersistentDomain(forName: suite) }
 
-            let model = AppModel(storeURL: dbURL)
-            _ = try? await model.store.addRoot(path: library.path, bookmark: nil)
+            let root = FileManager.default.temporaryDirectory
+                .appendingPathComponent("doctopus-uitest-\(UUID().uuidString)", isDirectory: true)
+            defer { try? FileManager.default.removeItem(at: root) }
+            try? FileManager.default.copyItem(at: library, to: root)
+            let container = root.appendingPathComponent("library.doctopus", isDirectory: true)
+
+            let model = AppModel(openingLibraryAt: container)
             await model.bootstrap()
             guard await settle({ !model.documents.isEmpty }) else {
                 print("  ✗ indexed the library"); exit(1)
@@ -231,7 +238,13 @@ enum UITest {
                                               until: (T) -> Bool = { _ in true }) async -> T? {
         var last: T?
         for _ in 0..<20 {
-            if let raw = try? await model.store.setting(key), let data = raw.data(using: .utf8),
+            // Column/collapsed/sort state lives in UserDefaults now; the settings
+            // blob still lives in the library's database.
+            var raw = Preferences.uiState(key)
+            if raw == nil, let store = model.store {
+                raw = (try? await store.setting(key)) ?? nil
+            }
+            if let raw, let data = raw.data(using: .utf8),
                let decoded = try? JSONDecoder().decode(T.self, from: data) {
                 last = decoded
                 if until(decoded) { return decoded }

@@ -12,6 +12,12 @@ enum FileScanner {
         var created: Date
     }
 
+    /// A `library.doctopus` directory (or any `*.doctopus`) is Doctopus's own
+    /// storage, not content: never index or react to anything inside one.
+    static func isInsideLibraryContainer(_ url: URL) -> Bool {
+        url.pathComponents.contains { $0.hasSuffix(".doctopus") }
+    }
+
     static func scan(root: URL) -> [Found] {
         let keys: [URLResourceKey] = [
             .isRegularFileKey, .isDirectoryKey, .isAliasFileKey, .isHiddenKey,
@@ -25,7 +31,11 @@ enum FileScanner {
         out.reserveCapacity(512)
         for case let url as URL in e {
             guard let v = try? url.resourceValues(forKeys: Set(keys)) else { continue }
-            if v.isDirectory == true { continue }
+            if v.isDirectory == true {
+                if url.lastPathComponent.hasSuffix(".doctopus") { e.skipDescendants() }
+                continue
+            }
+            if isInsideLibraryContainer(url) { continue }
             // Aliases we (or the user) generated are pointers, not documents.
             if v.isAliasFile == true { continue }
             guard v.isRegularFile == true,

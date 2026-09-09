@@ -88,18 +88,12 @@ enum Schema {
 
     private static func v1(_ db: Database) throws {
         try db.exec("""
-        -- Watched top-level directories. Bookmarks let us survive folder moves.
-        CREATE TABLE IF NOT EXISTS roots (
-            id       INTEGER PRIMARY KEY,
-            path     TEXT NOT NULL UNIQUE,
-            bookmark BLOB,
-            added_at REAL NOT NULL
-        );
-
-        -- One row per physical file on disk. `path` is the canonical master location.
+        -- One row per physical file on disk. `path` and `directory` are stored
+        -- relative to the library root (the folder that holds library.doctopus),
+        -- so the whole library can be moved or copied and still resolve. `Store`
+        -- translates to and from absolute URLs at its boundary.
         CREATE TABLE IF NOT EXISTS documents (
             id            INTEGER PRIMARY KEY,
-            root_id       INTEGER NOT NULL REFERENCES roots(id) ON DELETE CASCADE,
             path          TEXT NOT NULL UNIQUE,
             directory     TEXT NOT NULL,
             filename      TEXT NOT NULL,

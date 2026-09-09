@@ -175,7 +175,7 @@ private struct TagRow: View {
                 .foregroundStyle(TagColor.color(tag.color))
         }
         .dropHighlight(targeted)
-        .tag(Selection.tag(tag.id))
+        .tag(Selection.tag(tag.library, tag.id))
         .contextMenu { menu }
         .dropDestination(for: DocumentDragItem.self) { items, _ in
             model.handleDrop(items, action: .tag(tag))
@@ -279,9 +279,9 @@ private struct FolderRow: View {
         }
         Divider()
         Button("Rescan This Folder") { model.reindex() }
-        if node.isRoot, let root = model.roots.first(where: { $0.path == node.path }) {
+        if node.isRoot, let library = model.libraries.first(where: { $0.root.path == node.path }) {
             Divider()
-            Button("Stop Indexing This Folder", role: .destructive) { model.removeRoot(root) }
+            Button("Close Library", role: .destructive) { model.closeLibrary(library) }
         }
     }
 

@@ -39,6 +39,7 @@ A high-performance, native macOS document management utility inspired by the org
 
 ### Storage
 - Canonical Disk Layer: Physical directory hierarchy containing PDFs, JPEGs, PNGs, and optional macOS Finder Aliases. If the disk layer changes, the app has to update accordingly, not show it as errors etc.
+- Library Container: each indexed folder holds its own index in a visible `library.doctopus/` directory inside it (`index.sqlite` + `meta.json`). A library is therefore self-contained and moves with its folder; several can be open at once. Document paths are stored relative to the folder.
 - Index / Metadata Layer (SQLite):
   - documents: File path, file hash, primary directory, size, compression stats, approval status.
   - ocr_content: FTS5 full-text search table with tokenized OCR contents and confidence vectors.
@@ -65,14 +66,14 @@ The script compiles the SwiftPM executable, assembles `build/Doctopus.app`, comp
 ```bash
 build/Doctopus.app/Contents/MacOS/Doctopus --selftest Testing/DemoLibrary   # headless pipeline checks
 build/Doctopus.app/Contents/MacOS/Doctopus --uitest Testing/DemoLibrary     # headless UI checks
-build/Doctopus.app/Contents/MacOS/Doctopus --add-root <folder>              # register a folder without the UI
+build/Doctopus.app/Contents/MacOS/Doctopus --new-library <folder>           # create <folder>/library.doctopus without the UI
 ```
 
 See [Testing/README.md](Testing/README.md) for generating a demo library.
 
 ## Implementation notes
 
-- **Storage** — the system SQLite C API directly (`import SQLite3`), WAL, cached prepared statements. FTS5 with `unicode61 remove_diacritics 2`. One `Store` actor owns the connection, so there is no locking anywhere else.
+- **Storage** — the system SQLite C API directly (`import SQLite3`), WAL, cached prepared statements. FTS5 with `unicode61 remove_diacritics 2`. One `Store` actor owns each library's connection, so there is no locking anywhere else; `AppModel` aggregates across the open libraries. Paths are stored relative to the library folder and translated to absolute `URL`s at the `Store` boundary.
 - **OCR** — PDFs are read through their embedded text layer first, which is nearly free; only pages that come back empty are rasterized to grayscale at 200 DPI and sent through Vision. A digital-origin archive is indexed without invoking OCR at all. Per-document provenance (`pdf-layer` / `vision` / `mixed`) is shown in the inspector.
 - **Optimization** — a page is only ever rasterized if it has *no* text layer to lose; pages with real text are re-drawn into the output PDF context, which copies their text and vector operators through intact. If the result is not at least 15% smaller, the original is kept byte-for-byte.
 - **Disk is the source of truth** — FSEvents drives a debounced reconcile. A file that disappears is marked missing rather than deleted, so when it reappears elsewhere it is relinked by SHA-256 and keeps its tags, metadata and OCR text. Rows stay claimable for seven days.

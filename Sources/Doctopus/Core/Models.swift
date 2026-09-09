@@ -1,5 +1,16 @@
 import Foundation
 
+/// Stable identifier for an open library, taken from its `meta.json`. Survives
+/// the library folder being moved or renamed.
+typealias LibraryID = String
+
+/// Composite document identity: a row id is only unique within one library, so
+/// everything above `Store` addresses documents by `(library, doc)`.
+struct DocumentRef: Hashable, Codable, Sendable {
+    var library: LibraryID
+    var doc: Int64
+}
+
 enum OCRState: Int64, Sendable {
     case pending = 0, done = 1, failed = 2, skipped = 3
 
@@ -113,6 +124,8 @@ struct Field: Identifiable, Hashable, Sendable {
     var showInList: Bool
     var position: Int64
     var enabled: Bool
+    /// Which library this field belongs to. Stamped by `AppModel`.
+    var library: LibraryID = ""
 
     var isBuiltin: Bool { builtinColumn != nil }
 }
@@ -124,6 +137,8 @@ struct Tag: Identifiable, Hashable, Sendable {
     var mirrors: Bool
     var folder: String?
     var count: Int = 0
+    /// Which library this tag belongs to. Stamped by `AppModel`.
+    var library: LibraryID = ""
 }
 
 struct Facet: Identifiable, Hashable, Sendable {
@@ -179,10 +194,12 @@ enum Selection: Hashable, Sendable {
     case inbox
     case queue
     case folder(String)
-    case tag(Int64)
-    /// One of the Finder's own tags, by name.
+    /// A Doctopus tag. Tag ids are per-library, so the library is part of the
+    /// selection.
+    case tag(LibraryID, Int64)
+    /// One of the Finder's own tags, by name. Matched across every open library.
     case finderTag(String)
-    /// A field value facet: (field key, value).
+    /// A field value facet: (field key, value). Matched across every open library.
     case field(String, String)
     case untagged
     case needsReview

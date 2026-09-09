@@ -5,41 +5,49 @@ import Foundation
 enum SelfTest {
     static func run(path: String?) {
         let raw = path ?? "Testing/DemoLibrary"
-        let root = URL(fileURLWithPath: (raw as NSString).expandingTildeInPath).standardizedFileURL
+        let source = URL(fileURLWithPath: (raw as NSString).expandingTildeInPath).standardizedFileURL
 
         let semaphore = DispatchSemaphore(value: 0)
         Task {
-            await execute(root: root)
+            await execute(source: source)
             semaphore.signal()
         }
         semaphore.wait()
     }
 
-    /// `Doctopus --add-root <folder>` — registers a folder without opening the UI.
-    static func addRoot(_ path: String) {
-        let url = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
-            .standardizedFileURL
-        let support = (try? FileManager.default.url(for: .applicationSupportDirectory,
-                                                    in: .userDomainMask, appropriateFor: nil, create: true))
-            ?? FileManager.default.temporaryDirectory
-        let dbURL = support.appendingPathComponent("Doctopus/index.sqlite")
+    /// `Doctopus --new-library <folder>` — creates a `library.doctopus` in a
+    /// folder without opening the UI, and marks it as the library to open next
+    /// launch.
+    static func newLibrary(_ path: String) {
+        let folder = URL(fileURLWithPath: (path as NSString).expandingTildeInPath).standardizedFileURL
+        let container = folder.appendingPathComponent("library.doctopus", isDirectory: true)
         let semaphore = DispatchSemaphore(value: 0)
         Task {
             defer { semaphore.signal() }
-            guard let store = try? Store(url: dbURL) else { print("✗ could not open index"); return }
-            _ = try? await store.addRoot(path: url.path, bookmark: nil)
-            print("Added \(url.path) to the index.")
+            guard (try? Store(directory: container)) != nil else {
+                print("✗ could not create library"); return
+            }
+            if let bookmark = try? folder.bookmarkData(
+                includingResourceValuesForKeys: nil, relativeTo: nil) {
+                UserDefaults.standard.set([bookmark], forKey: "openLibraries_v1")
+            }
+            print("Created \(container.path)")
         }
         semaphore.wait()
     }
 
-    private static func execute(root: URL) async {
-        let dbURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("doctopus-selftest-\(UUID().uuidString).sqlite")
-        defer { try? FileManager.default.removeItem(at: dbURL) }
+    private static func execute(source: URL) async {
+        // Work on a throwaway copy so the checked-in fixture is never written to
+        // and its library.doctopus does not end up in the tree.
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("doctopus-selftest-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        do { try FileManager.default.copyItem(at: source, to: root) }
+        catch { print("✗ could not stage library: \(error)"); exit(1) }
 
-        guard let store = try? Store(url: dbURL) else { print("✗ could not open store"); exit(1) }
-        print("Index:  \(dbURL.lastPathComponent)")
+        let container = root.appendingPathComponent("library.doctopus", isDirectory: true)
+        guard let store = try? Store(directory: container) else { print("✗ could not open store"); exit(1) }
+        print("Library: \(container.lastPathComponent)")
         print("Root:   \(root.path)\n")
 
         let llm = LLMService()
@@ -58,7 +66,6 @@ enum SelfTest {
                               },
                               onDataChanged: {})
 
-        _ = try? await store.addRoot(path: root.path, bookmark: nil)
         for rule in Router.starterRules { _ = try? await store.upsertRule(rule) }
 
         let clock = Date()
@@ -131,7 +138,7 @@ enum SelfTest {
         }
 
         print("\nFOLDER TREE")
-        let tree = (try? await store.folderTree(roots: [root.path])) ?? []
+        let tree = (try? await store.folderTree()) ?? []
         Check.that("folder tree built", !tree.isEmpty && tree[0].deepCount == stats.total)
         printTree(tree, depth: 0)
 
@@ -313,14 +320,13 @@ enum SelfTest {
             .appendingPathComponent("doctopus-import-\(UUID().uuidString).pdf")
         if let sample = rows.first, let data = try? Data(contentsOf: sample.url),
            (try? data.write(to: outside)) != nil {
-            let rootID = ((try? await store.roots()) ?? []).first?.id ?? 0
             // No auto-routing: routing has its own dry run above, and this
             // should not scatter folders through the fixture library.
             var quiet = settings
             quiet.autoRouteImports = false
             quiet.deriveWhenNoRule = false
             await indexer.update(settings: quiet)
-            await indexer.importFiles([outside], into: root.appendingPathComponent("Inbox"), rootID: rootID)
+            await indexer.importFiles([outside], into: root.appendingPathComponent("Inbox"))
             let copied = ((try? await store.listDocuments(selection: .all, query: SearchQuery(""),
                                                           sort: .added, ascending: false)) ?? [])
                 .first { $0.filename == outside.lastPathComponent }

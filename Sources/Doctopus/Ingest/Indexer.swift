@@ -48,28 +48,22 @@ actor Indexer {
         cancelled = false
         defer { running = false; onProgress(IndexProgress()); onDataChanged() }
 
-        let roots = (try? await store.roots()) ?? []
-        guard !roots.isEmpty else { return }
-
         onProgress(IndexProgress(phase: "Scanning", done: 0, total: 1))
 
         var toProcess: [(Int64, String)] = []
-        for root in roots {
-            let url = URL(fileURLWithPath: root.path)
-            let found = FileScanner.scan(root: url)
-            var seen = Set<String>()
-            seen.reserveCapacity(found.count)
+        let found = FileScanner.scan(root: store.root)
+        var seen = Set<String>()
+        seen.reserveCapacity(found.count)
 
-            for f in found {
-                if cancelled { return }
-                seen.insert(f.url.path)
-                let facts = Store.FileFacts(rootID: root.id, path: f.url.path,
-                                            size: f.size, mtime: f.mtime, created: f.created)
-                guard let result = try? await store.upsertDocument(facts) else { continue }
-                if result.changed { toProcess.append((result.id, f.url.path)) }
-            }
-            _ = try? await store.reconcileMissing(rootID: root.id, seenPaths: seen)
+        for f in found {
+            if cancelled { return }
+            seen.insert(f.url.path)
+            let facts = Store.FileFacts(path: f.url.path,
+                                        size: f.size, mtime: f.mtime, created: f.created)
+            guard let result = try? await store.upsertDocument(facts) else { continue }
+            if result.changed { toProcess.append((result.id, f.url.path)) }
         }
+        _ = try? await store.reconcileMissing(seenPaths: seen)
 
         // Documents gone for over a week are not coming back as a move.
         _ = try? await store.purgeMissing(olderThan: 7 * 24 * 3600)
@@ -86,23 +80,23 @@ actor Indexer {
 
     /// Targeted refresh for FSEvents batches — far cheaper than a full rescan.
     func handleChanges(paths: [String]) async {
-        let roots = (try? await store.roots()) ?? []
-        guard !roots.isEmpty else { return }
+        let rootPrefix = store.root.path + "/"
         let fm = FileManager.default
 
         var toProcess: [(Int64, String)] = []
         var touched = false
 
         for path in paths {
-            guard let root = roots.first(where: { path == $0.path || path.hasPrefix($0.path + "/") })
-            else { continue }
+            guard path == store.root.path || path.hasPrefix(rootPrefix) else { continue }
+            // Doctopus's own storage, not content.
+            if FileScanner.isInsideLibraryContainer(URL(fileURLWithPath: path)) { continue }
 
             var isDir: ObjCBool = false
             let exists = fm.fileExists(atPath: path, isDirectory: &isDir)
 
             if isDir.boolValue {
                 // A directory event means a subtree changed; rescan just that subtree.
-                await rescan(directory: URL(fileURLWithPath: path), rootID: root.id, into: &toProcess)
+                await rescan(directory: URL(fileURLWithPath: path), into: &toProcess)
                 touched = true
                 continue
             }
@@ -123,13 +117,13 @@ actor Indexer {
 
             // A file appearing at a new path with a known hash is a Finder move.
             if let hash = FileScanner.hash(url),
-               let movedID = try? await store.relinkByHash(hash: hash, newPath: path, rootID: root.id) {
+               let movedID = try? await store.relinkByHash(hash: hash, newPath: path) {
                 _ = movedID
                 touched = true
                 continue
             }
 
-            let facts = Store.FileFacts(rootID: root.id, path: path, size: Int64(v.fileSize ?? 0),
+            let facts = Store.FileFacts(path: path, size: Int64(v.fileSize ?? 0),
                                         mtime: v.contentModificationDate ?? Date(),
                                         created: v.creationDate ?? Date())
             if let result = try? await store.upsertDocument(facts), result.changed {
@@ -144,9 +138,9 @@ actor Indexer {
         }
     }
 
-    private func rescan(directory: URL, rootID: Int64, into toProcess: inout [(Int64, String)]) async {
+    private func rescan(directory: URL, into toProcess: inout [(Int64, String)]) async {
         for f in FileScanner.scan(root: directory) {
-            let facts = Store.FileFacts(rootID: rootID, path: f.url.path, size: f.size,
+            let facts = Store.FileFacts(path: f.url.path, size: f.size,
                                         mtime: f.mtime, created: f.created)
             if let r = try? await store.upsertDocument(facts), r.changed {
                 toProcess.append((r.id, f.url.path))
@@ -292,14 +286,10 @@ actor Indexer {
 
     private func route(id: Int64, url: inout URL, text: String,
                        findings: DocumentAnalyzer.Findings, insight: DocumentInsight?) async {
-        let roots = (try? await store.roots()) ?? []
-        guard let rootPath = roots.first(where: { url.path.hasPrefix($0.path + "/") })?.path
-                ?? roots.first?.path else { return }
-
         let router = Router(rules: (try? await store.rules()) ?? [],
                             threshold: settings.routingThreshold,
                             derivedTemplate: settings.derivedTemplate,
-                            root: URL(fileURLWithPath: rootPath),
+                            root: store.root,
                             deriveWhenNoRule: settings.deriveWhenNoRule)
 
         let decision = router.evaluate(text: text, filename: url.lastPathComponent,
@@ -343,9 +333,7 @@ actor Indexer {
         let tags = (try? await store.tags(for: docID)) ?? []
         let mirroring = tags.filter { $0.mirrors || settings.mirrorTagsAsAliases }
         let existing = (try? await store.aliases(for: docID)) ?? []
-        let roots = (try? await store.roots()) ?? []
-        let root = URL(fileURLWithPath: roots.first(where: { target.path.hasPrefix($0.path) })?.path
-                       ?? roots.first?.path ?? target.deletingLastPathComponent().path)
+        let root = store.root
 
         var wanted: [Int64: URL] = [:]
         for tag in mirroring { wanted[tag.id] = AliasManager.tagFolder(root: root, tag: tag) }
@@ -384,16 +372,16 @@ actor Indexer {
     /// as a scan staged in the temporary directory. A document dropped in from
     /// anywhere else is copied and the original left exactly where it was:
     /// importing must never relocate or delete something outside the library.
-    func importFiles(_ urls: [URL], into destination: URL, rootID: Int64,
+    func importFiles(_ urls: [URL], into destination: URL,
                      movingSource: Bool = false) async {
         var work: [(Int64, String)] = []
         try? FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
-        let roots = ((try? await store.roots()) ?? []).map(\.path)
+        let rootPath = store.root.path
 
         for url in urls {
             do {
                 let target: URL
-                if roots.contains(where: { url.path == $0 || url.path.hasPrefix($0 + "/") }) {
+                if url.path == rootPath || url.path.hasPrefix(rootPath + "/") {
                     // Already in the library: index it where it lies rather than
                     // making a second copy of it.
                     target = url
@@ -407,7 +395,7 @@ actor Indexer {
                 }
                 let final = target
                 let v = try final.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey, .creationDateKey])
-                let facts = Store.FileFacts(rootID: rootID, path: final.path,
+                let facts = Store.FileFacts(path: final.path,
                                             size: Int64(v.fileSize ?? 0),
                                             mtime: v.contentModificationDate ?? Date(),
                                             created: v.creationDate ?? Date())

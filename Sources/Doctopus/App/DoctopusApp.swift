@@ -12,9 +12,9 @@ enum Main {
             SelfTest.run(path: path)
             return
         }
-        if let i = CommandLine.arguments.firstIndex(of: "--add-root"),
+        if let i = CommandLine.arguments.firstIndex(of: "--new-library"),
            CommandLine.arguments.count > i + 1 {
-            SelfTest.addRoot(CommandLine.arguments[i + 1])
+            SelfTest.newLibrary(CommandLine.arguments[i + 1])
             return
         }
         if let i = CommandLine.arguments.firstIndex(of: "--scantest") {
@@ -75,6 +75,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSServicesMenuRequesto
         NSApp.setActivationPolicy(.regular)
     }
 
+    /// Opening a `library.doctopus` (or a folder holding one) from Finder.
+    func application(_ application: NSApplication, open urls: [URL]) {
+        guard let model else { return }
+        for url in urls where url.hasDirectoryPath {
+            model.openLibrary(at: url)
+        }
+    }
+
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
 
     // The app delegate sits at the end of the responder chain, which is where
@@ -116,7 +124,9 @@ struct DoctopusCommands: Commands {
 
     var body: some Commands {
         CommandGroup(replacing: .newItem) {
-            Button("Add Folder to Index…") { model.addRoot() }
+            Button("New Library from Folder…") { model.addLibrary() }
+                .keyboardShortcut("n", modifiers: [.command])
+            Button("Open Library…") { model.openLibraryPicker() }
                 .keyboardShortcut("o", modifiers: [.command])
             Button("Import Files…") { importPanel() }
                 .keyboardShortcut("i", modifiers: [.command])

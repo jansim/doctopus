@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 struct SettingsView: View {
     var body: some View {
@@ -20,20 +21,26 @@ private struct GeneralSettings: View {
     var body: some View {
         @Bindable var model = model
         Form {
-            Section("Indexed Folders") {
-                if model.roots.isEmpty {
-                    Text("No folders indexed yet.").foregroundStyle(.secondary)
+            Section("Libraries") {
+                if model.libraries.isEmpty {
+                    Text("No library open yet.").foregroundStyle(.secondary)
                 } else {
-                    ForEach(model.roots) { root in
+                    ForEach(model.libraries) { library in
                         HStack {
-                            Text(shorten(root.path)).lineLimit(1).truncationMode(.middle)
+                            Text(shorten(library.root.path)).lineLimit(1).truncationMode(.middle)
                             Spacer()
-                            Button("Remove", role: .destructive) { model.removeRoot(root) }
+                            Button("Reveal", systemImage: "folder") {
+                                NSWorkspace.shared.activateFileViewerSelecting([library.container])
+                            }
+                            .labelStyle(.iconOnly)
+                            .buttonStyle(.borderless)
+                            Button("Close", role: .destructive) { model.closeLibrary(library) }
                                 .buttonStyle(.borderless)
                         }
                     }
                 }
-                Button("Add Folder…") { model.addRoot() }
+                Button("New Library from Folder…") { model.addLibrary() }
+                Button("Open Library…") { model.openLibraryPicker() }
             }
 
             Section("Naming") {
@@ -302,25 +309,25 @@ private struct RoutingSettings: View {
     }
 
     private func load() async {
-        rules = (try? await model.store.rules()) ?? []
+        rules = (try? await model.activeLibrary?.store.rules()) ?? []
     }
 
     private func toggle(_ rule: Rule, _ on: Bool) {
         var r = rule
         r.enabled = on
-        Task { _ = try? await model.store.upsertRule(r); await load() }
+        Task { _ = try? await model.activeLibrary?.store.upsertRule(r); await load() }
     }
 
     private func addRule() {
         let r = Rule(id: 0, name: "New Rule", pattern: "keyword", field: "text",
                      destination: "Unsorted/{year}", tagNames: nil, weight: 0.85,
                      enabled: false, priority: 0)
-        Task { _ = try? await model.store.upsertRule(r); await load() }
+        Task { _ = try? await model.activeLibrary?.store.upsertRule(r); await load() }
     }
 
     private func removeSelected() {
         guard let id = selected else { return }
-        Task { try? await model.store.deleteRule(id); await load() }
+        Task { try? await model.activeLibrary?.store.deleteRule(id); await load() }
     }
 }
 
