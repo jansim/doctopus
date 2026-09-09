@@ -33,14 +33,15 @@ A high-performance, native macOS document management utility inspired by the org
 
 ### Interface
 - Layout: Native AppKit/SwiftUI 3-pane architecture:
-  - Sidebar: Physical directory tree, Recent Processing Queue (with review/confidence states), Paperless-ngx-style smart views (Tags, Correspondents, Languages, Document Types).
+  - Sidebar: Physical directory tree, Recent Processing Queue (with review/confidence states), Paperless-ngx-style smart views (Tags, Correspondents, Languages, Document Types). With more than one library open, folders and tags are grouped under the library that owns them; the smart views span all of them.
   - Center Pane: High-density list/table view featuring SQLite-backed deep full-text search, token filters, and sort options.
   - Inspector Pane: Full document metadata inspector (extracted dates, assigned tags, generated LLM summaries, optimization savings, and alias mappings, raw text, all metadata).
 - Keyboard-Driven Inspection: Full keyboard navigation with native Quick Look integration—hitting Spacebar on any file presents an instant preview with text selection and pagination.
 
 ### Storage
 - Canonical Disk Layer: Physical directory hierarchy containing PDFs, JPEGs, PNGs, and optional macOS Finder Aliases. If the disk layer changes, the app has to update accordingly, not show it as errors etc.
-- Library Container: each indexed folder holds its own index in a visible `library.doctopus/` directory inside it (`index.sqlite` + `meta.json`). A library is therefore self-contained and moves with its folder; several can be open at once. Document paths are stored relative to the folder.
+- Library Container: each indexed folder holds its own index in a visible `library.doctopus/` directory inside it (`index.sqlite` + `meta.json`). A library is therefore self-contained and moves with its folder; several can be open at once, and the centre pane merges across them. Document paths are stored relative to the folder.
+- Configuration follows the same line: tags, fields, routing rules and ingest settings live in each library, so they travel with it. What describes this Mac rather than a folder — the model backend and its endpoint, OCR concurrency, raster quality, view mode — lives in `UserDefaults`, which also keeps an API key out of a folder somebody might share.
 - Index / Metadata Layer (SQLite):
   - documents: File path, file hash, primary directory, size, compression stats, approval status.
   - ocr_content: FTS5 full-text search table with tokenized OCR contents and confidence vectors.

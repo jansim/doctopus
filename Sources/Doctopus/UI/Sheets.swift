@@ -97,9 +97,9 @@ struct AddTagSheet: View {
             TextField("Tag name", text: $name)
                 .textFieldStyle(.roundedBorder)
                 .onSubmit(commit)
-            if !model.tags.isEmpty {
+            if !model.distinctTags.isEmpty {
                 FlowLayout(spacing: 5) {
-                    ForEach(model.tags.prefix(24)) { tag in
+                    ForEach(model.distinctTags.prefix(24)) { tag in
                         Button(tag.name) { name = tag.name }
                             .buttonStyle(.borderless)
                             .font(.caption)

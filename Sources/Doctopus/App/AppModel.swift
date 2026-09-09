@@ -97,6 +97,16 @@ final class AppModel {
     /// are Doctopus's — the two systems are deliberately kept apart.
     var finderTags: [Facet] = []
     var fields: [Field] = []
+    /// One tag per name across the open libraries. Tagging works by name — each
+    /// library gets or makes its own tag of that name — so a name held by two
+    /// libraries is one thing to pick, coloured by whichever holds it first.
+    var distinctTags: [Tag] {
+        var seen = Set<String>()
+        return tags
+            .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+            .filter { seen.insert($0.name.lowercased()).inserted }
+    }
+    var tagNames: [String] { distinctTags.map(\.name) }
     /// Facet values per field key, for the sidebar and search completions.
     var facets: [String: [Facet]] = [:]
     var queue: [ProcessingEntry] = []

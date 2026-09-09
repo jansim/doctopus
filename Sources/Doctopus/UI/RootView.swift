@@ -180,7 +180,7 @@ private struct SearchSuggestions: View {
     private func completions(for token: String) -> [String] {
         let prefix = String(token.dropLast()).lowercased()
         switch prefix {
-        case "tag": return model.tags.map(\.name)
+        case "tag": return model.tagNames
         case "is": return ["review", "approved", "untagged", "tagged", "pending", "failed", "optimized"]
         case "ext": return ["pdf", "png", "jpg"]
         default:

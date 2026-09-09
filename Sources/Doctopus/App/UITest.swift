@@ -50,7 +50,7 @@ enum UITest {
             await intelligencePaneDraws(model, snapshots: snapshots)
             await uiStatePersists(model)
             await sidebarShowsBothTagSystems(model, snapshots: snapshots)
-            await secondLibraryMerges(model, alongside: library)
+            await secondLibraryMerges(model, alongside: library, snapshots: snapshots)
             Check.finish("ui checks")
         }
         app.run()
@@ -334,7 +334,8 @@ enum UITest {
 
     /// Two libraries open at once: the centre pane merges them, the sort still
     /// holds across the join, and tags stay with the library they were made in.
-    private static func secondLibraryMerges(_ model: AppModel, alongside fixture: URL) async {
+    private static func secondLibraryMerges(_ model: AppModel, alongside fixture: URL,
+                                            snapshots: String?) async {
         let alone = model.documents.count
         let second = FileManager.default.temporaryDirectory
             .appendingPathComponent("doctopus-uitest-2-\(UUID().uuidString)", isDirectory: true)
@@ -378,6 +379,26 @@ enum UITest {
                    newer.tags.contains { $0.name == "OnlyHere" }
                        && !model.libraries[0].tags.contains { $0.name == "OnlyHere" },
                    "first: \(model.libraries[0].tags.map(\.name)), second: \(newer.tags.map(\.name))")
+
+        // The sidebar groups folders and tags per library, and the list gains a
+        // Library column — both are new shapes that only exist with two open,
+        // and a duplicated ForEach id here is a runtime trap rather than a
+        // build error.
+        let (sidebarWindow, sidebar) = host(SidebarView().environment(model),
+                                            size: NSSize(width: 260, height: 700))
+        defer { sidebarWindow.orderOut(nil) }
+        let (listWindow, listHost) = host(DocumentListView().environment(model),
+                                          size: NSSize(width: 900, height: 400))
+        defer { listWindow.orderOut(nil) }
+        try? await Task.sleep(for: .seconds(2))
+        if let dir = snapshots {
+            snapshot(sidebar, to: dir + "/sidebar-two-libraries.png")
+            snapshot(listHost, to: dir + "/list-two-libraries.png")
+        }
+        Check.that("the sidebar draws a group per library", inkedRows(sidebar) > 20,
+                   "\(inkedRows(sidebar)) rows with ink")
+        Check.that("the list draws with both libraries in it", inkedRows(listHost) > 20,
+                   "\(inkedRows(listHost)) rows with ink")
 
         model.closeLibrary(newer)
         let closed = await settle { model.libraries.count == 1 && model.documents.count == alone }

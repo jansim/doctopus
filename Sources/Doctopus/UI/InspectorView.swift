@@ -305,6 +305,11 @@ private struct DetailInspector: View {
     private var fileSection: some View {
         Section2("File") {
             InfoGrid {
+                // Only worth naming when there is more than one to be in.
+                if model.libraries.count > 1,
+                   let library = model.library(row.library) {
+                    InfoRow("Library", library.displayName)
+                }
                 InfoRow("Where") {
                     Button { model.reveal([row]) } label: {
                         Text(shortPath).lineLimit(3).multilineTextAlignment(.leading)
