@@ -96,4 +96,42 @@ extension Store {
 
         return (own, finder)
     }
+
+    // MARK: - Tag suggestions
+
+    /// Stages a tag the model proposed. When `autoAcceptMatching` is on and the
+    /// name exactly matches a tag that already exists, it is assigned directly
+    /// instead — there is nothing to review when the suggestion is one the
+    /// library already uses.
+    func suggestTag(_ name: String, for docID: Int64, autoAcceptMatching: Bool) throws {
+        let clean = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clean.isEmpty else { return }
+        if autoAcceptMatching, let existing = try existingTagID(named: clean) {
+            try assign(tag: existing, to: docID, auto: true)
+            return
+        }
+        try db.run("INSERT OR IGNORE INTO tag_suggestions(doc_id, name) VALUES(?,?)",
+                   [.int(docID), .text(clean)])
+    }
+
+    func tagSuggestions(for docID: Int64) throws -> [TagSuggestion] {
+        try db.map("SELECT name FROM tag_suggestions WHERE doc_id=? ORDER BY name COLLATE NOCASE",
+                   [.int(docID)]) { TagSuggestion(name: $0.string(0)) }
+    }
+
+    /// Turns a proposed tag into a real assignment, creating the tag itself
+    /// if this is the first time anyone has accepted it.
+    func acceptTagSuggestion(_ name: String, for docID: Int64) throws {
+        let id = try tagID(named: name)
+        try assign(tag: id, to: docID)
+        try discardTagSuggestion(name, for: docID)
+    }
+
+    func discardTagSuggestion(_ name: String, for docID: Int64) throws {
+        try db.run("DELETE FROM tag_suggestions WHERE doc_id=? AND name=?", [.int(docID), .text(name)])
+    }
+
+    private func existingTagID(named name: String) throws -> Int64? {
+        try db.first("SELECT id FROM tags WHERE name=? COLLATE NOCASE", [.text(name)]) { $0.int(0) }
+    }
 }

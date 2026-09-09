@@ -10,7 +10,20 @@ struct AppSettings: Codable, Sendable, Equatable {
     var deriveWhenNoRule = true
     var optimizeOnImport = true
     var optimizeExisting = false
-    var useOnDeviceModel = true
+    /// Which model answers the enrichment questions, if any.
+    var llmBackend: LLMBackend = .onDevice
+    var remoteEndpoint = "http://localhost:1234/v1"
+    var remoteModel = ""
+    var remoteAPIKey = ""
+    var remoteTimeout: Double = 120
+    var remoteParallelRequests = 2
+    /// Characters of document text sent per request. The on-device model has a
+    /// small fixed window; a server's is whatever it was loaded with, so this
+    /// is worth turning up when the machine on the other end can take it.
+    var llmExcerptLimit = 6000
+    /// When a model-proposed tag exactly matches one already in the library,
+    /// assign it directly instead of leaving it for the user to accept.
+    var autoAcceptMatchingTagSuggestions = false
     /// Global default for mirroring tag membership as Finder aliases.
     var mirrorTagsAsAliases = false
     var ocrConcurrency = 0        // 0 = auto
@@ -26,6 +39,11 @@ struct AppSettings: Codable, Sendable, Equatable {
         o.jpegQuality = CGFloat(jpegQuality)
         o.targetDPI = CGFloat(targetDPI)
         return o
+    }
+
+    var remoteConfig: RemoteLLMConfig {
+        RemoteLLMConfig(endpoint: remoteEndpoint, model: remoteModel, apiKey: remoteAPIKey,
+                        timeout: remoteTimeout, parallelRequests: remoteParallelRequests)
     }
 
     var effectiveConcurrency: Int {
@@ -58,6 +76,18 @@ struct AppSettings: Codable, Sendable, Equatable {
 /// resets all the others, view mode and thumbnail size included. Written in an
 /// extension so the memberwise initializer survives.
 extension AppSettings {
+    /// `useOnDeviceModel` was a single on/off switch before there was more than
+    /// one backend to choose between. Someone who turned it off meant it, so
+    /// their setting is carried over rather than reset to the new default.
+    private enum LegacyKeys: String, CodingKey { case useOnDeviceModel }
+
+    private static func legacyBackend(_ decoder: Decoder) -> LLMBackend? {
+        guard let legacy = try? decoder.container(keyedBy: LegacyKeys.self),
+              let wanted = try? legacy.decodeIfPresent(Bool.self, forKey: .useOnDeviceModel)
+        else { return nil }
+        return wanted ? .onDevice : .off
+    }
+
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let d = AppSettings()
@@ -72,7 +102,14 @@ extension AppSettings {
             deriveWhenNoRule: value(.deriveWhenNoRule, d.deriveWhenNoRule),
             optimizeOnImport: value(.optimizeOnImport, d.optimizeOnImport),
             optimizeExisting: value(.optimizeExisting, d.optimizeExisting),
-            useOnDeviceModel: value(.useOnDeviceModel, d.useOnDeviceModel),
+            llmBackend: value(.llmBackend, Self.legacyBackend(decoder) ?? d.llmBackend),
+            remoteEndpoint: value(.remoteEndpoint, d.remoteEndpoint),
+            remoteModel: value(.remoteModel, d.remoteModel),
+            remoteAPIKey: value(.remoteAPIKey, d.remoteAPIKey),
+            remoteTimeout: value(.remoteTimeout, d.remoteTimeout),
+            remoteParallelRequests: value(.remoteParallelRequests, d.remoteParallelRequests),
+            llmExcerptLimit: value(.llmExcerptLimit, d.llmExcerptLimit),
+            autoAcceptMatchingTagSuggestions: value(.autoAcceptMatchingTagSuggestions, d.autoAcceptMatchingTagSuggestions),
             mirrorTagsAsAliases: value(.mirrorTagsAsAliases, d.mirrorTagsAsAliases),
             ocrConcurrency: value(.ocrConcurrency, d.ocrConcurrency),
             scanDestination: value(.scanDestination, d.scanDestination),

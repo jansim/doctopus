@@ -369,33 +369,181 @@ private struct OptimizationSettings: View {
     }
 }
 
-private struct IntelligenceSettings: View {
+/// Not private, unlike its siblings: the headless checks host this pane on its
+/// own to catch the blank-pane failure mode, and a tab cannot be selected from
+/// outside a `TabView`.
+struct IntelligenceSettings: View {
     @Environment(AppModel.self) private var model
+    @State private var availableModels: [String] = []
+    @State private var testing = false
 
     var body: some View {
         @Bindable var model = model
         Form {
-            Section("Apple On-Device Model") {
-                LabeledContent("Status") {
-                    HStack(spacing: 6) {
-                        Circle().fill(model.modelStatus.isReady ? Color.green : Color.orange)
-                            .frame(width: 7, height: 7)
-                        Text(model.modelStatus.label)
+            Section("Model") {
+                Picker("Enrichment", selection: $model.settings.llmBackend) {
+                    ForEach(LLMBackend.allCases) { Text($0.label).tag($0) }
+                }
+                .pickerStyle(.radioGroup)
+                .onChange(of: model.settings.llmBackend) { model.refreshModelStatus() }
+
+                if model.settings.llmBackend != .off {
+                    LabeledContent("Status") {
+                        HStack(spacing: 6) {
+                            Circle().fill(model.modelStatus.isReady ? Color.green : Color.orange)
+                                .frame(width: 7, height: 7)
+                            Text(model.modelStatus.label)
+                                .textSelection(.enabled)
+                        }
                     }
                 }
-                Toggle("Use the on-device model for summaries and metadata",
-                       isOn: $model.settings.useOnDeviceModel)
-                    .disabled(!model.modelStatus.isReady)
-                Text("Everything runs locally — no document text ever leaves this Mac. When the model is unavailable, Doctopus falls back to its built-in heuristics and keeps working exactly the same way.")
+            }
+
+            switch model.settings.llmBackend {
+            case .off:
+                Section {
+                    Text("Doctopus falls back to its built-in heuristics for dates, correspondents, types and titles. Everything else works exactly the same way — you simply get no summaries and no proposed tags.")
+                        .font(.callout).foregroundStyle(.secondary)
+                }
+            case .onDevice:
+                Section {
+                    Text("Everything runs locally — no document text leaves this Mac. Requires macOS 26 with Apple Intelligence turned on.")
+                        .font(.callout).foregroundStyle(.secondary)
+                }
+            case .remote:
+                remoteSection
+            }
+
+            if model.settings.llmBackend != .off {
+                Section("What it extracts") {
+                    Label("A one or two sentence summary", systemImage: "text.alignleft")
+                    Label("Correspondent, category, language and intent", systemImage: "person.text.rectangle")
+                    Label("Proposed tags and a canonical title", systemImage: "tag")
+                }
+                .font(.callout)
+
+                Section("Tag Suggestions") {
+                    Text("Proposed tags appear in a document's inspector as suggestions you accept or dismiss individually — they never show up in the sidebar on their own.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Toggle("Automatically accept suggestions that match an existing tag",
+                           isOn: $model.settings.autoAcceptMatchingTagSuggestions)
+                }
+            }
+
+            Section("Run it now") {
+                Text("New documents are enriched as they are indexed. These re-ask the model about documents that are already in the index — the way to catch up a library indexed before a model was configured, or to try a better one.")
                     .font(.caption).foregroundStyle(.secondary)
+                HStack {
+                    Button("Analyze Selected Documents") { model.analyze(model.selectedRows) }
+                        .disabled(model.selectedIDs.isEmpty || !model.modelStatus.isReady)
+                    Button("Analyze Entire Library…") { confirmLibraryRun() }
+                        .disabled(!model.modelStatus.isReady)
+                }
+                if model.progress.phase == "Analyzing" {
+                    HStack(spacing: 8) {
+                        ProgressView(value: model.progress.fraction)
+                        Text("\(model.progress.done) / \(model.progress.total)")
+                            .font(.caption).monospacedDigit().foregroundStyle(.secondary)
+                        Button("Stop") { model.cancelIndexing() }
+                    }
+                }
             }
-            Section("What it extracts") {
-                Label("A one or two sentence summary", systemImage: "text.alignleft")
-                Label("Correspondent, category, language and intent", systemImage: "person.text.rectangle")
-                Label("Proposed tags and a canonical title", systemImage: "tag")
-            }
-            .font(.callout)
         }
         .formStyle(.grouped)
+        // The status was last read at launch, or before the endpoint was
+        // edited somewhere else; opening the pane is the moment to ask again.
+        .task {
+            model.refreshModelStatus()
+            await loadModels()
+        }
+    }
+
+    @ViewBuilder
+    private var remoteSection: some View {
+        @Bindable var model = model
+        Section("Endpoint") {
+            TextField("Address", text: $model.settings.remoteEndpoint,
+                      prompt: Text("http://localhost:1234/v1"))
+                .font(.system(.body, design: .monospaced))
+
+            HStack {
+                TextField("Model", text: $model.settings.remoteModel,
+                          prompt: Text("the model identifier the server reports"))
+                    .font(.system(.body, design: .monospaced))
+                if !availableModels.isEmpty {
+                    Menu {
+                        ForEach(availableModels, id: \.self) { name in
+                            Button(name) { model.settings.remoteModel = name }
+                        }
+                    } label: {
+                        Image(systemName: "chevron.up.chevron.down")
+                    }
+                    .menuStyle(.borderlessButton)
+                    .fixedSize()
+                }
+            }
+
+            SecureField("API key", text: $model.settings.remoteAPIKey,
+                        prompt: Text("optional — local servers rarely need one"))
+
+            HStack {
+                Button(testing ? "Testing…" : "Test Connection") { test() }
+                    .disabled(testing)
+                Spacer()
+                if !availableModels.isEmpty {
+                    Text("\(availableModels.count) model\(availableModels.count == 1 ? "" : "s") offered")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+        }
+
+        Section("Requests") {
+            Picker("Text sent per document", selection: $model.settings.llmExcerptLimit) {
+                Text("3,000 characters").tag(3000)
+                Text("6,000 characters").tag(6000)
+                Text("12,000 characters").tag(12000)
+                Text("32,000 characters").tag(32000)
+            }
+            Picker("Documents at a time", selection: $model.settings.remoteParallelRequests) {
+                ForEach([1, 2, 4, 8], id: \.self) { Text("\($0)").tag($0) }
+            }
+            LabeledContent("Timeout") {
+                HStack {
+                    Slider(value: $model.settings.remoteTimeout, in: 15...600, step: 15)
+                    Text("\(Int(model.settings.remoteTimeout))s").monospacedDigit().frame(width: 46)
+                }
+            }
+            Text("Works with any OpenAI-compatible server — LM Studio, Ollama, llama.cpp, vLLM, or a hosted API. Unlike the on-device model, this sends the text of your documents to that endpoint, and the API key is stored in Doctopus's own index rather than the Keychain.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    private func test() {
+        testing = true
+        Task {
+            await loadModels()
+            model.refreshModelStatus()
+            testing = false
+        }
+    }
+
+    private func loadModels() async {
+        guard model.settings.llmBackend == .remote else { return }
+        availableModels = await model.intelligence.models(model.settings.remoteConfig)
+    }
+
+    /// A library-wide run can mean thousands of requests to somebody's paid
+    /// API, so it asks first and says how many.
+    private func confirmLibraryRun() {
+        let count = model.stats.total
+        let alert = NSAlert()
+        alert.messageText = "Analyze \(count) document\(count == 1 ? "" : "s")?"
+        alert.informativeText = model.settings.llmBackend == .remote
+            ? "Each one sends its text to \(model.settings.remoteEndpoint). Summaries, types, correspondents and titles found by the model will replace what is stored now."
+            : "Summaries, types, correspondents and titles found by the model will replace what is stored now."
+        alert.addButton(withTitle: "Analyze")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        model.analyzeLibrary()
     }
 }

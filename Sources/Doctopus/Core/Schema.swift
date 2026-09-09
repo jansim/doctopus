@@ -2,7 +2,7 @@ import Foundation
 
 /// Versioned schema. Migrations are append-only: bump `current` and add a case.
 enum Schema {
-    static let current = 4
+    static let current = 5
 
     static func migrate(_ db: Database) throws {
         let version = try db.first("PRAGMA user_version") { Int($0.int(0)) } ?? 0
@@ -10,7 +10,23 @@ enum Schema {
         if version < 2 { try v2(db) }
         if version < 3 { try v3(db) }
         if version < 4 { try v4(db) }
+        if version < 5 { try v5(db) }
         try db.exec("PRAGMA user_version=\(current)")
+    }
+
+    /// Tags the model proposed but nobody has accepted yet. Kept apart from
+    /// `document_tags` so a suggestion never counts toward a tag's sidebar
+    /// total, or shows up anywhere a real assignment would, until someone
+    /// accepts it.
+    private static func v5(_ db: Database) throws {
+        try db.exec("""
+        CREATE TABLE IF NOT EXISTS tag_suggestions (
+            doc_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+            name   TEXT NOT NULL COLLATE NOCASE,
+            PRIMARY KEY (doc_id, name)
+        );
+        CREATE INDEX IF NOT EXISTS idx_tag_suggestions_doc ON tag_suggestions(doc_id);
+        """)
     }
 
     /// The colour label macOS gives each Finder tag, so the sidebar can draw a

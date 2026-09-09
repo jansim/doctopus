@@ -47,6 +47,7 @@ enum UITest {
             await headerClickSorts(model, snapshots: snapshots)
             await rowThumbnailIsAPage(model)
             await inspectorDraws(model, snapshots: snapshots)
+            await intelligencePaneDraws(model, snapshots: snapshots)
             await uiStatePersists(model)
             await sidebarShowsBothTagSystems(model, snapshots: snapshots)
             Check.finish("ui checks")
@@ -221,8 +222,36 @@ enum UITest {
                        && decoded?.namingTemplate == AppSettings().namingTemplate,
                    decoded == nil ? "decode failed outright" : "decoded")
 
+        // The on-device model used to be a plain on/off switch. Someone who
+        // turned it off meant it, so the choice survives the move to a picker
+        // rather than silently coming back on.
+        let legacyOff = #"{"useOnDeviceModel":false}"#
+        let legacyOn = #"{"useOnDeviceModel":true}"#
+        let off = try? JSONDecoder().decode(AppSettings.self, from: Data(legacyOff.utf8))
+        let on = try? JSONDecoder().decode(AppSettings.self, from: Data(legacyOn.utf8))
+        Check.that("an older on/off model setting becomes a backend choice",
+                   off?.llmBackend == .off && on?.llmBackend == .onDevice,
+                   "\(off?.llmBackend.rawValue ?? "nil") / \(on?.llmBackend.rawValue ?? "nil")")
+
         model.viewMode = .list
         model.setSort(.docDate, ascending: false)
+    }
+
+    /// The Intelligence pane changes shape with the chosen backend, and a
+    /// branch that lays out to nothing is the failure mode worth catching.
+    private static func intelligencePaneDraws(_ model: AppModel, snapshots: String?) async {
+        let before = model.settings.llmBackend
+        defer { model.settings.llmBackend = before }
+        for backend in LLMBackend.allCases {
+            model.settings.llmBackend = backend
+            let (window, host) = host(IntelligenceSettings().environment(model),
+                                      size: NSSize(width: 620, height: 470))
+            defer { window.orderOut(nil) }
+            try? await Task.sleep(for: .seconds(1))
+            if let dir = snapshots { snapshot(host, to: dir + "/intelligence-\(backend.rawValue).png") }
+            Check.that("the \(backend.label) settings pane draws", inkedRows(host) > 20,
+                       "\(inkedRows(host)) rows with ink")
+        }
     }
 
     /// Mirrors what `AppModel` writes for the sort, which is private to it.

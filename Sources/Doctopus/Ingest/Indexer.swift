@@ -16,7 +16,7 @@ struct IndexProgress: Sendable, Equatable {
 /// no faster.
 actor Indexer {
     private let store: Store
-    private let llm: LLMService
+    private let intelligence: Intelligence
     private var settings: AppSettings
     private var cancelled = false
     private var running = false
@@ -24,17 +24,20 @@ actor Indexer {
     private let onProgress: @Sendable (IndexProgress) -> Void
     private let onDataChanged: @Sendable () -> Void
 
-    init(store: Store, llm: LLMService, settings: AppSettings,
+    init(store: Store, intelligence: Intelligence, settings: AppSettings,
          onProgress: @escaping @Sendable (IndexProgress) -> Void,
          onDataChanged: @escaping @Sendable () -> Void) {
         self.store = store
-        self.llm = llm
+        self.intelligence = intelligence
         self.settings = settings
         self.onProgress = onProgress
         self.onDataChanged = onDataChanged
     }
 
-    func update(settings: AppSettings) { self.settings = settings }
+    func update(settings: AppSettings) async {
+        self.settings = settings
+        await intelligence.update(settings: settings)
+    }
     func cancel() { cancelled = true }
     var isRunning: Bool { running }
 
@@ -230,10 +233,10 @@ actor Indexer {
         let findings = DocumentAnalyzer.analyze(url: url, text: extracted.text,
                                                 fallbackDate: created, knownCorrespondents: known)
 
-        // 4. Optional on-device enrichment.
+        // 4. Optional model enrichment, on-device or over the network.
         var insight: DocumentInsight?
-        if settings.useOnDeviceModel, !extracted.text.isEmpty {
-            insight = await llm.enrich(text: extracted.text, filename: name)
+        if settings.llmBackend != .off, !extracted.text.isEmpty {
+            insight = await intelligence.enrich(text: extracted.text, filename: name)
         }
 
         try? await store.storeMetadata(Store.MetadataPatch(
@@ -247,14 +250,14 @@ actor Indexer {
             docDate: findings.date,
             dateSource: findings.dateSource,
             confidence: max(findings.confidence, insight?.confidence ?? 0),
-            source: insight != nil ? "llm" : "heuristic",
+            source: insight?.source ?? "heuristic",
             amount: findings.amount))
 
-        // 5. Tags proposed by the model.
+        // 5. Tags proposed by the model — staged as suggestions, not assigned
+        // outright, unless they match a tag already in use and the setting
+        // says to accept those automatically.
         for tag in (insight?.tags ?? []).prefix(4) {
-            if let tagID = try? await store.tagID(named: tag) {
-                try? await store.assign(tag: tagID, to: id, auto: true)
-            }
+            try? await store.suggestTag(tag, for: id, autoAcceptMatching: settings.autoAcceptMatchingTagSuggestions)
         }
 
         // 6. Routing — imports only; existing files are never moved uninvited.
@@ -297,8 +300,12 @@ actor Indexer {
                                        currentDirectory: url.deletingLastPathComponent())
 
         for tag in decision.tags {
-            if let tagID = try? await store.tagID(named: tag) {
-                try? await store.assign(tag: tagID, to: id, auto: true)
+            if decision.tagsFromRule {
+                if let tagID = try? await store.tagID(named: tag) {
+                    try? await store.assign(tag: tagID, to: id, auto: true)
+                }
+            } else {
+                try? await store.suggestTag(tag, for: id, autoAcceptMatching: settings.autoAcceptMatchingTagSuggestions)
             }
         }
 
@@ -365,6 +372,115 @@ actor Indexer {
             if let path = try? await store.documentPath(id) { work.append((id, path)) }
         }
         await process(documents: work, phase: "Reprocessing", isImport: asImport)
+    }
+
+    // MARK: - Model enrichment
+
+    /// What a manual enrichment pass did, for the message the UI shows after it.
+    struct AnalyzeSummary: Sendable {
+        var updated = 0
+        var skipped = 0
+        var failed = 0
+        /// Set when the pass never started, carrying the reason verbatim.
+        var blocked: String?
+    }
+
+    private enum AnalyzeOutcome: Sendable {
+        case updated(String)
+        case skipped
+        case failed
+    }
+
+    /// Re-runs the model pass alone, over text that is already in the index.
+    ///
+    /// This is the manual trigger. Nothing on disk is read or written, no OCR
+    /// runs and no file moves — a document with no indexed text is reported as
+    /// skipped rather than quietly re-read, because Reprocess is the action for
+    /// that. It is the one way to enrich a library that was indexed before a
+    /// model was configured, or to ask a better model the same question again.
+    func analyze(ids: [Int64]) async -> AnalyzeSummary {
+        guard settings.llmBackend != .off else {
+            return AnalyzeSummary(blocked: "No model is selected in Settings › Intelligence.")
+        }
+        let status = await intelligence.status()
+        guard status.isReady else { return AnalyzeSummary(blocked: status.label) }
+        guard !ids.isEmpty else { return AnalyzeSummary() }
+
+        cancelled = false
+        var summary = AnalyzeSummary()
+        let total = ids.count
+        var done = 0
+        onProgress(IndexProgress(phase: "Analyzing", done: 0, total: total))
+
+        let width = max(1, min(await intelligence.width, total))
+        var iterator = ids.makeIterator()
+
+        await withTaskGroup(of: AnalyzeOutcome.self) { group in
+            var inFlight = 0
+            while inFlight < width, let next = iterator.next() {
+                group.addTask { [weak self] in await self?.analyzeOne(id: next) ?? .failed }
+                inFlight += 1
+            }
+            while let outcome = await group.next() {
+                done += 1
+                var current: String?
+                switch outcome {
+                case .updated(let name): summary.updated += 1; current = name
+                case .skipped: summary.skipped += 1
+                case .failed: summary.failed += 1
+                }
+                onProgress(IndexProgress(phase: "Analyzing", done: done, total: total, current: current))
+                if done % 4 == 0 { onDataChanged() }
+                if cancelled { group.cancelAll(); break }
+                if let next = iterator.next() {
+                    group.addTask { [weak self] in await self?.analyzeOne(id: next) ?? .failed }
+                }
+            }
+        }
+        onProgress(IndexProgress())
+        onDataChanged()
+        return summary
+    }
+
+    private func analyzeOne(id: Int64) async -> AnalyzeOutcome {
+        guard let path = try? await store.documentPath(id) else { return .skipped }
+        let name = URL(fileURLWithPath: path).lastPathComponent
+        let text = (try? await store.ocrText(id)) ?? ""
+        guard text.count >= LLMPrompt.minimumCharacters else { return .skipped }
+        guard let insight = await intelligence.enrich(text: text, filename: name) else { return .failed }
+
+        // Dates, their provenance and amounts belong to the deterministic
+        // analyzer, which has the file itself to work from; passing nil here
+        // leaves whatever it found in place.
+        try? await store.storeMetadata(Store.MetadataPatch(
+            docID: id,
+            title: insight.title,
+            correspondent: insight.correspondent,
+            docType: insight.docType,
+            language: insight.language,
+            summary: insight.summary,
+            intent: insight.intent,
+            docDate: nil,
+            dateSource: nil,
+            confidence: insight.confidence,
+            source: insight.source,
+            amount: nil))
+
+        for tag in insight.tags.prefix(4) {
+            try? await store.suggestTag(tag, for: id, autoAcceptMatching: settings.autoAcceptMatchingTagSuggestions)
+        }
+        try? await store.logProcessing(docID: id, action: "analyzed", detail: analysisLine(insight),
+                                       confidence: insight.confidence, rule: nil,
+                                       from: nil, to: nil, approved: true)
+        return .updated(name)
+    }
+
+    private func analysisLine(_ i: DocumentInsight) -> String {
+        var parts = [i.source == "remote" ? "API model" : "On-device model"]
+        if let type = i.docType { parts.append(type) }
+        if let c = i.correspondent { parts.append(c) }
+        if !i.tags.isEmpty { parts.append(i.tags.prefix(4).joined(separator: ", ")) }
+        return parts.joined(separator: " · ")
     }
 
     /// Imports files that arrived from a scan or a drop into `destination`.

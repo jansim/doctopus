@@ -41,10 +41,10 @@ final class Library: Identifiable {
         self.bookmark = bookmark
     }
 
-    func attachIndexer(llm: LLMService,
+    func attachIndexer(intelligence: Intelligence,
                        onProgress: @escaping @Sendable (IndexProgress) -> Void,
                        onDataChanged: @escaping @Sendable () -> Void) {
-        indexer = Indexer(store: store, llm: llm, settings: settings,
+        indexer = Indexer(store: store, intelligence: intelligence, settings: settings,
                           onProgress: onProgress, onDataChanged: onDataChanged)
     }
 

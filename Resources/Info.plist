@@ -17,6 +17,15 @@
     <key>NSHighResolutionCapable</key><true/>
     <key>NSSupportsAutomaticTermination</key><true/>
     <key>NSSupportsSuddenTermination</key><false/>
+    <!-- The API backend in Settings is normally a model server on this Mac or
+         the local network, which speaks plain HTTP. Anything beyond the local
+         network still has to be HTTPS. -->
+    <key>NSAppTransportSecurity</key>
+    <dict>
+        <key>NSAllowsLocalNetworking</key><true/>
+    </dict>
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>Doctopus talks to the model server you point it at in Settings, which is often running on this Mac or another machine on your network.</string>
     <key>NSCameraUsageDescription</key>
     <string>Doctopus uses Continuity Camera so you can scan documents with your iPhone or iPad directly into a folder.</string>
     <key>NSDesktopFolderUsageDescription</key>

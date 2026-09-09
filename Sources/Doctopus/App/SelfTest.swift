@@ -50,15 +50,19 @@ enum SelfTest {
         print("Library: \(container.lastPathComponent)")
         print("Root:   \(root.path)\n")
 
-        let llm = LLMService()
-        let status = await llm.probe()
-        print("Model:  \(status.label)\n")
-
         var settings = AppSettings()
         settings.optimizeExisting = false
-        settings.useOnDeviceModel = status.isReady
 
-        let indexer = Indexer(store: store, llm: llm, settings: settings,
+        let intelligence = Intelligence()
+        await intelligence.update(settings: settings)
+        let status = await intelligence.status()
+        print("Model:  \(status.label)\n")
+        // A backend that cannot answer would only add latency to every
+        // document; the checks below cover the heuristic path either way.
+        if !status.isReady { settings.llmBackend = .off }
+        await intelligence.update(settings: settings)
+
+        let indexer = Indexer(store: store, intelligence: intelligence, settings: settings,
                               onProgress: { p in
                                   if p.total > 0 && p.done == p.total {
                                       print("  \(p.phase): \(p.done)/\(p.total)")
@@ -337,6 +341,118 @@ enum SelfTest {
                        FileManager.default.fileExists(atPath: outside.path) && copied != nil)
             if let copied { try? FileManager.default.removeItem(at: copied.url) }
             try? FileManager.default.removeItem(at: outside)
+        }
+
+        print("\nMODEL BACKENDS")
+        // The address people actually paste, from four different places.
+        let pasted = [
+            "http://localhost:1234": "http://localhost:1234/v1",
+            "http://localhost:1234/": "http://localhost:1234/v1",
+            "http://localhost:1234/v1": "http://localhost:1234/v1",
+            "http://localhost:1234/v1/chat/completions": "http://localhost:1234/v1",
+            "localhost:11434/v1": "http://localhost:11434/v1",
+        ]
+        var normalized = true
+        for (input, expected) in pasted.sorted(by: { $0.key < $1.key }) {
+            let got = RemoteLLMConfig(endpoint: input).baseURL?.absoluteString
+            if got != expected { normalized = false }
+            print("  \(input.padded(46)) → \(got ?? "nothing")")
+        }
+        Check.that("an endpoint is normalized however it was pasted", normalized)
+        Check.that("an empty endpoint is not a URL", RemoteLLMConfig(endpoint: " ").baseURL == nil)
+
+        // Servers wrap their JSON in a code fence often enough that re-prompting
+        // would be the more expensive answer.
+        let fenced = """
+        Here you go:
+        ```json
+        {"summary": "A gas bill.", "correspondent": "Stadtwerke", "documentType": "Invoice",
+         "language": "DE", "intent": "Pay", "title": "Gas bill", "tags": ["utilities", "#GAS"]}
+        ```
+        """
+        let parsed = RemoteLLMService.parse(fenced)
+        print("  parsed: \(parsed?.docType ?? "—") · \(parsed?.correspondent ?? "—") · \(parsed.map { $0.tags.joined(separator: ", ") } ?? "")")
+        Check.that("a fenced, chatty JSON reply still parses",
+                   parsed?.correspondent == "Stadtwerke" && parsed?.docType == "Invoice"
+                       && parsed?.language == "de" && parsed?.intent == "pay"
+                       && parsed?.tags == ["utilities", "gas"] && parsed?.source == "remote")
+        Check.that("a reply with nothing in it is a failure, not empty metadata",
+                   RemoteLLMService.parse("{\"summary\": \"\", \"tags\": []}") == nil)
+        Check.that("prose with no JSON in it is a failure",
+                   RemoteLLMService.parse("I could not read that document.") == nil)
+
+        // A reasoning model that writes its trace into the content rather than
+        // into a field of its own drafts objects on the way to the answer, so
+        // the first pair of braces in the reply is not the answer.
+        let thinking = """
+        <think>
+        Let me draft this: {"summary": "unsure", "title": ""} — no, that is wrong,
+        the letterhead says Northwind. The braces above should not be my answer.
+        </think>
+        {"summary": "An insurance policy renewal.", "correspondent": "Northwind Insurance Ltd",
+         "documentType": "Insurance", "language": "German", "intent": "file",
+         "title": "Policy renewal", "tags": ["insurance"]}
+        """
+        let thought = RemoteLLMService.parse(thinking)
+        print("  through a thinking trace: \(thought?.correspondent ?? "—") · \(thought?.language ?? "—")")
+        Check.that("a thinking trace in the content does not become the answer",
+                   thought?.correspondent == "Northwind Insurance Ltd"
+                       && thought?.title == "Policy renewal")
+        // Asked for a code, a model will sometimes answer with the name; a
+        // truncated "germa" in the sidebar next to real codes is worse than none.
+        Check.that("a language given by name is stored as its code", thought?.language == "de")
+        Check.that("a language that is neither is dropped",
+                   RemoteLLMService.parse(#"{"title": "T", "language": "Klingon-ish"}"#)?.language == nil)
+
+        // The manual trigger says why it did nothing rather than looking like
+        // it worked. With no backend configured that reason is the settings.
+        var noModel = settings
+        noModel.llmBackend = .off
+        await indexer.update(settings: noModel)
+        let blocked = await indexer.analyze(ids: rows.map(\.id))
+        print("  analyze with no backend: \(blocked.blocked ?? "ran anyway")")
+        Check.that("a manual run with no model reports why", blocked.blocked != nil)
+
+        // A live run against a real server, when one is pointed at. This is how
+        // a configuration is verified without the UI:
+        //   DOCTOPUS_LLM_ENDPOINT=http://localhost:1234/v1 DOCTOPUS_LLM_MODEL=… --selftest …
+        let env = ProcessInfo.processInfo.environment
+        if let endpoint = env["DOCTOPUS_LLM_ENDPOINT"]?.nilIfBlank {
+            print("\nLIVE MODEL (\(endpoint))")
+            var live = settings
+            live.llmBackend = .remote
+            live.remoteEndpoint = endpoint
+            live.remoteModel = env["DOCTOPUS_LLM_MODEL"] ?? ""
+            live.remoteAPIKey = env["DOCTOPUS_LLM_API_KEY"] ?? ""
+            live.remoteTimeout = 60
+            await intelligence.update(settings: live)
+
+            let offered = await intelligence.models(live.remoteConfig)
+            print("  models: \(offered.isEmpty ? "none listed" : offered.joined(separator: ", "))")
+            if live.remoteModel.isEmpty, let first = offered.first { live.remoteModel = first }
+            await intelligence.update(settings: live)
+
+            let reachable = await intelligence.refreshStatus()
+            print("  status: \(reachable.label)")
+            Check.that("the configured endpoint is reachable", reachable.isReady, reachable.label)
+
+            await indexer.update(settings: live)
+            let subject = Array(rows.prefix(2).map(\.id))
+            let run = await indexer.analyze(ids: subject)
+            print("  analyzed \(run.updated), skipped \(run.skipped), failed \(run.failed)"
+                  + (run.blocked.map { " — blocked: \($0)" } ?? ""))
+            Check.that("the manual run enriched documents over the API",
+                       run.updated == subject.count && run.blocked == nil)
+
+            var enriched: [DocumentDetail] = []
+            for id in subject {
+                if let d = try? await store.detail(id) { enriched.append(d) }
+            }
+            for d in enriched {
+                print("  \(d.row.filename.padded(40)) \(d.metadataSource ?? "—")  \(d.row.summary ?? "no summary")")
+            }
+            Check.that("what the API returned is stored as its own source",
+                       !enriched.isEmpty && enriched.allSatisfy { $0.metadataSource == "remote" && $0.row.summary != nil })
         }
 
         Check.finish("pipeline self-test")

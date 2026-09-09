@@ -34,16 +34,10 @@ private struct DetailInspector: View {
             VStack(alignment: .leading, spacing: 14) {
                 header
                 Divider()
-                if let summary = row.summary {
-                    Section2("Summary") {
-                        Text(summary)
-                            .font(.callout)
-                            .textSelection(.enabled)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
+                summarySection
                 metadataSection
                 tagsSection
+                if !detail.tagSuggestions.isEmpty { tagSuggestionsSection }
                 finderTagsSection
                 fileSection
                 if !detail.aliases.isEmpty { aliasSection }
@@ -52,6 +46,37 @@ private struct DetailInspector: View {
             .padding(14)
         }
         .id(row.id)
+    }
+
+    /// The model's own output, with the button that produced it. Documents
+    /// indexed before a model was configured land here with nothing to show,
+    /// which is exactly when someone wants to run it by hand.
+    @ViewBuilder
+    private var summarySection: some View {
+        let analyzing = model.progress.phase == "Analyzing"
+        Section2("Summary") {
+            if let summary = row.summary {
+                Text(summary)
+                    .font(.callout)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                Text(model.modelStatus.isReady
+                     ? "Not analyzed yet."
+                     : "No model configured — \(model.modelStatus.label).")
+                    .font(.callout).foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Button {
+                model.analyze([row])
+            } label: {
+                Label(row.summary == nil ? "Analyze with Model" : "Analyze Again",
+                      systemImage: "sparkles")
+                    .font(.callout)
+            }
+            .buttonStyle(.link)
+            .disabled(!model.modelStatus.isReady || analyzing)
+        }
     }
 
     // MARK: - Header
@@ -117,7 +142,7 @@ private struct DetailInspector: View {
                 if let source = detail.metadataSource {
                     InfoRow("Extracted by") {
                         HStack(spacing: 5) {
-                            Text(source == "llm" ? "On-device model" : "Heuristics")
+                            Text(Self.sourceLabel(source))
                             if let c = detail.metadataConfidence {
                                 ConfidenceBadge(value: c)
                             }
@@ -125,6 +150,14 @@ private struct DetailInspector: View {
                     }
                 }
             }
+        }
+    }
+
+    private static func sourceLabel(_ s: String) -> String {
+        switch s {
+        case "llm": return "On-device model"
+        case "remote": return "API model"
+        default: return "Heuristics"
         }
     }
 
@@ -176,6 +209,46 @@ private struct DetailInspector: View {
                     .disabled(tagInput.nilIfBlank == nil)
             }
         }
+    }
+
+    /// Tags the model proposed. These are not real tags yet — they carry no
+    /// count and never appear in the sidebar — until someone clicks them to
+    /// accept, or dismisses them with the ×.
+    private var tagSuggestionsSection: some View {
+        Section2("Suggested Tags") {
+            FlowLayout(spacing: 5) {
+                ForEach(detail.tagSuggestions) { suggestion in
+                    let color = suggestionColor(suggestion.name)
+                    HStack(spacing: 4) {
+                        Image(systemName: "sparkles")
+                            .font(.system(size: 9))
+                            .foregroundStyle(color)
+                        Text(suggestion.name).font(.caption)
+                        Button {
+                            model.discardTagSuggestion(suggestion, for: row)
+                        } label: {
+                            Image(systemName: "xmark").font(.system(size: 7, weight: .bold))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(.horizontal, 7).padding(.vertical, 3)
+                    .background(color.opacity(0.10), in: Capsule())
+                    .overlay(Capsule().strokeBorder(color.opacity(0.5), style: StrokeStyle(lineWidth: 1, dash: [3, 2])))
+                    .contentShape(Capsule())
+                    .onTapGesture { model.acceptTagSuggestion(suggestion, for: row) }
+                    .help("Click to accept “\(suggestion.name)”, or dismiss it with ×")
+                }
+            }
+        }
+    }
+
+    /// A suggestion already in use elsewhere borrows that tag's colour, so it
+    /// previews exactly how it will look once accepted.
+    private func suggestionColor(_ name: String) -> Color {
+        if let existing = model.tags.first(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame }) {
+            return TagColor.color(existing.color)
+        }
+        return .secondary
     }
 
     /// The Finder's tags live on the file and are shared with every other app,
@@ -338,6 +411,8 @@ private struct MultiSelectionInspector: View {
             Divider()
             Button("Optimize All") { model.optimize(model.selectedRows) }
             Button("Reprocess All") { model.reprocess(model.selectedRows) }
+            Button("Analyze All with Model") { model.analyze(model.selectedRows) }
+                .disabled(!model.modelStatus.isReady)
             Button("Reveal in Finder") { model.reveal(model.selectedRows) }
             Spacer()
         }

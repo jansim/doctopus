@@ -11,7 +11,7 @@ import AppKit
 @Observable
 final class AppModel {
     // Backing services
-    let llm = LLMService()
+    let intelligence = Intelligence()
 
     /// Every open library. Phase 1 keeps exactly one open at a time; the array
     /// makes room for several without another reshape later.
@@ -165,7 +165,7 @@ final class AppModel {
 
     // Transient UI state
     var progress = IndexProgress()
-    var modelStatus: LLMService.Status = .unsupported("Checking…")
+    var modelStatus: LLMStatus = .unsupported("Checking…")
     var errorMessage: String?
 
     private var searchTask: Task<Void, Never>?
@@ -203,8 +203,6 @@ final class AppModel {
             sortAscending = saved.ascending
             batchingSort = false
         }
-
-        modelStatus = await llm.probe()
 
         if let explicit = explicitLibrary {
             await openLibrary(container: explicit, persist: false)
@@ -249,8 +247,9 @@ final class AppModel {
 
         let lib = Library(store: store, bookmark: bookmark)
         lib.settings = await AppSettings.load(from: store)
+        // The callbacks hop back to the main actor; the actors themselves stay off it.
         lib.attachIndexer(
-            llm: llm,
+            intelligence: intelligence,
             onProgress: { [weak self] p in Task { @MainActor in self?.progress = p } },
             onDataChanged: { [weak self] in Task { @MainActor in self?.refreshAll() } })
 
@@ -266,6 +265,9 @@ final class AppModel {
         applyingSettings = false
         savedSettings = lib.settings
         viewMode = settings.viewMode
+
+        await intelligence.update(settings: settings)
+        modelStatus = await intelligence.status()
 
         startWatching()
         refreshAll()
@@ -527,6 +529,64 @@ final class AppModel {
         Task { await indexer.reprocess(ids: rows.map(\.id)) }
     }
 
+    // MARK: - Model enrichment
+
+    /// Manual trigger for the model pass over documents that are already
+    /// indexed. Deliberately separate from Reprocess: this asks the model
+    /// again and touches nothing else.
+    func analyze(_ rows: [DocumentRow]) {
+        analyze(ids: rows.map(\.id), subject: rows.count == 1
+                ? rows[0].url.lastPathComponent : "\(rows.count) documents")
+    }
+
+    /// Runs the model over the whole library. The expensive one, so the caller
+    /// is expected to have asked first.
+    func analyzeLibrary() {
+        Task {
+            let ids = (try? await store.allDocumentIDs()) ?? []
+            guard !ids.isEmpty else {
+                errorMessage = "There is nothing indexed yet."
+                return
+            }
+            analyze(ids: ids, subject: "\(ids.count) documents")
+        }
+    }
+
+    private func analyze(ids: [Int64], subject: String) {
+        guard !ids.isEmpty else { return }
+        Task {
+            // Settings are saved on a chained task, so a run started right
+            // after a change in the settings pane could otherwise ask the
+            // backend the user just switched away from.
+            await indexer.update(settings: settings)
+            let summary = await indexer.analyze(ids: ids)
+            // Re-probing costs a round trip, but a run that just failed is
+            // exactly when the status shown in Settings is worth correcting.
+            modelStatus = await intelligence.status()
+            errorMessage = Self.describe(summary, subject: subject)
+        }
+    }
+
+    private static func describe(_ s: Indexer.AnalyzeSummary, subject: String) -> String {
+        if let blocked = s.blocked { return "Could not analyze \(subject): \(blocked)" }
+        if s.updated == 0, s.failed == 0 {
+            return "Nothing to analyze — no indexed text in \(subject)."
+        }
+        var parts = ["Analyzed \(s.updated) document\(s.updated == 1 ? "" : "s")"]
+        if s.skipped > 0 { parts.append("\(s.skipped) had no text") }
+        if s.failed > 0 { parts.append("\(s.failed) the model could not answer for") }
+        return parts.joined(separator: ", ") + "."
+    }
+
+    /// Re-asks the configured backend whether it is reachable. The Test button
+    /// in Settings, and anything else that wants a fresh answer.
+    func refreshModelStatus() {
+        Task {
+            await intelligence.update(settings: settings)
+            modelStatus = await intelligence.refreshStatus()
+        }
+    }
+
     func optimize(_ rows: [DocumentRow]) {
         Task {
             let (count, saved) = await indexer.optimize(ids: rows.map(\.id))
@@ -619,6 +679,24 @@ final class AppModel {
                 await indexer.syncAliases(docID: row.id, target: row.url)
             }
             refreshAll()
+            reloadDetail()
+        }
+    }
+
+    /// Turns a tag the model proposed into a real assignment.
+    func acceptTagSuggestion(_ suggestion: TagSuggestion, for row: DocumentRow) {
+        Task {
+            try? await store.acceptTagSuggestion(suggestion.name, for: row.id)
+            await indexer.syncAliases(docID: row.id, target: row.url)
+            refreshAll()
+            reloadDetail()
+        }
+    }
+
+    /// Dismisses a proposed tag without ever making it a real one.
+    func discardTagSuggestion(_ suggestion: TagSuggestion, for row: DocumentRow) {
+        Task {
+            try? await store.discardTagSuggestion(suggestion.name, for: row.id)
             reloadDetail()
         }
     }
