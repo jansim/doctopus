@@ -534,12 +534,26 @@ enum SelfTest {
                    before == after, "\(before.count) before, \(after.count) after")
 
         // 2. "Importing" a file that is already in the library — a drop of a
-        // row back onto the list, say — indexes it in place. The invoice in the
-        // Inbox matches a starter rule, so a real import of it would be moved.
+        // row back onto the list, say — indexes it in place. The document used
+        // is one in the Inbox the rules would route, so a real import of it
+        // would be moved.
         let inbox = root.appendingPathComponent("Inbox", isDirectory: true)
         let rows = (try? await store.listDocuments(selection: .all, query: SearchQuery(""),
                                                    sort: .added, ascending: false)) ?? []
-        if let invoice = rows.first(where: { $0.directory == inbox.path && $0.filename.contains("Invoice") }) {
+        let router = Router(rules: (try? await store.rules()) ?? [], threshold: routing.routingThreshold,
+                            derivedTemplate: routing.derivedTemplate, root: root, deriveWhenNoRule: true)
+        var routable: DocumentRow?
+        for row in rows where row.directory == inbox.path {
+            let text = (try? await store.ocrText(row.doc)) ?? ""
+            let findings = DocumentAnalyzer.analyze(url: row.url, text: text, fallbackDate: row.createdAt,
+                                                    knownCorrespondents: [])
+            if router.evaluate(text: text, filename: row.filename, findings: findings, insight: nil,
+                               currentDirectory: inbox).shouldMove {
+                routable = row
+                break
+            }
+        }
+        if let invoice = routable {
             let hash = FileScanner.hash(invoice.url)
             let result = await indexer.importFiles([invoice.url], into: inbox, route: true)
             let stillThere = fm.fileExists(atPath: invoice.path) && FileScanner.hash(invoice.url) == hash
@@ -548,7 +562,7 @@ enum SelfTest {
                        stillThere && path == invoice.path && result.alreadyInLibrary == 1 && result.imported == 0,
                        path ?? "gone")
         } else {
-            Check.that("the fixtures have an invoice in the Inbox", false)
+            Check.that("the fixtures have a document in the Inbox the rules would route", false)
         }
 
         // A document no existing rule matches, so only the test rules below
