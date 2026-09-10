@@ -40,8 +40,11 @@ struct AppSettings: Codable, Sendable, Equatable {
     var routingThreshold: Double = 0.75
     var autoRouteImports = true
     var deriveWhenNoRule = true
+    /// Imports and scans only. There is deliberately no setting to rewrite
+    /// files already in the library while indexing: those are the user's, and
+    /// Optimize in the context menu is the way to ask for it. An older library
+    /// may still carry `optimizeExisting` in its settings; it is ignored.
     var optimizeOnImport = true
-    var optimizeExisting = false
     /// Which model answers the enrichment questions, if any.
     var llmBackend: LLMBackend = .onDevice
     var remoteEndpoint = "http://localhost:1234/v1"
@@ -182,7 +185,6 @@ extension AppSettings {
             autoRouteImports: value(.autoRouteImports, d.autoRouteImports),
             deriveWhenNoRule: value(.deriveWhenNoRule, d.deriveWhenNoRule),
             optimizeOnImport: value(.optimizeOnImport, d.optimizeOnImport),
-            optimizeExisting: value(.optimizeExisting, d.optimizeExisting),
             llmBackend: value(.llmBackend, Self.legacyBackend(decoder) ?? d.llmBackend),
             remoteEndpoint: value(.remoteEndpoint, d.remoteEndpoint),
             remoteModel: value(.remoteModel, d.remoteModel),

@@ -125,7 +125,20 @@ struct DocumentDetail: Sendable {
     /// Tags the model proposed for this document that nobody has accepted
     /// or discarded yet.
     var tagSuggestions: [TagSuggestion] = []
+    /// Folders the router suggested for this document, best first.
+    var pathSuggestions: [PathSuggestion] = []
     var aliases: [String] = []
+}
+
+/// A folder the router thought a document could be filed in.
+struct PathSuggestion: Identifiable, Hashable, Sendable {
+    var id: String { path }
+    /// Absolute path of the folder.
+    var path: String
+    var confidence: Double
+    /// The rule that suggested it, or "derived".
+    var source: String
+    var explanation: String?
 }
 
 /// A configurable document attribute. Built-ins map to a `metadata` column;

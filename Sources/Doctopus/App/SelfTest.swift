@@ -51,7 +51,6 @@ enum SelfTest {
         print("Root:   \(root.path)\n")
 
         var settings = AppSettings()
-        settings.optimizeExisting = false
 
         let intelligence = Intelligence()
         await intelligence.update(settings: settings)
@@ -384,6 +383,8 @@ enum SelfTest {
             try? FileManager.default.removeItem(at: outside)
         }
 
+        await fileSafety(store: store, indexer: indexer, settings: settings, root: root)
+
         print("\nMODEL BACKENDS")
         // The address people actually paste, from four different places.
         let pasted = [
@@ -497,6 +498,176 @@ enum SelfTest {
         }
 
         Check.finish("pipeline self-test")
+    }
+
+    /// Doctopus may only ever move or rewrite a file it just brought in itself,
+    /// and only when nobody said where it should go. Everything else — files
+    /// already in the library, imports into a chosen folder, the user's own
+    /// aliases — it must leave exactly as it found them.
+    private static func fileSafety(store: Store, indexer: Indexer, settings: AppSettings, root staged: URL) async {
+        print("\nFILE SAFETY")
+        // The store's own root, with `/var` resolved to `/private/var`, so
+        // paths compare equal to the ones it hands back.
+        let root = store.root
+        _ = staged
+        let fm = FileManager.default
+        var routing = settings
+        routing.autoRouteImports = true
+        routing.deriveWhenNoRule = true
+        routing.optimizeOnImport = true
+        await indexer.update(settings: routing)
+
+        /// Every document file under the root, with its content hash.
+        func snapshot() -> [String: String] {
+            var out: [String: String] = [:]
+            for f in FileScanner.scan(root: root) { out[f.url.path] = FileScanner.hash(f.url) ?? "" }
+            return out
+        }
+
+        // 1. Rescanning and reprocessing every document touches no file.
+        let before = snapshot()
+        let ids = (try? await store.allDocumentIDs()) ?? []
+        await indexer.reprocess(ids: ids)
+        await indexer.indexAll()
+        let after = snapshot()
+        Check.that("reprocessing leaves every file where it was, byte for byte",
+                   before == after, "\(before.count) before, \(after.count) after")
+
+        // 2. "Importing" a file that is already in the library — a drop of a
+        // row back onto the list, say — indexes it in place. The invoice in the
+        // Inbox matches a starter rule, so a real import of it would be moved.
+        let inbox = root.appendingPathComponent("Inbox", isDirectory: true)
+        let rows = (try? await store.listDocuments(selection: .all, query: SearchQuery(""),
+                                                   sort: .added, ascending: false)) ?? []
+        if let invoice = rows.first(where: { $0.directory == inbox.path && $0.filename.contains("Invoice") }) {
+            let hash = FileScanner.hash(invoice.url)
+            let result = await indexer.importFiles([invoice.url], into: inbox, route: true)
+            let stillThere = fm.fileExists(atPath: invoice.path) && FileScanner.hash(invoice.url) == hash
+            let path = try? await store.documentPath(invoice.doc)
+            Check.that("importing a file already in the library neither moves nor rewrites it",
+                       stillThere && path == invoice.path && result.alreadyInLibrary == 1 && result.imported == 0,
+                       path ?? "gone")
+        } else {
+            Check.that("the fixtures have an invoice in the Inbox", false)
+        }
+
+        // A document no existing rule matches, so only the test rules below
+        // decide where its copies go.
+        let existing = ((try? await store.rules()) ?? []).filter(\.enabled)
+        var neutral: DocumentRow?
+        for row in rows where row.ext == "pdf" {
+            let text = (try? await store.ocrText(row.doc)) ?? ""
+            let hit = existing.contains {
+                Router.matches($0.pattern, in: Router.subject(for: $0.field, text: text, filename: row.filename,
+                                                              correspondent: row.correspondent, docType: row.docType))
+            }
+            if !hit { neutral = row; break }
+        }
+
+        // Test rules, first in line, keyed to filenames nothing else has.
+        let outside = fm.temporaryDirectory.appendingPathComponent("doctopus-escape-\(UUID().uuidString)",
+                                                                    isDirectory: true)
+        let testRules = [
+            Rule(id: 0, name: "Clear", pattern: "doctopus-clear", field: "filename",
+                 destination: "Filed/Clear", tagNames: nil, weight: 0.99, enabled: true, priority: 1000),
+            Rule(id: 0, name: "Tie A", pattern: "doctopus-tie", field: "filename",
+                 destination: "Filed/A", tagNames: nil, weight: 0.95, enabled: true, priority: 999),
+            Rule(id: 0, name: "Tie B", pattern: "doctopus-tie", field: "filename",
+                 destination: "Filed/B", tagNames: nil, weight: 0.94, enabled: true, priority: 998),
+            Rule(id: 0, name: "Escape", pattern: "doctopus-escape", field: "filename",
+                 destination: outside.path, tagNames: nil, weight: 0.99, enabled: true, priority: 997),
+        ]
+        var ruleIDs: [Int64] = []
+        for rule in testRules { if let id = try? await store.upsertRule(rule) { ruleIDs.append(id) } }
+
+        /// A copy of a fixture from outside the library, under a chosen name.
+        func stage(_ name: String) -> URL? {
+            guard let sample = neutral else { return nil }
+            let url = fm.temporaryDirectory.appendingPathComponent("\(UUID().uuidString)-\(name).pdf")
+            return (try? fm.copyItem(at: sample.url, to: url)) != nil ? url : nil
+        }
+        func imported(_ name: String) async -> DocumentRow? {
+            ((try? await store.listDocuments(selection: .all, query: SearchQuery(""),
+                                             sort: .added, ascending: false)) ?? [])
+                .first { $0.filename.contains(name) }
+        }
+
+        // 3. A new file with one clear home is filed there.
+        if let clear = stage("doctopus-clear") {
+            await indexer.importFiles([clear], into: inbox, route: true)
+            let row = await imported("doctopus-clear")
+            print("  clear match        → \(row?.directory.replacingOccurrences(of: root.path + "/", with: "") ?? "nowhere")")
+            Check.that("a new document with one clear home is filed there",
+                       row?.directory == root.appendingPathComponent("Filed/Clear").path)
+            Check.that("…and the file it was copied from is left alone", fm.fileExists(atPath: clear.path))
+            try? fm.removeItem(at: clear)
+        }
+
+        // 4. The same new file into a folder someone chose stays there.
+        if let chosen = stage("doctopus-clear-chosen") {
+            let folder = root.appendingPathComponent("Work", isDirectory: true)
+            await indexer.importFiles([chosen], into: folder, route: false)
+            let row = await imported("doctopus-clear-chosen")
+            Check.that("an import into a chosen folder is never routed away",
+                       row?.directory == folder.path, row?.directory ?? "nowhere")
+            try? fm.removeItem(at: chosen)
+        }
+
+        // 5. Two equally good homes: it waits in the Inbox with both on offer.
+        if let tie = stage("doctopus-tie") {
+            await indexer.importFiles([tie], into: inbox, route: true)
+            let row = await imported("doctopus-tie")
+            var offered: [PathSuggestion] = []
+            var queued = false
+            if let row {
+                offered = (try? await store.pathSuggestions(for: row.doc)) ?? []
+                queued = ((try? await store.listDocuments(selection: .needsReview, query: SearchQuery(""),
+                                                          sort: .added, ascending: false)) ?? [])
+                    .contains { $0.id == row.id }
+            }
+            print("  two equal homes    → \(row?.directory.replacingOccurrences(of: root.path + "/", with: "") ?? "nowhere"); offered \(offered.map { $0.path.replacingOccurrences(of: root.path + "/", with: "") })")
+            Check.that("a new document with two equally good homes stays in the Inbox",
+                       row?.directory == inbox.path)
+            Check.that("…with both homes kept as suggestions",
+                       offered.map(\.path).contains(root.appendingPathComponent("Filed/A").path)
+                           && offered.map(\.path).contains(root.appendingPathComponent("Filed/B").path))
+            Check.that("…and waits in Needs Review", queued)
+            try? fm.removeItem(at: tie)
+        }
+
+        // 6. A rule pointing outside the library moves nothing out of it.
+        if let escape = stage("doctopus-escape") {
+            await indexer.importFiles([escape], into: inbox, route: true)
+            let row = await imported("doctopus-escape")
+            let inside = row.map { $0.directory == root.path || $0.directory.hasPrefix(root.path + "/") } ?? false
+            Check.that("routing never moves a file outside its library",
+                       inside && !fm.fileExists(atPath: outside.path), row?.directory ?? "nowhere")
+            try? fm.removeItem(at: escape)
+        }
+
+        // 7. A folder alias the user made survives a reprocess.
+        if let doc = rows.first(where: { $0.directory.hasSuffix("Personal") }) {
+            let folder = root.appendingPathComponent("Work", isDirectory: true)
+            if let alias = try? AliasManager.createAlias(to: doc.url, in: folder) {
+                try? await store.recordAlias(docID: doc.doc, tagID: nil, path: alias.path)
+                await indexer.reprocess(ids: [doc.doc])
+                await indexer.syncAliases(docID: doc.doc, target: doc.url)
+                Check.that("a folder alias the user made survives reprocessing",
+                           fm.fileExists(atPath: alias.path))
+                AliasManager.removeAlias(at: alias.path, pointingTo: doc.url)
+            }
+        }
+
+        // 8. Something that is no longer an alias is never deleted as one.
+        let impostor = root.appendingPathComponent("Work/not-an-alias.txt")
+        try? Data("the user's own file".utf8).write(to: impostor)
+        let removed = AliasManager.removeAlias(at: impostor.path)
+        Check.that("removing an alias never deletes a real file in its place",
+                   !removed && fm.fileExists(atPath: impostor.path))
+        try? fm.removeItem(at: impostor)
+
+        for id in ruleIDs { try? await store.deleteRule(id) }
+        await indexer.update(settings: settings)
     }
 
     private static func printTree(_ nodes: [FolderNode], depth: Int) {

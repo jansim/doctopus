@@ -28,7 +28,9 @@ struct DocumentListView: View {
         .dropDestination(for: URL.self) { urls, _ in
             let supported = urls.filter { FileScanner.supportedExtensions.contains($0.pathExtension.lowercased()) }
             guard !supported.isEmpty else { return false }
-            model.importFiles(supported, into: model.contextImportDirectory)
+            // No explicit destination: a drop lands in the selected folder and
+            // stays there, or in the Inbox and gets routed from it.
+            model.importFiles(supported, into: nil)
             return true
         } isTargeted: { dropTargeted = $0 }
         .overlay {
@@ -530,15 +532,15 @@ private struct DocumentMenu: View {
 private struct BackgroundMenu: View {
     @Environment(AppModel.self) private var model
 
-    private var destination: URL? { model.contextImportDirectory }
-
     var body: some View {
-        ScanMenu(destination: destination)
+        // `nil` rather than the Inbox, so an import from here is routed
+        // unless a folder is selected — the same as from the toolbar.
+        ScanMenu(destination: model.explicitImportDirectory)
         Button("Import Files…") { importFiles() }
         Divider()
-        if let destination {
+        if let folder = model.contextImportDirectory {
             Button("Reveal Folder in Finder") {
-                NSWorkspace.shared.activateFileViewerSelecting([destination])
+                NSWorkspace.shared.activateFileViewerSelecting([folder])
             }
         }
         Button("Rescan All Folders") { model.reindex() }
@@ -551,7 +553,7 @@ private struct BackgroundMenu: View {
         panel.allowedContentTypes = [.pdf, .png, .jpeg]
         panel.prompt = "Import"
         guard panel.runModal() == .OK else { return }
-        model.importFiles(panel.urls, into: destination)
+        model.importFiles(panel.urls, into: nil)
     }
 }
 

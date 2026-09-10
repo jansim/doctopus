@@ -159,8 +159,13 @@ actor Indexer {
 
     /// Runs the per-document pipeline with bounded parallelism. Returns how
     /// many documents it got through before finishing or being cancelled.
+    ///
+    /// `isImport` marks files Doctopus itself just brought into the library —
+    /// the only ones it may rewrite (optimize) unasked. `route` additionally
+    /// lets it move them, and is only true when nobody said where they go.
     @discardableResult
-    func process(documents: [(Int64, String)], phase: String, isImport: Bool) async -> Int {
+    func process(documents: [(Int64, String)], phase: String, isImport: Bool,
+                 route: Bool = false) async -> Int {
         guard !documents.isEmpty else { return 0 }
         let total = documents.count
         var done = 0
@@ -172,7 +177,9 @@ actor Indexer {
         await withTaskGroup(of: String?.self) { group in
             var inFlight = 0
             while inFlight < width, let next = iterator.next() {
-                group.addTask { [weak self] in await self?.pipeline(id: next.0, path: next.1, isImport: isImport) }
+                group.addTask { [weak self] in
+                    await self?.pipeline(id: next.0, path: next.1, isImport: isImport, route: route)
+                }
                 inFlight += 1
             }
             while let finished = await group.next() {
@@ -181,7 +188,9 @@ actor Indexer {
                 if done % 8 == 0 { onDataChanged() }
                 if cancelled { group.cancelAll(); break }
                 if let next = iterator.next() {
-                    group.addTask { [weak self] in await self?.pipeline(id: next.0, path: next.1, isImport: isImport) }
+                    group.addTask { [weak self] in
+                        await self?.pipeline(id: next.0, path: next.1, isImport: isImport, route: route)
+                    }
                 }
             }
         }
@@ -193,8 +202,12 @@ actor Indexer {
     /// The whole per-document pipeline. Every stage degrades independently: a
     /// failed OCR still yields filesystem metadata, a missing LLM still yields
     /// heuristics, a failed optimization leaves the original untouched.
+    ///
+    /// Nothing here writes to a file the user already had. Only a fresh import
+    /// — a copy Doctopus made, or a scan it received — is optimized, and only
+    /// an import nobody gave a destination is routed.
     @discardableResult
-    private func pipeline(id: Int64, path: String, isImport: Bool) async -> String? {
+    private func pipeline(id: Int64, path: String, isImport: Bool, route: Bool) async -> String? {
         var url = URL(fileURLWithPath: path)
         let name = url.lastPathComponent
         guard FileManager.default.fileExists(atPath: url.path) else {
@@ -209,8 +222,10 @@ actor Indexer {
         try? await store.indexFinderTags(docID: id, entries: FinderTags.entries(url))
 
         // 1. Optimize before OCR so the indexed text matches the stored bytes.
+        // Imports only: an existing file is rewritten only when someone picks
+        // Optimize for it.
         var optimized: Optimizer.Result?
-        if (isImport && settings.optimizeOnImport) || (!isImport && settings.optimizeExisting) {
+        if isImport && settings.optimizeOnImport {
             optimized = try? Optimizer.optimize(url: url, options: settings.optimizerOptions)
             if let optimized {
                 try? await store.setSizes(id, size: optimized.newSize, originalSize: optimized.originalSize)
@@ -267,9 +282,10 @@ actor Indexer {
             try? await store.suggestTag(tag, for: id, autoAcceptMatching: settings.autoAcceptMatchingTagSuggestions)
         }
 
-        // 6. Routing — imports only; existing files are never moved uninvited.
-        if isImport, settings.autoRouteImports {
-            await route(id: id, url: &url, text: extracted.text, findings: findings, insight: insight)
+        // 6. Routing — undirected imports only; existing files are never moved
+        // uninvited, and neither is anything imported into a chosen folder.
+        if isImport, route, settings.autoRouteImports {
+            await self.route(id: id, url: &url, text: extracted.text, findings: findings, insight: insight)
         }
 
         // 7. Mirror tag membership to disk if the user asked for that.
@@ -305,6 +321,9 @@ actor Indexer {
         let decision = router.evaluate(text: text, filename: url.lastPathComponent,
                                        findings: findings, insight: insight,
                                        currentDirectory: url.deletingLastPathComponent())
+        // Every candidate is kept, moved or not, so the review can offer the
+        // alternatives — and so an ambiguous document has its choices waiting.
+        try? await store.setPathSuggestions(decision.candidates, for: id)
 
         for tag in decision.tags {
             if decision.tagsFromRule {
@@ -343,6 +362,11 @@ actor Indexer {
     }
 
     /// Brings the on-disk aliases in line with the document's mirroring tags.
+    ///
+    /// Only tag aliases are Doctopus's to prune. An alias someone made by
+    /// dragging a document onto a folder has no tag and is left alone here —
+    /// it goes when they remove it — and nothing is deleted unless it is still
+    /// an alias to this document (see `AliasManager.removeAlias`).
     func syncAliases(docID: Int64, target: URL) async {
         let tags = (try? await store.tags(for: docID)) ?? []
         let mirroring = tags.filter { $0.mirrors || settings.mirrorTagsAsAliases }
@@ -354,10 +378,19 @@ actor Indexer {
 
         // Prune aliases for tags that are gone, or whose file vanished.
         for alias in existing {
-            let keepFolder = alias.tagID.flatMap { wanted[$0] }
+            guard let tagID = alias.tagID else {
+                // A folder placement the user made. Only forget it once the
+                // alias itself has gone from disk.
+                if !FileManager.default.fileExists(atPath: alias.path) {
+                    try? await store.deleteAlias(id: alias.id)
+                }
+                continue
+            }
             let stillThere = FileManager.default.fileExists(atPath: alias.path)
-            if keepFolder == nil || !stillThere {
-                AliasManager.removeAlias(at: alias.path)
+            if wanted[tagID] == nil || !stillThere {
+                // Something that is no longer our alias stays on disk, but the
+                // registry lets go of it either way.
+                if stillThere { AliasManager.removeAlias(at: alias.path, pointingTo: target) }
                 try? await store.deleteAlias(id: alias.id)
             }
         }
@@ -491,46 +524,82 @@ actor Indexer {
         return parts.joined(separator: " · ")
     }
 
+    /// What an import did, for the message the UI shows after it.
+    struct ImportSummary: Sendable {
+        /// Files brought into the library — copied in, or a scan received.
+        var imported = 0
+        /// Of `imported`, how many the router moved on to a folder.
+        var routed = 0
+        /// Files that were already inside the library and were only indexed.
+        var alreadyInLibrary = 0
+        var failed = 0
+    }
+
     /// Imports files that arrived from a scan or a drop into `destination`.
-    /// `movingSource` is only ever true for files the app itself produced, such
-    /// as a scan staged in the temporary directory. A document dropped in from
-    /// anywhere else is copied and the original left exactly where it was:
-    /// importing must never relocate or delete something outside the library.
+    ///
+    /// Only a file new to the library is an import. One from anywhere else is
+    /// copied in and the original left exactly where it was — `movingSource` is
+    /// only ever true for files the app itself produced, such as a scan staged
+    /// in the temporary directory. A file that is already inside the library is
+    /// indexed where it lies, exactly as a rescan would: it is the user's, so it
+    /// is neither optimized nor routed, whatever the import was asked to do.
+    ///
+    /// `route` is true only when nobody chose where the files go. With an
+    /// explicit destination — scan into this folder, import here — they stay
+    /// where they were put.
     @discardableResult
     func importFiles(_ urls: [URL], into destination: URL,
-                     movingSource: Bool = false) async -> Int {
-        var work: [(Int64, String)] = []
-        try? FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
+                     movingSource: Bool = false, route: Bool = false) async -> ImportSummary {
+        var summary = ImportSummary()
+        var imported: [(Int64, String)] = []
+        var inPlace: [(Int64, String)] = []
         let rootPath = store.root.path
+        var madeDestination = false
 
         for url in urls {
-            do {
-                let target: URL
-                if url.path == rootPath || url.path.hasPrefix(rootPath + "/") {
-                    // Already in the library: index it where it lies rather than
-                    // making a second copy of it.
-                    target = url
-                } else {
-                    target = Naming.uniqueURL(in: destination, filename: url.lastPathComponent)
-                    if movingSource {
-                        try FileManager.default.moveItem(at: url, to: target)
-                    } else {
-                        try FileManager.default.copyItem(at: url, to: target)
-                    }
-                }
-                let final = target
-                let v = try final.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey, .creationDateKey])
-                let facts = Store.FileFacts(path: final.path,
-                                            size: Int64(v.fileSize ?? 0),
-                                            mtime: v.contentModificationDate ?? Date(),
-                                            created: v.creationDate ?? Date())
-                if let r = try? await store.upsertDocument(facts) { work.append((r.id, final.path)) }
-            } catch {
+            let path = Store.canonical(url.standardizedFileURL.path)
+            if path == rootPath || path.hasPrefix(rootPath + "/") {
+                guard let facts = Self.facts(URL(fileURLWithPath: path)),
+                      let r = try? await store.upsertDocument(facts) else { summary.failed += 1; continue }
+                summary.alreadyInLibrary += 1
+                if r.changed { inPlace.append((r.id, path)) }
                 continue
             }
+            do {
+                if !madeDestination {
+                    try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
+                    madeDestination = true
+                }
+                let target = Naming.uniqueURL(in: destination, filename: url.lastPathComponent)
+                if movingSource {
+                    try FileManager.default.moveItem(at: url, to: target)
+                } else {
+                    try FileManager.default.copyItem(at: url, to: target)
+                }
+                guard let facts = Self.facts(target),
+                      let r = try? await store.upsertDocument(facts) else { summary.failed += 1; continue }
+                imported.append((r.id, target.path))
+                summary.imported += 1
+            } catch {
+                summary.failed += 1
+            }
         }
-        await process(documents: work, phase: "Importing", isImport: true)
-        return work.count
+        await process(documents: inPlace, phase: "Indexing", isImport: false)
+        await process(documents: imported, phase: "Importing", isImport: true, route: route)
+        if route {
+            for (id, path) in imported {
+                if let now = try? await store.documentPath(id), now != path { summary.routed += 1 }
+            }
+        }
+        return summary
+    }
+
+    private static func facts(_ url: URL) -> Store.FileFacts? {
+        guard let v = try? url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey, .creationDateKey])
+        else { return nil }
+        return Store.FileFacts(path: url.path, size: Int64(v.fileSize ?? 0),
+                               mtime: v.contentModificationDate ?? Date(),
+                               created: v.creationDate ?? Date())
     }
 
     /// Applies a naming template to documents on demand. Never automatic.

@@ -2,7 +2,7 @@ import Foundation
 
 /// Versioned schema. Migrations are append-only: bump `current` and add a case.
 enum Schema {
-    static let current = 5
+    static let current = 6
 
     static func migrate(_ db: Database) throws {
         let version = try db.first("PRAGMA user_version") { Int($0.int(0)) } ?? 0
@@ -11,7 +11,27 @@ enum Schema {
         if version < 3 { try v3(db) }
         if version < 4 { try v4(db) }
         if version < 5 { try v5(db) }
+        if version < 6 { try v6(db) }
         try db.exec("PRAGMA user_version=\(current)")
+    }
+
+    /// Folders the router thought a new document could go in, kept whether or
+    /// not it moved it. They are what the review offers as a choice — and all
+    /// there is to go on when two were equally good and it moved nothing.
+    /// `path` is relative to the library root, like every other path.
+    private static func v6(_ db: Database) throws {
+        try db.exec("""
+        CREATE TABLE IF NOT EXISTS path_suggestions (
+            doc_id      INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+            path        TEXT NOT NULL,
+            confidence  REAL NOT NULL,
+            source      TEXT NOT NULL,   -- rule name, or 'derived'
+            explanation TEXT,
+            rank        INTEGER NOT NULL,
+            PRIMARY KEY (doc_id, path)
+        );
+        CREATE INDEX IF NOT EXISTS idx_path_suggestions_doc ON path_suggestions(doc_id);
+        """)
     }
 
     /// Tags the model proposed but nobody has accepted yet. Kept apart from

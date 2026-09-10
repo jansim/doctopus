@@ -134,4 +134,31 @@ extension Store {
     private func existingTagID(named name: String) throws -> Int64? {
         try db.first("SELECT id FROM tags WHERE name=? COLLATE NOCASE", [.text(name)]) { $0.int(0) }
     }
+
+    // MARK: - Path suggestions
+
+    /// Replaces what the router suggested for a document. `candidates` are
+    /// best first, with absolute destinations.
+    func setPathSuggestions(_ candidates: [Router.Candidate], for docID: Int64) throws {
+        try db.transaction {
+            try db.run("DELETE FROM path_suggestions WHERE doc_id=?", [.int(docID)])
+            for (rank, c) in candidates.enumerated() {
+                try db.run("""
+                    INSERT OR IGNORE INTO path_suggestions(doc_id, path, confidence, source, explanation, rank)
+                    VALUES(?,?,?,?,?,?)
+                    """, [.int(docID), .text(relPath(c.destination.path)), .double(c.confidence),
+                          .text(c.rule), .text(c.explanation), .int(Int64(rank))])
+            }
+        }
+    }
+
+    func pathSuggestions(for docID: Int64) throws -> [PathSuggestion] {
+        try db.map("""
+            SELECT path, confidence, source, explanation FROM path_suggestions
+            WHERE doc_id=? ORDER BY rank
+            """, [.int(docID)]) {
+            PathSuggestion(path: absPath($0.string(0)), confidence: $0.double(1),
+                           source: $0.string(2), explanation: $0.stringOrNil(3))
+        }
+    }
 }

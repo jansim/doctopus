@@ -81,6 +81,11 @@ struct RuleEditor: View {
                             .truncationMode(.middle)
                             .textSelection(.enabled)
                     }
+                    if destinationLeavesLibrary {
+                        Label("Outside the library. Doctopus only ever routes within a library, so this rule will be skipped.",
+                              systemImage: "exclamationmark.triangle.fill")
+                            .font(.caption).foregroundStyle(.orange)
+                    }
                     TextField("Tags", text: Binding(
                         get: { draft.tagNames ?? "" },
                         set: { draft.tagNames = $0.nilIfBlank }),
@@ -222,6 +227,14 @@ struct RuleEditor: View {
             return library.displayName + "/" + url.path.dropFirst(rootPath.count + 1)
         }
         return url.path
+    }
+
+    private var destinationLeavesLibrary: Bool {
+        guard draft.destination.nilIfBlank != nil else { return false }
+        let router = Router(rules: [], threshold: threshold, derivedTemplate: "",
+                            root: library.root, deriveWhenNoRule: false)
+        return !router.isInsideLibrary(router.expand(draft.destination, correspondent: "Acme Corp",
+                                                     docType: "Invoice", date: Date()))
     }
 
     private var confidenceExplanation: String {
