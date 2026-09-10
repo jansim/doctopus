@@ -26,8 +26,24 @@ enum AliasManager {
         return dest
     }
 
-    static func removeAlias(at path: String) {
-        try? FileManager.default.removeItem(atPath: path)
+    /// Deletes an alias Doctopus made — and nothing else.
+    ///
+    /// The registry only records where an alias *was* written. Anything could
+    /// be at that path now: the user may have replaced the alias with the real
+    /// file, or with an alias of their own to something else. So the item is
+    /// only removed when it is still an alias file and, when `target` is given,
+    /// still points at that document (or at nothing, if the document is gone).
+    /// Returns whether anything was deleted.
+    @discardableResult
+    static func removeAlias(at path: String, pointingTo target: URL? = nil) -> Bool {
+        let url = URL(fileURLWithPath: path)
+        guard isAlias(url) else { return false }
+        if let target, let resolved = resolve(url),
+           Store.canonical(resolved.standardizedFileURL.path) != Store.canonical(target.standardizedFileURL.path),
+           FileManager.default.fileExists(atPath: resolved.path) {
+            return false
+        }
+        return (try? FileManager.default.removeItem(at: url)) != nil
     }
 
     /// Resolves an alias file back to its target, used when the tree scan meets one.

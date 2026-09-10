@@ -56,7 +56,7 @@ struct RootView: View {
             Menu {
                 Button("Add Folder to Index…") { model.addLibrary() }
                 Button("Import Files…") { importFiles() }
-                ScanMenu(destination: model.contextImportDirectory)
+                ScanMenu(destination: model.explicitImportDirectory)
                 Divider()
                 Button("New Tag…") {
                     guard let name = TextPrompt.ask(title: "New Tag", message: "",

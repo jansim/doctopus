@@ -1,14 +1,33 @@
 import Foundation
 
-/// Decides where an unrouted import belongs on disk.
+/// Decides where a new document belongs on disk.
 ///
 /// Two sources of truth, in order: explicit user rules, then a derived
-/// correspondent/year path built from what was understood. Anything below the
-/// confidence threshold stays put and lands in the queue as "Needs Review" —
-/// the engine never silently moves a file it is unsure about.
+/// correspondent/year path built from what was understood. Every place that
+/// fits is kept as a candidate, best first, and the document is only moved to
+/// the best one when that is a clear call:
+///
+/// - below the confidence threshold it stays where it landed, and
+/// - when another candidate fits about as well (within `ambiguityMargin`) it
+///   stays too — two equally good homes is a question for a person, not a
+///   coin toss.
+///
+/// Either way it lands in the queue as "Needs Review" with the candidates kept,
+/// so choosing between them is one click. Destinations outside the library
+/// are never candidates: routing only ever moves a file within its library.
 struct Router: Sendable {
 
+    /// One place a document could go, and why.
+    struct Candidate: Sendable, Equatable {
+        var destination: URL
+        var confidence: Double
+        /// The rule's name, or "derived".
+        var rule: String
+        var explanation: String
+    }
+
     struct Decision: Sendable {
+        /// Where to move the document; nil means it stays where it is.
         var destination: URL?
         var confidence: Double
         var rule: String
@@ -18,9 +37,18 @@ struct Router: Sendable {
         /// suggestions, which still deserve a human's sign-off.
         var tagsFromRule: Bool = false
         var explanation: String
+        /// Every place that fits, best first. Kept whether or not the
+        /// document moved, so the review can offer the alternatives.
+        var candidates: [Candidate] = []
+        /// True when the best candidates were too close to call.
+        var ambiguous = false
 
         var shouldMove: Bool { destination != nil }
     }
+
+    /// How close a runner-up has to be to the best candidate for the two to
+    /// count as equally good.
+    static let ambiguityMargin = 0.05
 
     var rules: [Rule]
     var threshold: Double
@@ -32,46 +60,116 @@ struct Router: Sendable {
                   insight: DocumentInsight?, currentDirectory: URL) -> Decision {
         let correspondent = insight?.correspondent ?? findings.correspondent
         let docType = insight?.docType ?? findings.docType
+        let quality = qualityFactor(findings, insight)
 
+        // Every enabled rule that matches, in the order the user put them.
+        var matched: [(rule: Rule, candidate: Candidate)] = []
+        var outside: [String] = []
         for rule in rules where rule.enabled {
             let subject = Self.subject(for: rule.field, text: text, filename: filename,
                                        correspondent: correspondent, docType: docType)
             guard Self.matches(rule.pattern, in: subject) else { continue }
-
-            let confidence = min(0.99, rule.weight * qualityFactor(findings, insight))
-            guard confidence >= threshold else {
-                return Decision(destination: nil, confidence: confidence, rule: rule.name,
-                                tags: ruleTags(rule), tagsFromRule: true,
-                                explanation: "Matched “\(rule.name)” but confidence \(pct(confidence)) is below the \(pct(threshold)) threshold")
-            }
             let dest = expand(rule.destination, correspondent: correspondent,
                               docType: docType, date: findings.date)
-            return Decision(destination: dest, confidence: confidence, rule: rule.name,
-                            tags: ruleTags(rule), tagsFromRule: true,
-                            explanation: "Rule “\(rule.name)” matched \(rule.field)")
+            guard isInsideLibrary(dest) else { outside.append(rule.name); continue }
+            let confidence = min(0.99, rule.weight * quality)
+            matched.append((rule, Candidate(destination: dest, confidence: confidence, rule: rule.name,
+                                            explanation: "Rule “\(rule.name)” matched \(Self.fieldLabel(rule.field))")))
         }
 
-        guard deriveWhenNoRule, let correspondent, !correspondent.isEmpty else {
-            return Decision(destination: nil, confidence: findings.confidence, rule: "none",
-                            tags: insight?.tags ?? [],
-                            explanation: "No rule matched and no correspondent was identified")
+        // The derived path is the fallback when no rule matches, and an extra
+        // suggestion when one does.
+        var derived: Candidate?
+        if deriveWhenNoRule, let correspondent, !correspondent.isEmpty {
+            let dest = expand(derivedTemplate, correspondent: correspondent,
+                              docType: docType, date: findings.date)
+            if isInsideLibrary(dest), dest.standardizedFileURL != root.standardizedFileURL {
+                derived = Candidate(destination: dest, confidence: findings.confidence * quality,
+                                    rule: "derived",
+                                    explanation: "Derived from correspondent “\(correspondent)”")
+            }
         }
 
-        let confidence = findings.confidence * qualityFactor(findings, insight)
-        let dest = expand(derivedTemplate, correspondent: correspondent,
-                          docType: docType, date: findings.date)
-        guard confidence >= threshold else {
-            return Decision(destination: nil, confidence: confidence, rule: "derived",
-                            tags: insight?.tags ?? [],
-                            explanation: "Would file under \(dest.lastPathComponent), but confidence \(pct(confidence)) is below \(pct(threshold))")
+        var candidates = Self.deduplicated(matched.map(\.candidate) + (derived.map { [$0] } ?? []))
+
+        // No rule: the derived path, if there is one, decides on its own.
+        guard let first = matched.first else {
+            guard let derived else {
+                let why = outside.isEmpty
+                    ? "No rule matched and no correspondent was identified"
+                    : "“\(outside[0])” matched but points outside the library, so nothing was moved"
+                return Decision(destination: nil, confidence: findings.confidence, rule: "none",
+                                tags: insight?.tags ?? [], explanation: why, candidates: candidates)
+            }
+            return decide(best: derived, runnerUp: nil, tags: insight?.tags ?? [], tagsFromRule: false,
+                          candidates: candidates, currentDirectory: currentDirectory)
         }
-        if dest.path == currentDirectory.path {
-            return Decision(destination: nil, confidence: confidence, rule: "derived",
-                            tags: insight?.tags ?? [], explanation: "Already in the right place")
+
+        // The first matching rule is the user's own choice of winner, unless a
+        // later one — pointing somewhere else — fits about as well.
+        let rival = matched.dropFirst()
+            .map(\.candidate)
+            .filter { $0.destination.standardizedFileURL != first.candidate.destination.standardizedFileURL }
+            .max { $0.confidence < $1.confidence }
+        let ambiguous = rival.map { $0.confidence >= first.candidate.confidence - Self.ambiguityMargin } ?? false
+        if ambiguous, let rival, rival.confidence > first.candidate.confidence {
+            // Offer the stronger of the two first.
+            candidates = Self.deduplicated([rival] + candidates)
         }
-        return Decision(destination: dest, confidence: confidence, rule: "derived",
-                        tags: insight?.tags ?? [],
-                        explanation: "Derived from correspondent “\(correspondent)”")
+        return decide(best: first.candidate, runnerUp: ambiguous ? rival : nil,
+                      tags: ruleTags(first.rule), tagsFromRule: true,
+                      candidates: candidates, currentDirectory: currentDirectory)
+    }
+
+    /// Turns the best candidate into a move — or, when it is not a clear
+    /// enough call, into a document that stays put with its candidates.
+    private func decide(best: Candidate, runnerUp: Candidate?, tags: [String], tagsFromRule: Bool,
+                        candidates: [Candidate], currentDirectory: URL) -> Decision {
+        var decision = Decision(destination: nil, confidence: best.confidence, rule: best.rule,
+                                tags: tags, tagsFromRule: tagsFromRule, explanation: best.explanation,
+                                candidates: candidates)
+        if let runnerUp {
+            decision.ambiguous = true
+            decision.explanation = "“\(best.rule)” (\(pct(best.confidence))) and “\(runnerUp.rule)” (\(pct(runnerUp.confidence))) fit equally well — left for you to choose"
+            return decision
+        }
+        guard best.confidence >= threshold else {
+            decision.explanation = best.rule == "derived"
+                ? "Would file under \(best.destination.lastPathComponent), but confidence \(pct(best.confidence)) is below \(pct(threshold))"
+                : "Matched “\(best.rule)” but confidence \(pct(best.confidence)) is below the \(pct(threshold)) threshold"
+            return decision
+        }
+        if best.destination.standardizedFileURL == currentDirectory.standardizedFileURL {
+            decision.explanation = "Already in the right place"
+            return decision
+        }
+        decision.destination = best.destination
+        return decision
+    }
+
+    /// One candidate per folder, keeping the first (best) occurrence.
+    private static func deduplicated(_ candidates: [Candidate]) -> [Candidate] {
+        var seen = Set<String>()
+        return candidates.filter { seen.insert($0.destination.standardizedFileURL.path).inserted }
+    }
+
+    /// Routing may only move a file within its own library, and never into
+    /// Doctopus's own storage. An absolute or `~` destination that leaves the
+    /// root is refused rather than followed.
+    func isInsideLibrary(_ url: URL) -> Bool {
+        let path = Store.canonical(url.standardizedFileURL.path)
+        let rootPath = Store.canonical(root.standardizedFileURL.path)
+        guard path == rootPath || path.hasPrefix(rootPath + "/") else { return false }
+        return !FileScanner.isInsideLibraryContainer(URL(fileURLWithPath: path))
+    }
+
+    private static func fieldLabel(_ field: String) -> String {
+        switch field {
+        case "filename": return "the filename"
+        case "correspondent": return "the correspondent"
+        case "type": return "the document type"
+        default: return "the text"
+        }
     }
 
     /// The LLM agreeing with the heuristics is the strongest signal we have.

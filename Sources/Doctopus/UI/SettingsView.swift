@@ -307,7 +307,7 @@ private struct RoutingSettings: View {
                                 .monospacedDigit().frame(width: 40)
                         }
                     }
-                    Text("Below the threshold a file stays where it landed and shows up in Recent Processing as Needs Review. Files already in your library are never moved automatically.")
+                    Text("Only new scans and imports with no folder chosen are routed. Below the threshold — or when two places fit about equally well — a file stays in the Inbox and waits in Needs Review with its suggestions. Files already in your library are never moved automatically, and nothing is ever routed outside it.")
                         .font(.caption).foregroundStyle(.secondary)
                 } header: {
                     Text("Auto-Routing")
@@ -368,7 +368,7 @@ private struct RoutingSettings: View {
                     .disabled(selected == nil || rules.last?.id == selected)
                     .help("Evaluate later")
                 Spacer()
-                Text("Evaluated top to bottom; the first match wins. Double-click a rule to edit it.")
+                Text("Top to bottom, the first match wins — unless a later one fits as well. Double-click to edit.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             .buttonStyle(.borderless)
@@ -458,8 +458,7 @@ private struct OptimizationSettings: View {
             Section("When to Optimize") {
                 LibraryPicker()
                 Toggle("Optimize imports and scans", isOn: $model.settings.optimizeOnImport)
-                Toggle("Optimize existing files while indexing", isOn: $model.settings.optimizeExisting)
-                Text("Off by default: existing files are yours, and Doctopus does not rewrite them unless you say so. You can always run Optimize from the context menu.")
+                Text("Only files Doctopus brings in itself are optimized automatically. Files already in your library are yours, and are never rewritten unless you choose Optimize from the context menu.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section("Quality") {

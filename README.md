@@ -18,10 +18,10 @@ A high-performance, native macOS document management utility inspired by the org
 
 ### Ingestion
 - Scan-in-Place (Context Menu): Right-clicking any folder in the app’s tree and choosing Import from iPhone/iPad > Scan Documents forces the scanned output to land directly in that specific folder, bypassing auto-routing.
-- Auto-Routing Engine: Unspecified imports and inbox scans evaluate against a confidence threshold to automatically route into appropriate folders on disk:
+- Auto-Routing Engine: Unspecified imports and inbox scans evaluate against a confidence threshold to automatically route into appropriate folders on disk. Every place that fits is kept as a suggestion; the file is only moved when the best one clears the threshold *and* no other place fits about as well — two equally good homes leave it in the Inbox, in Needs Review, until someone picks. Routing never moves a file outside its library:
   - Recent Processing Queue: A dedicated UI section displays recently filed items with confidence badges, applied rules/models, and an "Approved / Needs Review" status toggle.
   - Rules are edited in Settings › Routing: what a rule looks at (text, filename, correspondent or type), its pattern, destination template, tags and confidence, and where it sits in the evaluation order. The editor shows how the pattern will be read, how many documents already in the library it matches, and where a document would land.
-- Optimization: Scans and image-heavy PDFs undergo on-device raster optimization and compression without (severely) degrading readability or stripping text layers. (think PDFSqueezer, ImageOptim, ...)
+- Optimization: Scans and image-heavy PDFs undergo on-device raster optimization and compression without (severely) degrading readability or stripping text layers. (think PDFSqueezer, ImageOptim, ...) Automatic only for files Doctopus brings in itself; anything already in the library is optimized only on request.
 
 ### Metadata & Search
 - Text Processing Pipeline: Apple Vision framework extracts text representations from PDFs and raster images. This all gets stored in a SQLite DB (see Storage) and indexed for deep full-text search.
@@ -49,6 +49,7 @@ A high-performance, native macOS document management utility inspired by the org
   - metadata: Correspondents, document dates, language, one-sentence LLM summary.
  - tags & document_tags: Relational junction for multi-tag assignment.
  - tag_suggestions: Model-proposed tags awaiting acceptance or dismissal, kept apart from `document_tags` so they never count toward a tag's sidebar total.
+ - path_suggestions: Every folder the router considered for a new document, best first — what the review offers, and all there is to go on when it moved nothing.
 - finder_tags: Index of the Finder's own tags, which live on the files themselves.
 - value_icons: Per-value icons, so “Invoice” and “Tax” can look different in the sidebar.
  - aliases: Registry of generated macOS Finder aliases for automated pruning when tags change.
@@ -89,4 +90,10 @@ See [Testing/README.md](Testing/README.md) for generating a demo library.
 - **Disk is the source of truth** — FSEvents drives a debounced reconcile. A file that disappears is marked missing rather than deleted, so when it reappears elsewhere it is relinked by SHA-256 and keeps its tags, metadata and OCR text. Rows stay claimable for seven days.
 - **On-device model** — `FoundationModels` is weak-linked and every call site is behind `@available(macOS 26)` plus a runtime availability probe. Where it is unavailable the deterministic analyzer supplies dates, correspondents, types and titles, and the app behaves identically otherwise. Document text never leaves the machine.
 - **API model** — one OpenAI-compatible `chat/completions` request shape covers LM Studio, Ollama, llama.cpp, vLLM and hosted APIs, so there is no per-vendor code; the address is normalized however it was pasted, and the request steps down a ladder of `json_schema` → `json_object` → plain text, keeping whichever the endpoint actually answers. Insisting on a schema first is what makes a local reasoning model usable: constrained decoding stops it emitting a thinking trace at all, which on a Gemma-class model is four seconds per document instead of thirty, and no token budget spent on reasoning before the answer starts. Where the ladder does end in plain text, a fenced reply, a chatty preamble and a thinking trace that drafts JSON of its own are all still read correctly. Both backends are asked the same question and produce the same `DocumentInsight`, so routing, tagging and the inspector never know which one ran — only `metadata.source` records it. This backend does send document text to the endpoint you choose, which is why it is never the default, and the API key is stored in Doctopus's own index rather than the Keychain.
-- **Nothing moves uninvited** — auto-routing applies to imports and scans only. Files already in your library are never moved or renamed unless you ask, and anything below the confidence threshold stays put and lands in the review queue.
+- **Nothing moves uninvited** — the only thing Doctopus ever moves or rewrites on its own is a file it has just brought in itself (a scan, or the copy an import makes), and it only moves one when nobody chose a folder for it. Concretely:
+  - Files already in the library are never moved, renamed, optimized or deleted except by an explicit action — even when "imported" again by a drop, which just indexes them in place.
+  - Importing or scanning into a chosen folder (the folder's context menu, or with that folder selected) leaves the file there. Imports from outside the library are copied; the original is never touched.
+  - Routing is skipped below the confidence threshold, when two candidates are about equally good, and for any destination outside the library. The document waits in Needs Review with its candidates kept in `path_suggestions`.
+  - Doctopus only deletes an alias it made for a tag, and only if the file at that path is still an alias to that document. Aliases you create by dragging onto a folder are yours.
+  - Move to Trash uses the Trash (never a hard delete), keeps the index entry if trashing fails, and asks first when the row is only an alias in the folder being viewed.
+  - A library whose `library.doctopus` was deleted is not recreated at launch.

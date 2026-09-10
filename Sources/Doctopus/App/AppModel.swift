@@ -304,8 +304,10 @@ final class AppModel {
                 guard let root = try? URL(resolvingBookmarkData: bookmark,
                                           relativeTo: nil, bookmarkDataIsStale: &stale),
                       FileManager.default.fileExists(atPath: root.path) else { continue }
-                let container = existingContainer(in: root)
-                    ?? root.appendingPathComponent(Preferences.libraryFolderName, isDirectory: true)
+                // Someone who deleted a folder's `library.doctopus` meant to stop
+                // indexing it; quietly writing a new one at launch would undo
+                // that. The library is dropped from the list instead.
+                guard let container = existingContainer(in: root) else { continue }
                 await openLibrary(container: container, rootBookmark: bookmark, persist: false)
             }
         }
@@ -901,17 +903,49 @@ final class AppModel {
         move(rows, to: url)
     }
 
+    /// Moves the master files to the Trash — never deletes them outright — and
+    /// forgets them only once the Trash has actually taken them.
+    ///
+    /// A row shown in a folder through an alias *looks* like it lives there,
+    /// but trashing it trashes the original somewhere else. That is worth a
+    /// question; an ordinary trash, which Finder does not ask about either, is
+    /// not.
     func moveToTrash(_ rows: [DocumentRow]) {
+        let viaAlias = rows.filter(\.isAliasHere)
+        if !viaAlias.isEmpty {
+            let alert = NSAlert()
+            alert.messageText = viaAlias.count == 1
+                ? "Move the original of “\(viaAlias[0].displayTitle)” to the Trash?"
+                : "Move the originals of \(viaAlias.count) aliased documents to the Trash?"
+            alert.informativeText = viaAlias.count == 1
+                ? "It is only here as an alias. The original lives in “\((viaAlias[0].directory as NSString).lastPathComponent)”, and that is what would be trashed. To take it out of this folder only, use Remove Alias instead."
+                : "They are only here as aliases, and it is their originals elsewhere that would be trashed. To take them out of this folder only, use Remove Alias instead."
+            alert.addButton(withTitle: "Move to Trash")
+            alert.addButton(withTitle: "Cancel")
+            guard alert.runModal() == .alertFirstButtonReturn else { return }
+        }
         Task {
+            var trashed = 0
+            var failed: [String] = []
             for (lib, rows) in grouped(rows) {
                 for row in rows {
-                    try? FileManager.default.trashItem(at: row.url, resultingItemURL: nil)
-                    try? await lib.store.deleteDocument(row.doc)
+                    do {
+                        try FileManager.default.trashItem(at: row.url, resultingItemURL: nil)
+                        try? await lib.store.deleteDocument(row.doc)
+                        trashed += 1
+                    } catch {
+                        failed.append(row.filename)
+                    }
                 }
             }
             refreshAll()
-            notify(rows.count == 1 ? "Moved “\(rows[0].displayTitle)” to the Trash."
-                                   : "Moved \(rows.count) documents to the Trash.")
+            if !failed.isEmpty {
+                errorMessage = "Could not move \(failed.count == 1 ? "“\(failed[0])”" : "\(failed.count) files") to the Trash. \(failed.count == 1 ? "It was" : "They were") left where \(failed.count == 1 ? "it is" : "they are")."
+            }
+            if trashed > 0 {
+                notify(trashed == 1 && rows.count == 1 ? "Moved “\(rows[0].displayTitle)” to the Trash."
+                                                       : "Moved \(trashed) documents to the Trash.")
+            }
         }
     }
 
@@ -946,7 +980,7 @@ final class AppModel {
         Task {
             for alias in ((try? await lib.store.aliases(for: row.doc)) ?? [])
             where alias.path.hasPrefix(folder + "/") {
-                AliasManager.removeAlias(at: alias.path)
+                AliasManager.removeAlias(at: alias.path, pointingTo: row.url)
                 try? await lib.store.deleteAlias(id: alias.id)
             }
             refreshAll()
@@ -1240,17 +1274,30 @@ final class AppModel {
         return lib.root.appendingPathComponent(lib.settings.scanDestination, isDirectory: true)
     }
 
+    /// The folder the sidebar has selected, if any. Importing or scanning while
+    /// looking at a folder puts the result in that folder and leaves it there.
+    var explicitImportDirectory: URL? {
+        if case .folder(let path) = selection { return URL(fileURLWithPath: path) }
+        return nil
+    }
+
     /// Where a scan or import triggered from the center pane should land: the
     /// folder currently selected in the sidebar, if any, else the inbox.
     var contextImportDirectory: URL? {
-        if case .folder(let path) = selection { return URL(fileURLWithPath: path) }
-        return defaultImportDirectory
+        explicitImportDirectory ?? defaultImportDirectory
     }
 
+    /// Brings files into a library.
+    ///
+    /// `destination` is where someone chose to put them — a folder's "Import
+    /// Files Here…" or "Scan Documents", or a drop while that folder is
+    /// selected — and they stay there. With no destination they go to the
+    /// Inbox and are auto-routed from it: the one case where Doctopus moves a
+    /// file on its own, and only ever a file it just brought in. A file that is
+    /// already in the library is indexed where it is either way.
     func importFiles(_ urls: [URL], into destination: URL?, movingSource: Bool = false) {
-        // A scan started from the menu bar has no explicit destination; follow
-        // whatever the sidebar has selected, then fall back to the inbox.
-        guard let dest = destination ?? contextImportDirectory else {
+        let chosen = destination ?? explicitImportDirectory
+        guard let dest = chosen ?? defaultImportDirectory else {
             errorMessage = "Open a library before importing."
             return
         }
@@ -1261,9 +1308,29 @@ final class AppModel {
             return
         }
         Task {
-            let n = await lib.indexer.importFiles(urls, into: dest, movingSource: movingSource)
-            if n == 0 { errorMessage = "Nothing could be imported from \(urls.count == 1 ? "that file" : "those files")." }
-            else { notify("Imported \(n) document\(n == 1 ? "" : "s") into “\(dest.lastPathComponent)”.") }
+            let result = await lib.indexer.importFiles(urls, into: dest, movingSource: movingSource,
+                                                       route: chosen == nil)
+            if result.imported == 0, result.alreadyInLibrary > 0 {
+                notify(result.alreadyInLibrary == 1
+                       ? "That file is already in the library, so it was indexed where it is."
+                       : "Those files are already in the library, so they were indexed where they are.", .info)
+            } else if result.imported == 0 {
+                errorMessage = "Nothing could be imported from \(urls.count == 1 ? "that file" : "those files")."
+            } else {
+                let n = result.imported
+                let what = movingSource ? "Scanned" : "Imported"
+                var text = "\(what) \(n) document\(n == 1 ? "" : "s")"
+                if chosen == nil, lib.settings.autoRouteImports {
+                    let waiting = n - result.routed
+                    text += result.routed == n ? " and filed \(n == 1 ? "it" : "them all")"
+                        : result.routed == 0 ? " — \(n == 1 ? "it is" : "they are") waiting in Needs Review"
+                        : ", filed \(result.routed) — \(waiting) waiting in Needs Review"
+                } else {
+                    text += " into “\(dest.lastPathComponent)”"
+                }
+                notify(text + (result.failed > 0 ? " — \(result.failed) could not be read." : "."),
+                       result.failed > 0 ? .warning : .success)
+            }
         }
     }
 

@@ -259,6 +259,7 @@ extension Store {
         d.text = try ocrText(id)
         d.tags = try tags(for: id)
         d.tagSuggestions = try tagSuggestions(for: id)
+        d.pathSuggestions = try pathSuggestions(for: id)
         d.row.finderTags = try finderTags(docID: id)
         d.aliases = try aliases(for: id).map(\.path)
         return d
