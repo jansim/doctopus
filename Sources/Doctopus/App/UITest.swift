@@ -53,6 +53,8 @@ enum UITest {
             await uiStatePersists(model)
             await sidebarShowsBothTagSystems(model, snapshots: snapshots)
             await secondLibraryMerges(model, alongside: library, snapshots: snapshots)
+            // Last: it imports documents, which the checks above count.
+            await reviewPanelFiles(model, snapshots: snapshots)
             Check.finish("ui checks")
         }
         app.run()
@@ -318,6 +320,83 @@ enum UITest {
         model.errorMessage = nil
     }
 
+    /// The approval view splits into the list and a review of the selected
+    /// document, from which it can be filed — moved to one folder, aliased
+    /// into others — approved, and have what was generated thrown away.
+    private static func reviewPanelFiles(_ model: AppModel, snapshots: String?) async {
+        guard let lib = model.libraries.first else { return }
+        let fm = FileManager.default
+        // New documents from outside, with no folder chosen: the router files
+        // what is clear and leaves the rest waiting with suggestions.
+        let staging = fm.temporaryDirectory.appendingPathComponent("doctopus-review-\(UUID().uuidString)")
+        try? fm.createDirectory(at: staging, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: staging) }
+        var copies: [URL] = []
+        for row in model.documents where ["scan 003.pdf", "IMG_4821.pdf"].contains(row.filename) {
+            let copy = staging.appendingPathComponent("review-" + row.filename)
+            if (try? fm.copyItem(at: row.url, to: copy)) != nil { copies.append(copy) }
+        }
+        model.selection = .all
+        model.importFiles(copies, into: nil)
+
+        model.selection = .needsReview
+        var candidate: DocumentRow?
+        var detail: DocumentDetail?
+        let found = await settle({
+            candidate = model.documents.first { $0.filename.hasPrefix("review-") }
+            return candidate != nil
+        }, timeout: 60)
+        if found, let candidate {
+            model.selectedIDs = [candidate.id]
+            _ = await settle({
+                detail = model.detail
+                return detail?.row.id == candidate.id && !(detail?.pathSuggestions.isEmpty ?? true)
+            }, timeout: 20)
+        }
+        Check.that("a new document waits in Needs Review with suggested folders",
+                   detail?.pathSuggestions.isEmpty == false,
+                   candidate.map { "\($0.filename): \(detail?.pathSuggestions.map { ($0.path as NSString).lastPathComponent } ?? [])" } ?? "none waiting")
+        // A suggestion other than where it is, so filing really moves it.
+        guard let candidate, let detail,
+              let primary = detail.pathSuggestions.first(where: { $0.path != candidate.directory })
+        else {
+            Check.that("a suggestion other than where it already is", false)
+            return
+        }
+
+        let size = NSSize(width: 900, height: 660)
+        let (window, host) = host(DocumentListView().environment(model), size: size)
+        defer { window.orderOut(nil) }
+        try? await Task.sleep(for: .seconds(2))
+        if let dir = snapshots { snapshot(host, to: dir + "/review.png") }
+        Check.that("the approval view draws the review under the list", inkedRows(host) > 100,
+                   "\(inkedRows(host)) rows with ink")
+
+        // File it: the first suggestion as its home, Work as an alias.
+        let secondary = lib.root.appendingPathComponent("Work").path
+        model.file(candidate, in: URL(fileURLWithPath: primary.path), alsoIn: [secondary],
+                   approve: true, advance: true)
+        let filed = await poll(timeout: 20, { await model.loadDetail(candidate.id) }) {
+            $0?.row.directory == primary.path && $0?.row.approved == true
+                && $0?.folderAliases.contains { ($0 as NSString).deletingLastPathComponent == secondary } == true
+        }
+        let moved = filed?.row.directory == primary.path && filed?.row.approved == true
+        Check.that("filing moves it to the chosen folder, aliases it into another and approves it", moved,
+                   filed.map { "\($0.row.directory) · aliases \($0.folderAliases) · approved \($0.row.approved)" } ?? "gone")
+        Check.that("filing leaves the aliased original findable",
+                   filed.map { fm.fileExists(atPath: $0.row.path) } ?? false)
+
+        // Throwing away what was generated clears it from the index only.
+        model.discardGeneratedInfo([filed?.row ?? candidate])
+        let discarded = await poll(timeout: 10, { await model.loadDetail(candidate.id) }) {
+            $0 != nil && $0?.row.title == nil && $0?.row.docType == nil && $0?.pathSuggestions.isEmpty == true
+        }
+        let cleared = discarded != nil && discarded?.row.title == nil && discarded?.pathSuggestions.isEmpty == true
+        Check.that("discarding generated info clears it and keeps the file", cleared
+                   && fm.fileExists(atPath: discarded?.row.path ?? ""))
+        model.selection = .all
+    }
+
     /// Mirrors what `AppModel` writes for the sort, which is private to it.
     private struct StoredSort: Codable {
         var field: String
@@ -518,6 +597,19 @@ enum UITest {
 
     /// Waits for an asynchronous condition, since indexing and detail loading
     /// both hop between actors.
+    /// Fetches until the value satisfies `until`, and returns the last fetch
+    /// either way — for state that is read asynchronously, like a detail.
+    private static func poll<T>(timeout: TimeInterval, _ fetch: () async -> T,
+                                until: (T) -> Bool) async -> T {
+        let deadline = Date().addingTimeInterval(timeout)
+        var value = await fetch()
+        while !until(value), Date() < deadline {
+            try? await Task.sleep(for: .milliseconds(200))
+            value = await fetch()
+        }
+        return value
+    }
+
     private static func settle(_ condition: () -> Bool, timeout: TimeInterval = 30) async -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {

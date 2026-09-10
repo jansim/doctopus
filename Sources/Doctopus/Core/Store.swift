@@ -383,6 +383,13 @@ actor Store {
             VALUES(?,?,?,?,?,?,?,?,?)
             """, [.int(docID), .double(Date().timeIntervalSince1970), .text(action), .text(detail),
                   .double(confidence), .text(rule), .text(from), .text(to), .bool(approved)])
+        // An entry that needs review makes the document need review, so the
+        // status dot and the inspector agree with the queue. An approved entry
+        // leaves the document as it was: a later "indexed" does not settle an
+        // earlier question.
+        if !approved {
+            try db.run("UPDATE documents SET approved=0 WHERE id=?", [.int(docID)])
+        }
         // Keep the queue bounded; it is a recency view, not an audit log.
         try db.run("DELETE FROM processing WHERE id NOT IN (SELECT id FROM processing ORDER BY at DESC LIMIT 500)")
     }

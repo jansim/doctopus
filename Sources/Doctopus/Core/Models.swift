@@ -127,7 +127,12 @@ struct DocumentDetail: Sendable {
     var tagSuggestions: [TagSuggestion] = []
     /// Folders the router suggested for this document, best first.
     var pathSuggestions: [PathSuggestion] = []
+    /// Folders where documents like this one already are.
+    var similarFolders: [PathSuggestion] = []
     var aliases: [String] = []
+    /// The subset of `aliases` someone filed by hand, as opposed to the ones a
+    /// mirrored tag keeps — the document's secondary places.
+    var folderAliases: [String] = []
 }
 
 /// A folder the router thought a document could be filed in.
