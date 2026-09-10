@@ -224,7 +224,41 @@ final class AppModel {
     // Transient UI state
     var progress = IndexProgress()
     var modelStatus: LLMStatus = .unsupported("Checking…")
+    /// Something that went wrong and needs acknowledging. Shown as an alert, so
+    /// it is kept for real problems; a routine result goes to `notify` instead.
     var errorMessage: String?
+    /// The toast currently on screen, if any. Set through `notify`.
+    private(set) var notice: Notice?
+    private var noticeDismissal: Task<Void, Never>?
+
+    /// Reports that something finished, as a toast that dismisses itself. A
+    /// newer notice replaces an older one rather than queueing behind it: the
+    /// latest result is the one worth reading.
+    func notify(_ text: String, _ kind: Notice.Kind = .success) {
+        let next = Notice(text: text, kind: kind)
+        notice = next
+        noticeDismissal?.cancel()
+        noticeDismissal = Task { [weak self] in
+            try? await Task.sleep(for: kind.duration)
+            guard !Task.isCancelled, self?.notice?.id == next.id else { return }
+            self?.notice = nil
+        }
+        // A toast is easy to miss for anyone not looking at the screen, and
+        // invisible to VoiceOver unless it is announced.
+        if let app = NSApp {
+            NSAccessibility.post(element: app.mainWindow ?? app, notification: .announcementRequested,
+                                 userInfo: [.announcement: text,
+                                            .priority: NSAccessibilityPriorityLevel.medium.rawValue])
+            // A long run that finishes while another app is in front gets one
+            // Dock bounce, the Mac's own way of saying "done, when you're ready".
+            if !app.isActive { app.requestUserAttention(.informationalRequest) }
+        }
+    }
+
+    func dismissNotice() {
+        noticeDismissal?.cancel()
+        notice = nil
+    }
 
     private var searchTask: Task<Void, Never>?
     private var reloadTask: Task<Void, Never>?
@@ -337,7 +371,14 @@ final class AppModel {
 
         refreshAll()
         if persist { persistOpenLibraries() }
-        if index { await lib.indexer.indexAll() }
+        guard index else { return }
+        let indexed = await lib.indexer.indexAll()
+        // Only a library the user just added or opened reports back; the ones
+        // restored at launch catch up quietly.
+        if persist, let indexed {
+            notify(indexed == 0 ? "Opened \(lib.displayName)."
+                                : "Indexed \(indexed) document\(indexed == 1 ? "" : "s") in \(lib.displayName).")
+        }
     }
 
     /// Choose a folder to index; its index lives in a `library.doctopus` inside.
@@ -679,7 +720,21 @@ final class AppModel {
     /// Rescans one library, or every open one when none is named.
     func reindex(_ lib: Library? = nil) {
         let targets = lib.map { [$0] } ?? libraries
-        Task { for lib in targets { await lib.indexer.indexAll() } }
+        Task {
+            var changed = 0
+            var ran = false
+            for lib in targets {
+                guard let n = await lib.indexer.indexAll() else { continue }
+                changed += n
+                ran = true
+            }
+            // A rescan already under way picks this request up; saying
+            // "up to date" before it finishes would be wrong.
+            guard ran else { return }
+            let scope = targets.count == 1 ? targets[0].displayName : "\(targets.count) libraries"
+            if changed == 0 { notify("\(scope) is up to date.", .info) }
+            else { notify("Indexed \(changed) new or changed document\(changed == 1 ? "" : "s") in \(scope).") }
+        }
     }
     func cancelIndexing() { Task { for lib in libraries { await lib.indexer.cancel() } } }
 
@@ -703,8 +758,14 @@ final class AppModel {
 
     func reprocess(_ rows: [DocumentRow]) {
         Task {
+            var n = 0
             for (lib, rows) in grouped(rows) {
-                await lib.indexer.reprocess(ids: rows.map(\.doc))
+                n += await lib.indexer.reprocess(ids: rows.map(\.doc))
+            }
+            switch n {
+            case 0: notify("Nothing to reprocess — those files are no longer on disk.", .info)
+            case 1: notify("Reprocessed “\(rows.first?.displayTitle ?? "document")”.")
+            default: notify("Reprocessed \(n) documents.")
             }
         }
     }
@@ -733,7 +794,7 @@ final class AppModel {
                 total += ids.count
             }
             guard !work.isEmpty else {
-                errorMessage = "There is nothing indexed yet."
+                notify("There is nothing indexed yet.", .info)
                 return
             }
             analyze(work, subject: "\(total) documents")
@@ -759,19 +820,30 @@ final class AppModel {
             // Re-probing costs a round trip, but a run that just failed is
             // exactly when the status shown in Settings is worth correcting.
             modelStatus = await intelligence.status()
-            errorMessage = Self.describe(combined, subject: subject)
+            report(combined, subject: subject)
         }
     }
 
-    private static func describe(_ s: Indexer.AnalyzeSummary, subject: String) -> String {
-        if let blocked = s.blocked { return "Could not analyze \(subject): \(blocked)" }
+    /// A run that never started, or one where the model answered nothing at
+    /// all, is a problem to acknowledge. Anything else is a result, however
+    /// partial, and goes by as a toast.
+    private func report(_ s: Indexer.AnalyzeSummary, subject: String) {
+        if let blocked = s.blocked {
+            errorMessage = "Could not analyze \(subject): \(blocked)"
+            return
+        }
         if s.updated == 0, s.failed == 0 {
-            return "Nothing to analyze — no indexed text in \(subject)."
+            notify("Nothing to analyze — no indexed text in \(subject).", .info)
+            return
+        }
+        if s.updated == 0 {
+            errorMessage = "The model did not answer for any of \(subject). Check its status in Settings › Intelligence."
+            return
         }
         var parts = ["Analyzed \(s.updated) document\(s.updated == 1 ? "" : "s")"]
         if s.skipped > 0 { parts.append("\(s.skipped) had no text") }
         if s.failed > 0 { parts.append("\(s.failed) the model could not answer for") }
-        return parts.joined(separator: ", ") + "."
+        notify(parts.joined(separator: ", ") + ".", s.failed > 0 ? .warning : .success)
     }
 
     /// Re-asks the configured backend whether it is reachable. The Test button
@@ -792,8 +864,8 @@ final class AppModel {
                 count += result.count
                 saved += result.saved
             }
-            if count == 0 { errorMessage = "Nothing to optimize — these files are already compact." }
-            else { errorMessage = "Optimized \(count) file\(count == 1 ? "" : "s"), saved \(ByteFormat.string(saved))." }
+            if count == 0 { notify("Nothing to optimize — these files are already compact.", .info) }
+            else { notify("Optimized \(count) file\(count == 1 ? "" : "s"), saved \(ByteFormat.string(saved)).") }
         }
     }
 
@@ -803,15 +875,19 @@ final class AppModel {
             for (lib, rows) in grouped(rows) {
                 n += await lib.indexer.rename(ids: rows.map(\.doc), template: template)
             }
-            errorMessage = n == 0 ? "No files needed renaming." : "Renamed \(n) file\(n == 1 ? "" : "s")."
+            if n == 0 { notify("No files needed renaming.", .info) }
+            else { notify("Renamed \(n) file\(n == 1 ? "" : "s").") }
         }
     }
 
     func move(_ rows: [DocumentRow], to destination: URL) {
         Task {
+            var moved = 0
             for (lib, rows) in grouped(rows) {
-                _ = await lib.indexer.move(ids: rows.map(\.doc), to: destination)
+                moved += await lib.indexer.move(ids: rows.map(\.doc), to: destination)
             }
+            if moved == 0 { notify("Those documents are already in “\(destination.lastPathComponent)”.", .info) }
+            else { notify("Moved \(moved) document\(moved == 1 ? "" : "s") to “\(destination.lastPathComponent)”.") }
         }
     }
 
@@ -834,6 +910,8 @@ final class AppModel {
                 }
             }
             refreshAll()
+            notify(rows.count == 1 ? "Moved “\(rows[0].displayTitle)” to the Trash."
+                                   : "Moved \(rows.count) documents to the Trash.")
         }
     }
 
@@ -855,7 +933,10 @@ final class AppModel {
                 }
             }
             refreshAll()
-            if made == 0 { errorMessage = "Those documents are already in that folder." }
+            if made == 0 { notify("Those documents are already in that folder.", .info) }
+            else {
+                notify("Filed \(made) document\(made == 1 ? "" : "s") in “\(folder.lastPathComponent)” as \(made == 1 ? "an alias" : "aliases").")
+            }
         }
     }
 
@@ -1057,7 +1138,7 @@ final class AppModel {
                 selection = .field(field.key, new)
             }
             refreshAll()
-            if n > 0 { errorMessage = "Renamed “\(old)” to “\(new)” on \(n) document\(n == 1 ? "" : "s")." }
+            if n > 0 { notify("Renamed “\(old)” to “\(new)” on \(n) document\(n == 1 ? "" : "s").") }
         }
     }
 
@@ -1179,7 +1260,11 @@ final class AppModel {
             errorMessage = "Open a library before importing."
             return
         }
-        Task { await lib.indexer.importFiles(urls, into: dest, movingSource: movingSource) }
+        Task {
+            let n = await lib.indexer.importFiles(urls, into: dest, movingSource: movingSource)
+            if n == 0 { errorMessage = "Nothing could be imported from \(urls.count == 1 ? "that file" : "those files")." }
+            else { notify("Imported \(n) document\(n == 1 ? "" : "s") into “\(dest.lastPathComponent)”.") }
+        }
     }
 
     /// Writes scanner output into a folder and runs it through the pipeline.

@@ -2,6 +2,8 @@ import SwiftUI
 import AppKit
 
 struct SettingsView: View {
+    @Environment(AppModel.self) private var model
+
     var body: some View {
         TabView {
             GeneralSettings().tabItem { Label("General", systemImage: "gearshape") }
@@ -12,6 +14,9 @@ struct SettingsView: View {
             IntelligenceSettings().tabItem { Label("Intelligence", systemImage: "sparkles") }
         }
         .frame(width: 620, height: 470)
+        // An analysis started from the Intelligence pane finishes while this
+        // window is in front, so it shows the result too.
+        .noticeOverlay(model)
     }
 }
 
