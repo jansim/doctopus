@@ -296,6 +296,7 @@ final class AppModel {
             batchingSort = false
         }
 
+        restoring = true
         if let explicit = explicitLibrary {
             await openLibrary(container: explicit, persist: false)
         } else {
@@ -311,8 +312,18 @@ final class AppModel {
                 await openLibrary(container: container, rootBookmark: bookmark, persist: false)
             }
         }
+        restoring = false
         persistOpenLibraries()
     }
+
+    /// Set while `bootstrap` restores the libraries open last time. Until it is
+    /// done the saved list is the only record of the ones still to come, so a
+    /// library opened from Finder meanwhile must not overwrite it.
+    private var restoring = false
+    /// Libraries part-way through opening. A restore at launch and a
+    /// double-click in Finder can race to open the same one, and both would
+    /// otherwise get past the check for an open copy while the other loads.
+    private var opening: Set<LibraryID> = []
 
     // MARK: - Libraries
 
@@ -346,6 +357,8 @@ final class AppModel {
             if persist { persistOpenLibraries() }
             return
         }
+        guard opening.insert(store.libraryID).inserted else { return }
+        defer { opening.remove(store.libraryID) }
 
         let lib = Library(store: store, bookmark: bookmark)
         lib.settings = await AppSettings.load(from: store)
@@ -390,7 +403,7 @@ final class AppModel {
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
         panel.prompt = "Choose Folder"
-        panel.message = "Choose a folder to index in place. Doctopus keeps its index in a “\(Preferences.libraryFolderName)” folder inside it — nothing else is moved or renamed."
+        panel.message = "Choose a folder to index in place. Doctopus keeps its index in “\(Preferences.libraryFolderName)” inside it — nothing else is moved or renamed."
         guard panel.runModal() == .OK, let folder = panel.url else { return }
         openLibrary(at: folder)
     }
@@ -398,10 +411,12 @@ final class AppModel {
     func openLibraryPicker() {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
-        panel.canChooseFiles = false
+        // A library is a package, which the panel counts as a file.
+        panel.canChooseFiles = true
+        panel.allowedContentTypes = [.doctopusLibrary]
         panel.allowsMultipleSelection = false
         panel.prompt = "Open Library"
-        panel.message = "Choose a “\(Preferences.libraryFolderName)” folder, or a folder that contains one."
+        panel.message = "Choose a “\(Preferences.libraryFolderName)” library, or a folder that contains one."
         guard panel.runModal() == .OK, let url = panel.url else { return }
         openLibrary(at: url)
     }
@@ -442,6 +457,7 @@ final class AppModel {
     }
 
     private func persistOpenLibraries() {
+        guard !restoring else { return }
         Preferences.libraryBookmarks = libraries.compactMap(\.bookmark)
     }
 

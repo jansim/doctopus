@@ -42,7 +42,7 @@ A high-performance, native macOS document management utility inspired by the org
 
 ### Storage
 - Canonical Disk Layer: Physical directory hierarchy containing PDFs, JPEGs, PNGs, and optional macOS Finder Aliases. If the disk layer changes, the app has to update accordingly, not show it as errors etc.
-- Library Container: each indexed folder holds its own index in a visible `library.doctopus/` directory inside it (`index.sqlite` + `meta.json`). A library is therefore self-contained and moves with its folder; several can be open at once, and the centre pane merges across them. Document paths are stored relative to the folder.
+- Library Container: each indexed folder holds its own index in a `library.doctopus` package inside it (`index.sqlite` + `meta.json`). Finder shows it as a single Doctopus document that opens the library on a double-click; Show Package Contents gets at the files. A library is therefore self-contained and moves with its folder; several can be open at once, and the centre pane merges across them. Document paths are stored relative to the folder.
 - Configuration follows the same line: tags, fields, routing rules and ingest settings live in each library, so they travel with it. What describes this Mac rather than a folder — the model backend and its endpoint, OCR concurrency, raster quality, view mode — lives in `UserDefaults`, which also keeps an API key out of a folder somebody might share.
 - Index / Metadata Layer (SQLite):
   - documents: File path, file hash, primary directory, size, compression stats, approval status.

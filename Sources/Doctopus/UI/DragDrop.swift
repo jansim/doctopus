@@ -5,6 +5,9 @@ import AppKit
 extension UTType {
     /// Private drag type for moving documents around inside the app.
     static let doctopusDocument = UTType(exportedAs: "io.doctopus.document")
+    /// A `library.doctopus`: a package, so Finder and the open panel treat it
+    /// as one item rather than a folder to browse into.
+    static let doctopusLibrary = UTType(exportedAs: "io.doctopus.library")
 }
 
 /// What travels on the pasteboard when documents are dragged. Deliberately thin
