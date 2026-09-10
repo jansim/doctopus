@@ -383,6 +383,39 @@ enum SelfTest {
             try? FileManager.default.removeItem(at: outside)
         }
 
+        print("\nIMPORT (a folder from outside the library)")
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent("doctopus-folder-\(UUID().uuidString)", isDirectory: true)
+        let deeper = folder.appendingPathComponent("Receipts/2025", isDirectory: true)
+        try? FileManager.default.createDirectory(at: deeper, withIntermediateDirectories: true)
+        let tag = UUID().uuidString.prefix(6)
+        let top = folder.appendingPathComponent("top-\(tag).pdf")
+        let nested = deeper.appendingPathComponent("nested-\(tag).pdf")
+        if rows.count >= 2, let one = try? Data(contentsOf: rows[0].url),
+           let two = try? Data(contentsOf: rows[1].url) {
+            try? one.write(to: top)
+            try? two.write(to: nested)
+            // Neither is a document: one is not a type Doctopus reads, the
+            // other is hidden, the way a Finder or sync-tool leftover is.
+            try? Data("notes".utf8).write(to: folder.appendingPathComponent("notes.txt"))
+            try? one.write(to: deeper.appendingPathComponent(".hidden-\(tag).pdf"))
+
+            let inbox = root.appendingPathComponent("Inbox")
+            let result = await indexer.importFiles([folder], into: inbox)
+            let arrived = ((try? await store.listDocuments(selection: .all, query: SearchQuery(""),
+                                                           sort: .added, ascending: false)) ?? [])
+                .filter { $0.filename.contains(tag) }
+            print("  imported \(result.imported): \(arrived.map(\.filename).sorted().joined(separator: ", "))")
+            Check.that("importing a folder brings in the documents at every depth, and only those",
+                       result.imported == 2 && arrived.count == 2
+                           && arrived.allSatisfy { $0.directory == Store.canonical(inbox.path) },
+                       "\(result.imported) imported, \(arrived.count) indexed")
+            Check.that("importing a folder leaves the folder alone",
+                       [top, nested].allSatisfy { FileManager.default.fileExists(atPath: $0.path) })
+            for row in arrived { try? FileManager.default.removeItem(at: row.url) }
+        }
+        try? FileManager.default.removeItem(at: folder)
+
         await fileSafety(store: store, indexer: indexer, settings: settings, root: root)
 
         print("\nMODEL BACKENDS")

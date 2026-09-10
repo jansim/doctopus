@@ -182,13 +182,8 @@ struct DoctopusCommands: Commands {
     }
 
     private func importPanel() {
-        let panel = NSOpenPanel()
-        panel.allowsMultipleSelection = true
-        panel.canChooseDirectories = false
-        panel.allowedContentTypes = [.pdf, .png, .jpeg]
-        panel.prompt = "Import"
-        guard panel.runModal() == .OK else { return }
-        model.importFiles(panel.urls, into: nil)
+        guard let urls = ImportPanel.choose() else { return }
+        model.importFiles(urls, into: nil)
     }
 }
 

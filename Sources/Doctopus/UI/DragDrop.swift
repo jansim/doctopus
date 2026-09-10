@@ -49,6 +49,25 @@ extension AppModel {
         return documents.filter { dropped.contains($0.id) }
     }
 
+    /// Files and folders dragged in from outside the app. A library opens; a
+    /// folder is imported as the documents inside it, however deep; a file is
+    /// imported if Doctopus can read it. Returns false when there is nothing
+    /// to take, so the drop snaps back.
+    func handleDroppedFiles(_ urls: [URL]) -> Bool {
+        let libraries = urls.filter { $0.lastPathComponent.hasSuffix(".doctopus") }
+        let imports = urls.filter { url in
+            guard !url.lastPathComponent.hasSuffix(".doctopus") else { return false }
+            return (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true
+                || FileScanner.supportedExtensions.contains(url.pathExtension.lowercased())
+        }
+        guard !libraries.isEmpty || !imports.isEmpty else { return false }
+        for library in libraries { openLibrary(at: library) }
+        // No explicit destination: a drop lands in the selected folder and
+        // stays there, or in the Inbox and gets routed from it.
+        if !imports.isEmpty { importFiles(imports, into: nil) }
+        return true
+    }
+
     /// Handles a drop on a sidebar row. Returns false when nothing was done, so
     /// the drop animation snaps back.
     @discardableResult

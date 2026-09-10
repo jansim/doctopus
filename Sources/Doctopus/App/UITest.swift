@@ -54,8 +54,9 @@ enum UITest {
             await uiStatePersists(model)
             await sidebarShowsBothTagSystems(model, snapshots: snapshots)
             await secondLibraryMerges(model, alongside: library, snapshots: snapshots)
-            // Last: it imports documents, which the checks above count.
+            // Last: they import documents, which the checks above count.
             await reviewPanelFiles(model, snapshots: snapshots)
+            await droppingAFolderImportsIt(model)
             Check.finish("ui checks")
         }
         app.run()
@@ -568,7 +569,56 @@ enum UITest {
         model.setSort(.docDate, ascending: false)
     }
 
+    /// Regression: a drop onto the document pane only took files of a type
+    /// Doctopus reads, so a folder dragged in from Finder bounced straight
+    /// back. It is driven through AppKit's own drag entry points, since what
+    /// broke was what the drop target accepts.
+    private static func droppingAFolderImportsIt(_ model: AppModel) async {
+        let fm = FileManager.default
+        model.selection = .all
+        let size = NSSize(width: 760, height: 420)
+        let (window, host) = host(DocumentListView().environment(model), size: size)
+        defer { window.orderOut(nil) }
+        try? await Task.sleep(for: .seconds(1))
+
+        let folder = fm.temporaryDirectory.appendingPathComponent("doctopus-drop-\(UUID().uuidString)")
+        let nested = folder.appendingPathComponent("Receipts/2025", isDirectory: true)
+        try? fm.createDirectory(at: nested, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: folder) }
+        let tag = String(UUID().uuidString.prefix(6))
+        for (i, row) in model.documents.prefix(2).enumerated() {
+            try? fm.copyItem(at: row.url, to: (i == 0 ? folder : nested)
+                .appendingPathComponent("dropped-\(tag)-\(i).pdf"))
+        }
+
+        let pasteboard = NSPasteboard(name: .init("doctopus-uitest-\(UUID().uuidString)"))
+        defer { pasteboard.releaseGlobally() }
+        pasteboard.clearContents()
+        pasteboard.writeObjects([folder as NSURL])
+        let drag = SyntheticDrag(pasteboard: pasteboard, window: window,
+                                 at: NSPoint(x: size.width / 2, y: size.height / 2))
+        // SwiftUI registers a subview of the hosting view for drops, not the
+        // hosting view itself.
+        guard let target = dropTarget(in: host) else {
+            Check.that("dropping a folder imports the documents inside it", false, "no drop target"); return
+        }
+        let accepted = target.draggingEntered(drag) != [] && target.draggingUpdated(drag) != []
+            && target.prepareForDragOperation(drag) && target.performDragOperation(drag)
+        target.concludeDragOperation(drag)
+
+        let arrived = await settle({ model.documents.filter { $0.filename.contains(tag) }.count == 2 },
+                                   timeout: 30)
+        Check.that("dropping a folder imports the documents inside it", accepted && arrived,
+                   "accepted \(accepted), \(model.documents.filter { $0.filename.contains(tag) }.count) of 2 arrived")
+        for row in model.documents where row.filename.contains(tag) { try? fm.removeItem(at: row.url) }
+    }
+
     // MARK: - Harness
+
+    private static func dropTarget(in view: NSView) -> NSView? {
+        if !view.registeredDraggedTypes.isEmpty { return view }
+        return view.subviews.lazy.compactMap { dropTarget(in: $0) }.first
+    }
 
     private static func host<V: View>(_ view: V, size: NSSize) -> (NSWindow, NSView) {
         let host = NSHostingView(rootView: view)
@@ -673,4 +723,35 @@ enum UITest {
         try? png.write(to: URL(fileURLWithPath: path))
         print("  snapshot: \(path)")
     }
+}
+
+/// The least of a drag session AppKit hands a drop target: a pasteboard, a
+/// place and an operation. Everything about the drag image is inert.
+private final class SyntheticDrag: NSObject, NSDraggingInfo {
+    let draggingPasteboard: NSPasteboard
+    let draggingLocation: NSPoint
+    private weak var window: NSWindow?
+
+    init(pasteboard: NSPasteboard, window: NSWindow, at point: NSPoint) {
+        draggingPasteboard = pasteboard
+        draggingLocation = point
+        self.window = window
+    }
+
+    var draggingDestinationWindow: NSWindow? { window }
+    var draggingSourceOperationMask: NSDragOperation { .copy }
+    var draggedImageLocation: NSPoint { draggingLocation }
+    var draggedImage: NSImage? { nil }
+    var draggingSource: Any? { nil }
+    var draggingSequenceNumber: Int { 1 }
+    var draggingFormation: NSDraggingFormation = .default
+    var animatesToDestination = false
+    var numberOfValidItemsForDrop = 1
+    var springLoadingHighlight: NSSpringLoadingHighlight { .none }
+    func slideDraggedImage(to screenPoint: NSPoint) {}
+    func resetSpringLoading() {}
+    func enumerateDraggingItems(options enumOpts: NSDraggingItemEnumerationOptions = [],
+                                for view: NSView?, classes classArray: [AnyClass],
+                                searchOptions: [NSPasteboard.ReadingOptionKey: Any] = [:],
+                                using block: (NSDraggingItem, Int, UnsafeMutablePointer<ObjCBool>) -> Void) {}
 }

@@ -48,6 +48,28 @@ enum FileScanner {
         return out
     }
 
+    /// The documents behind files and folders handed to an import. A file is
+    /// kept if Doctopus can read it; a folder is walked for the ones inside it,
+    /// at any depth, with the same rules as a library scan. A package — an app,
+    /// a Pages file, another library — is one thing rather than a folder, and
+    /// has nothing to import.
+    static func importable(_ urls: [URL]) -> [URL] {
+        var out: [URL] = []
+        for url in urls {
+            let v = try? url.resourceValues(forKeys: [.isDirectoryKey, .isPackageKey])
+            if v?.isDirectory == true {
+                guard v?.isPackage != true, !url.lastPathComponent.hasSuffix(".doctopus") else { continue }
+                // In the order Finder would list them, so an import of a
+                // numbered series arrives in its numbering.
+                out += scan(root: url).map(\.url)
+                    .sorted { $0.path.localizedStandardCompare($1.path) == .orderedAscending }
+            } else if supportedExtensions.contains(url.pathExtension.lowercased()) {
+                out.append(url)
+            }
+        }
+        return out
+    }
+
     /// Streaming SHA-256 so a 500 MB PDF never lands in memory.
     static func hash(_ url: URL) -> String? {
         guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }

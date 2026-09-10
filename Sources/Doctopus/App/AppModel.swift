@@ -1437,7 +1437,13 @@ final class AppModel {
         Task {
             let result = await lib.indexer.importFiles(urls, into: dest, movingSource: movingSource,
                                                        route: chosen == nil)
-            if result.imported == 0, result.alreadyInLibrary > 0 {
+            if result.imported == 0, result.alreadyInLibrary == 0, result.failed == 0 {
+                // Only a folder can come to nothing: files are filtered by type
+                // before they get this far.
+                notify(urls.count == 1
+                       ? "There are no PDFs or images in “\(urls[0].lastPathComponent)”."
+                       : "There are no PDFs or images in those folders.", .info)
+            } else if result.imported == 0, result.alreadyInLibrary > 0 {
                 notify(result.alreadyInLibrary == 1
                        ? "That file is already in the library, so it was indexed where it is."
                        : "Those files are already in the library, so they were indexed where they are.", .info)

@@ -44,12 +44,7 @@ struct DocumentListView: View {
             return .handled
         }
         .dropDestination(for: URL.self) { urls, _ in
-            let supported = urls.filter { FileScanner.supportedExtensions.contains($0.pathExtension.lowercased()) }
-            guard !supported.isEmpty else { return false }
-            // No explicit destination: a drop lands in the selected folder and
-            // stays there, or in the Inbox and gets routed from it.
-            model.importFiles(supported, into: nil)
-            return true
+            model.handleDroppedFiles(urls)
         } isTargeted: { dropTargeted = $0 }
         .overlay {
             if dropTargeted {
@@ -585,13 +580,8 @@ private struct BackgroundMenu: View {
     }
 
     private func importFiles() {
-        let panel = NSOpenPanel()
-        panel.allowsMultipleSelection = true
-        panel.canChooseDirectories = false
-        panel.allowedContentTypes = [.pdf, .png, .jpeg]
-        panel.prompt = "Import"
-        guard panel.runModal() == .OK else { return }
-        model.importFiles(panel.urls, into: nil)
+        guard let urls = ImportPanel.choose() else { return }
+        model.importFiles(urls, into: nil)
     }
 }
 

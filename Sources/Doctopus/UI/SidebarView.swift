@@ -334,13 +334,8 @@ private struct FolderRow: View {
     }
 
     private func importHere() {
-        let panel = NSOpenPanel()
-        panel.allowsMultipleSelection = true
-        panel.canChooseDirectories = false
-        panel.allowedContentTypes = [.pdf, .png, .jpeg]
-        panel.prompt = "Import"
-        guard panel.runModal() == .OK else { return }
-        model.importFiles(panel.urls, into: URL(fileURLWithPath: node.path))
+        guard let urls = ImportPanel.choose() else { return }
+        model.importFiles(urls, into: URL(fileURLWithPath: node.path))
     }
 
     private func newSubfolder() {
@@ -369,6 +364,21 @@ enum TextPrompt {
         alert.window.initialFirstResponder = field
         guard alert.runModal() == .alertFirstButtonReturn else { return nil }
         return field.stringValue.nilIfBlank
+    }
+}
+
+/// The panel behind every "Import Files…". Folders can be chosen as well, and
+/// bring in the documents inside them.
+enum ImportPanel {
+    @MainActor
+    static func choose() -> [URL]? {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = true
+        panel.canChooseDirectories = true
+        panel.allowedContentTypes = [.pdf, .png, .jpeg]
+        panel.prompt = "Import"
+        guard panel.runModal() == .OK else { return nil }
+        return panel.urls
     }
 }
 

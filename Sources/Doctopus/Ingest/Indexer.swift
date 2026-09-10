@@ -556,7 +556,10 @@ actor Indexer {
         let rootPath = store.root.path
         var madeDestination = false
 
-        for url in urls {
+        // Folders are brought in as the documents inside them, flattened into
+        // the destination: from the Inbox the router files each on its merits,
+        // which the folder it happened to arrive in says little about.
+        for url in FileScanner.importable(urls) {
             let path = Store.canonical(url.standardizedFileURL.path)
             if path == rootPath || path.hasPrefix(rootPath + "/") {
                 guard let facts = Self.facts(URL(fileURLWithPath: path)),
