@@ -22,12 +22,19 @@ enum UITest {
         let library = URL(fileURLWithPath: (root as NSString).expandingTildeInPath).standardizedFileURL
 
         Task { @MainActor in
-            let dbURL = FileManager.default.temporaryDirectory
-                .appendingPathComponent("doctopus-uitest-\(UUID().uuidString).sqlite")
-            defer { try? FileManager.default.removeItem(at: dbURL) }
+            // Work on a throwaway copy so the checked-in fixture is never
+            // written to, and keep persisted UI state out of real preferences.
+            let suite = "doctopus-uitest-\(UUID().uuidString)"
+            Preferences.defaults = UserDefaults(suiteName: suite) ?? .standard
+            defer { UserDefaults().removePersistentDomain(forName: suite) }
 
-            let model = AppModel(storeURL: dbURL)
-            _ = try? await model.store.addRoot(path: library.path, bookmark: nil)
+            let root = FileManager.default.temporaryDirectory
+                .appendingPathComponent("doctopus-uitest-\(UUID().uuidString)", isDirectory: true)
+            defer { try? FileManager.default.removeItem(at: root) }
+            try? FileManager.default.copyItem(at: library, to: root)
+            let container = root.appendingPathComponent("library.doctopus", isDirectory: true)
+
+            let model = AppModel(openingLibraryAt: container)
             await model.bootstrap()
             guard await settle({ !model.documents.isEmpty }) else {
                 print("  ✗ indexed the library"); exit(1)
@@ -43,6 +50,7 @@ enum UITest {
             await intelligencePaneDraws(model, snapshots: snapshots)
             await uiStatePersists(model)
             await sidebarShowsBothTagSystems(model, snapshots: snapshots)
+            await secondLibraryMerges(model, alongside: library, snapshots: snapshots)
             Check.finish("ui checks")
         }
         app.run()
@@ -196,14 +204,22 @@ enum UITest {
         Check.that("sort order is persisted", sort?.field == "name" && sort?.ascending == true,
                    sort.map { "\($0.field) \($0.ascending ? "ascending" : "descending")" } ?? "nothing stored")
 
+        // How documents are looked at is about this Mac rather than about a
+        // folder, so it is written to preferences and not into any library.
         model.viewMode = .gallery
         model.settings.galleryThumbnailSize = 190
-        let stored: AppSettings? = await settled(model, AppSettings.storageKey) {
-            $0.viewMode == .gallery && $0.galleryThumbnailSize == 190
+        _ = await settle {
+            Preferences.appWide.viewMode == .gallery && Preferences.appWide.galleryThumbnailSize == 190
         }
+        let stored = Preferences.appWide
         Check.that("view mode and thumbnail size are persisted",
-                   stored?.viewMode == .gallery && stored?.galleryThumbnailSize == 190,
-                   stored.map { "\($0.viewMode.rawValue) at \(Int($0.galleryThumbnailSize))" } ?? "nothing stored")
+                   stored.viewMode == .gallery && stored.galleryThumbnailSize == 190,
+                   "\(stored.viewMode.rawValue) at \(Int(stored.galleryThumbnailSize))")
+
+        let inLibrary: AppSettings? = await settled(model, AppSettings.storageKey)
+        Check.that("a library's own copy carries no app-wide settings",
+                   inLibrary?.viewMode == AppSettings().viewMode && inLibrary?.remoteAPIKey == "",
+                   inLibrary.map { "library blob says \($0.viewMode.rawValue)" } ?? "nothing stored")
 
         // Regression: `AppSettings` decoded key by key or not at all, and `load`
         // swallowed the failure — so the first release to add a setting reset
@@ -260,7 +276,13 @@ enum UITest {
                                               until: (T) -> Bool = { _ in true }) async -> T? {
         var last: T?
         for _ in 0..<20 {
-            if let raw = try? await model.store.setting(key), let data = raw.data(using: .utf8),
+            // Column/collapsed/sort state lives in UserDefaults now; the settings
+            // blob still lives in the library's database.
+            var raw = Preferences.uiState(key)
+            if raw == nil, let store = model.activeLibrary?.store {
+                raw = (try? await store.setting(key)) ?? nil
+            }
+            if let raw, let data = raw.data(using: .utf8),
                let decoded = try? JSONDecoder().decode(T.self, from: data) {
                 last = decoded
                 if until(decoded) { return decoded }
@@ -308,6 +330,84 @@ enum UITest {
         // The index is a throwaway, but the Finder tag was written to the
         // user's own file and has to go back the way it was found.
         FinderTags.write(originalFinderTags, to: row.url)
+    }
+
+    /// Two libraries open at once: the centre pane merges them, the sort still
+    /// holds across the join, and tags stay with the library they were made in.
+    private static func secondLibraryMerges(_ model: AppModel, alongside fixture: URL,
+                                            snapshots: String?) async {
+        let alone = model.documents.count
+        let second = FileManager.default.temporaryDirectory
+            .appendingPathComponent("doctopus-uitest-2-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: second) }
+        try? FileManager.default.copyItem(at: fixture, to: second)
+
+        model.selection = .all
+        model.openLibrary(at: second)
+        let opened = await settle { model.libraries.count == 2 && model.documents.count > alone }
+        Check.that("a second library opens alongside the first",
+                   opened, "\(model.libraries.count) libraries, \(model.documents.count) documents")
+        guard model.libraries.count == 2 else { return }
+
+        Check.that("the centre pane merges both libraries",
+                   model.documents.count == alone * 2,
+                   "\(model.documents.count) of an expected \(alone * 2)")
+        Check.that("every row knows which library it came from",
+                   Set(model.documents.map(\.library)).count == 2)
+
+        // Rows arrive already sorted per library; the merge is what has to keep
+        // them in order once they are one list.
+        func ascendingByName() -> Bool {
+            let titles = model.documents.map(\.displayTitle)
+            guard titles.count == alone * 2 else { return false }
+            return zip(titles, titles.dropFirst()).allSatisfy {
+                $0.localizedStandardCompare($1) != .orderedDescending
+            }
+        }
+        model.setSort(.name, ascending: true)
+        let ordered = await settle(ascendingByName)
+        Check.that("the merged list is still in sort order", ordered,
+                   model.documents.map(\.displayTitle).prefix(3).joined(separator: " · "))
+
+        // A tag belongs to the library it was made in, even when the same name
+        // exists in both.
+        let newer = model.libraries[1]
+        guard let row = model.documents.first(where: { $0.library == newer.id }) else { return }
+        model.addTag("OnlyHere", to: [row])
+        _ = await settle { newer.tags.contains { $0.name == "OnlyHere" } }
+        Check.that("a tag is made in the library of the row it was dropped on",
+                   newer.tags.contains { $0.name == "OnlyHere" }
+                       && !model.libraries[0].tags.contains { $0.name == "OnlyHere" },
+                   "first: \(model.libraries[0].tags.map(\.name)), second: \(newer.tags.map(\.name))")
+
+        // The sidebar groups folders and tags per library, and the list gains a
+        // Library column — both are new shapes that only exist with two open,
+        // and a duplicated ForEach id here is a runtime trap rather than a
+        // build error.
+        let (sidebarWindow, sidebar) = host(SidebarView().environment(model),
+                                            size: NSSize(width: 260, height: 700))
+        defer { sidebarWindow.orderOut(nil) }
+        let (listWindow, listHost) = host(DocumentListView().environment(model),
+                                          size: NSSize(width: 900, height: 400))
+        defer { listWindow.orderOut(nil) }
+        try? await Task.sleep(for: .seconds(2))
+        if let dir = snapshots {
+            snapshot(sidebar, to: dir + "/sidebar-two-libraries.png")
+            snapshot(listHost, to: dir + "/list-two-libraries.png")
+        }
+        Check.that("the sidebar draws a group per library", inkedRows(sidebar) > 20,
+                   "\(inkedRows(sidebar)) rows with ink")
+        Check.that("the list draws with both libraries in it", inkedRows(listHost) > 20,
+                   "\(inkedRows(listHost)) rows with ink")
+
+        model.closeLibrary(newer)
+        let closed = await settle { model.libraries.count == 1 && model.documents.count == alone }
+        Check.that("closing a library takes its rows out of the pane", closed,
+                   "\(model.documents.count) documents left")
+        Check.that("closing a library leaves its folder on disk",
+                   FileManager.default.fileExists(
+                       atPath: second.appendingPathComponent("library.doctopus").path))
+        model.setSort(.docDate, ascending: false)
     }
 
     // MARK: - Harness

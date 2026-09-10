@@ -4,15 +4,81 @@ import Foundation
 /// here, which keeps the connection single-threaded without a mutex.
 actor Store {
     let db: Database
-    let url: URL
+    /// The `library.doctopus` directory holding the database.
+    let containerURL: URL
+    /// The library root: the folder that contains `library.doctopus`. Document
+    /// paths in the database are stored relative to this.
+    let root: URL
+    /// Stable identifier from `meta.json`, unchanged when the folder moves.
+    let libraryID: LibraryID
     var fieldCache: [Field]?
 
-    init(url: URL) throws {
-        self.url = url
-        try FileManager.default.createDirectory(
-            at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        db = try Database(path: url.path)
+    private let rootPrefix: String   // root.path + "/"
+
+    init(directory: URL) throws {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let container = URL(fileURLWithPath: Store.canonical(directory.standardizedFileURL.path),
+                            isDirectory: true)
+        self.containerURL = container
+        self.root = container.deletingLastPathComponent()
+        self.rootPrefix = container.deletingLastPathComponent().path + "/"
+        self.libraryID = try Store.loadOrCreateMeta(in: container)
+        db = try Database(path: container.appendingPathComponent("index.sqlite").path)
         try Schema.migrate(db)
+    }
+
+    // MARK: - Relative-path translation
+    //
+    // The database stores every document/alias path relative to `root` so the
+    // library is portable. Nothing outside `Store` sees a relative path: reads
+    // hand back absolute URLs, writes take them.
+
+    /// Normalises the `/var`, `/tmp`, `/etc` symlinks to their `/private/…`
+    /// targets so a path from the file-system enumerator, from FSEvents and from
+    /// the app's own `URL`s all compare equal. `/Users/…` paths are untouched.
+    nonisolated static func canonical(_ path: String) -> String {
+        for prefix in ["/var/", "/tmp/", "/etc/"] where path.hasPrefix(prefix) {
+            return "/private" + path
+        }
+        return path
+    }
+
+    /// Absolute filesystem path → root-relative. Paths outside the root (a
+    /// tag-alias folder the user pointed elsewhere) are stored as-is.
+    nonisolated func relPath(_ absolute: String) -> String {
+        let path = Store.canonical(absolute)
+        if path == root.path { return "" }
+        guard path.hasPrefix(rootPrefix) else { return path }
+        return String(path.dropFirst(rootPrefix.count))
+    }
+
+    /// Root-relative → absolute. An already-absolute value is returned untouched.
+    nonisolated func absPath(_ relative: String) -> String {
+        if relative.isEmpty { return root.path }
+        if relative.hasPrefix("/") { return relative }
+        return rootPrefix + relative
+    }
+
+    nonisolated func url(forRelative relative: String) -> URL {
+        URL(fileURLWithPath: absPath(relative))
+    }
+
+    // MARK: - meta.json
+
+    private struct Meta: Codable { var id: String; var formatVersion: Int; var name: String? }
+
+    private static func loadOrCreateMeta(in container: URL) throws -> LibraryID {
+        let metaURL = container.appendingPathComponent("meta.json")
+        if let data = try? Data(contentsOf: metaURL),
+           let meta = try? JSONDecoder().decode(Meta.self, from: data),
+           !meta.id.isEmpty {
+            return meta.id
+        }
+        let meta = Meta(id: UUID().uuidString, formatVersion: 1,
+                        name: container.deletingLastPathComponent().lastPathComponent)
+        let data = try JSONEncoder().encode(meta)
+        try? data.write(to: metaURL, options: .atomic)
+        return meta.id
     }
 
     // MARK: - Settings
@@ -26,35 +92,10 @@ actor Store {
                    [.text(key), .text(value)])
     }
 
-    // MARK: - Roots
-
-    struct Root: Identifiable, Hashable, Sendable {
-        var id: Int64
-        var path: String
-        var bookmark: Data?
-    }
-
-    func roots() throws -> [Root] {
-        try db.map("SELECT id, path, bookmark FROM roots ORDER BY path") {
-            Root(id: $0.int(0), path: $0.string(1), bookmark: nil)
-        }
-    }
-
-    func addRoot(path: String, bookmark: Data?) throws -> Int64 {
-        try db.run("INSERT OR IGNORE INTO roots(path, bookmark, added_at) VALUES(?,?,?)",
-                   [.text(path), bookmark.map { Database.Value.blob($0) } ?? .null,
-                    .double(Date().timeIntervalSince1970)])
-        return try db.first("SELECT id FROM roots WHERE path=?", [.text(path)]) { $0.int(0) } ?? 0
-    }
-
-    func removeRoot(id: Int64) throws {
-        try db.run("DELETE FROM roots WHERE id=?", [.int(id)])
-    }
-
     // MARK: - Document ingest
 
     struct FileFacts: Sendable {
-        var rootID: Int64
+        /// Absolute filesystem path; `Store` stores it relative to the root.
         var path: String
         var size: Int64
         var mtime: Date
@@ -65,12 +106,13 @@ actor Store {
     /// the content changed (and therefore needs re-OCR).
     func upsertDocument(_ f: FileFacts) throws -> (id: Int64, isNew: Bool, changed: Bool) {
         let url = URL(fileURLWithPath: f.path)
-        let dir = url.deletingLastPathComponent().path
+        let relative = relPath(f.path)
+        let dir = relPath(url.deletingLastPathComponent().path)
         let name = url.lastPathComponent
         let ext = url.pathExtension.lowercased()
 
         let existing = try db.first(
-            "SELECT id, size, mtime, ocr_state FROM documents WHERE path=?", [.text(f.path)]
+            "SELECT id, size, mtime, ocr_state FROM documents WHERE path=?", [.text(relative)]
         ) { ($0.int(0), $0.int(1), $0.double(2), $0.int(3)) }
 
         if let (id, size, mtime, state) = existing {
@@ -86,24 +128,24 @@ actor Store {
         }
 
         let id = try db.run("""
-            INSERT INTO documents(root_id, path, directory, filename, ext, size, mtime, created_at, ocr_state)
-            VALUES(?,?,?,?,?,?,?,?,0)
-            """, [.int(f.rootID), .text(f.path), .text(dir), .text(name), .text(ext),
+            INSERT INTO documents(path, directory, filename, ext, size, mtime, created_at, ocr_state)
+            VALUES(?,?,?,?,?,?,?,0)
+            """, [.text(relative), .text(dir), .text(name), .text(ext),
                   .int(f.size), .double(f.mtime.timeIntervalSince1970),
                   .double(f.created.timeIntervalSince1970)])
         return (id, true, true)
     }
 
     /// Disk is the source of truth: a vanished path that reappears elsewhere with
-    /// the same content is a move, not a deletion.
-    func reconcileMissing(rootID: Int64, seenPaths: Set<String>) throws -> Int {
-        var stale: [(Int64, String)] = []
-        try db.query("SELECT id, path FROM documents WHERE root_id=? AND missing=0", [.int(rootID)]) { row in
-            let p = row.string(1)
-            if !seenPaths.contains(p) { stale.append((row.int(0), p)) }
+    /// the same content is a move, not a deletion. `seenPaths` are absolute.
+    func reconcileMissing(seenPaths: Set<String>) throws -> Int {
+        let seenRelative = Set(seenPaths.map { relPath($0) })
+        var stale: [Int64] = []
+        try db.query("SELECT id, path FROM documents WHERE missing=0") { row in
+            if !seenRelative.contains(row.string(1)) { stale.append(row.int(0)) }
         }
         let now = Date().timeIntervalSince1970
-        for (id, _) in stale {
+        for id in stale {
             try db.run("UPDATE documents SET missing=1, missing_since=COALESCE(missing_since,?) WHERE id=?",
                        [.double(now), .int(id)])
         }
@@ -111,24 +153,25 @@ actor Store {
     }
 
     /// Reattaches a missing row to a new path when the content hash matches,
-    /// so a Finder move keeps all metadata. Returns true if it was a move.
-    func relinkByHash(hash: String, newPath: String, rootID: Int64) throws -> Int64? {
+    /// so a Finder move keeps all metadata. `newPath` is absolute.
+    func relinkByHash(hash: String, newPath: String) throws -> Int64? {
         let match = try db.first(
             "SELECT id FROM documents WHERE hash=? AND missing=1 LIMIT 1", [.text(hash)],
             { $0.int(0) })
         guard let id = match else { return nil }
         let url = URL(fileURLWithPath: newPath)
         try db.run("""
-            UPDATE documents SET path=?, directory=?, filename=?, missing=0, missing_since=NULL, root_id=?
+            UPDATE documents SET path=?, directory=?, filename=?, missing=0, missing_since=NULL
             WHERE id=?
-            """, [.text(newPath), .text(url.deletingLastPathComponent().path),
-                  .text(url.lastPathComponent), .int(rootID), .int(id)])
+            """, [.text(relPath(newPath)), .text(relPath(url.deletingLastPathComponent().path)),
+                  .text(url.lastPathComponent), .int(id)])
         return id
     }
 
+    /// `path` is absolute.
     func markMissing(path: String) throws {
         try db.run("UPDATE documents SET missing=1, missing_since=COALESCE(missing_since,?) WHERE path=?",
-                   [.double(Date().timeIntervalSince1970), .text(path)])
+                   [.double(Date().timeIntervalSince1970), .text(relPath(path))])
     }
 
     /// Missing rows are kept for a while on purpose: they are what lets a file
@@ -152,7 +195,7 @@ actor Store {
         try db.map("""
             SELECT id, path, ext FROM documents
             WHERE ocr_state=0 AND missing=0 ORDER BY created_at DESC LIMIT ?
-            """, [.int(limit)]) { ($0.int(0), $0.string(1), $0.string(2)) }
+            """, [.int(limit)]) { ($0.int(0), absPath($0.string(1)), $0.string(2)) }
     }
 
     /// Every document still present on disk, newest first. The input for a
@@ -162,8 +205,9 @@ actor Store {
                    [.int(limit)]) { $0.int(0) }
     }
 
+    /// Absolute path of a document.
     func documentPath(_ id: Int64) throws -> String? {
-        try db.first("SELECT path FROM documents WHERE id=?", [.int(id)]) { $0.string(0) }
+        try db.first("SELECT path FROM documents WHERE id=?", [.int(id)]) { absPath($0.string(0)) }
     }
 
     // MARK: - OCR
@@ -259,7 +303,7 @@ actor Store {
             LEFT JOIN documents d ON d.id = dt.doc_id AND d.missing=0
             GROUP BY t.id ORDER BY t.name COLLATE NOCASE
             """) {
-            Tag(id: $0.int(0), name: $0.string(1), color: $0.int(2),
+            Tag(tagID: $0.int(0), name: $0.string(1), color: $0.int(2),
                 mirrors: $0.bool(3), folder: $0.stringOrNil(4), count: Int($0.int(5)))
         }
     }
@@ -299,7 +343,7 @@ actor Store {
             JOIN document_tags dt ON dt.tag_id=t.id WHERE dt.doc_id=?
             ORDER BY t.name COLLATE NOCASE
             """, [.int(docID)]) {
-            Tag(id: $0.int(0), name: $0.string(1), color: $0.int(2), mirrors: $0.bool(3), folder: $0.stringOrNil(4))
+            Tag(tagID: $0.int(0), name: $0.string(1), color: $0.int(2), mirrors: $0.bool(3), folder: $0.stringOrNil(4))
         }
     }
 
@@ -310,14 +354,15 @@ actor Store {
 
     // MARK: - Aliases
 
+    /// `path` is the absolute location of the alias file.
     func recordAlias(docID: Int64, tagID: Int64?, path: String) throws {
         try db.run("INSERT OR REPLACE INTO aliases(doc_id, tag_id, path, created_at) VALUES(?,?,?,?)",
-                   [.int(docID), .int(tagID), .text(path), .double(Date().timeIntervalSince1970)])
+                   [.int(docID), .int(tagID), .text(relPath(path)), .double(Date().timeIntervalSince1970)])
     }
 
     func aliases(for docID: Int64) throws -> [(id: Int64, tagID: Int64?, path: String)] {
         try db.map("SELECT id, tag_id, path FROM aliases WHERE doc_id=?", [.int(docID)]) {
-            ($0.int(0), $0.intOrNil(1), $0.string(2))
+            ($0.int(0), $0.intOrNil(1), absPath($0.string(2)))
         }
     }
 
@@ -326,7 +371,7 @@ actor Store {
     }
 
     func allAliasPaths() throws -> Set<String> {
-        Set(try db.map("SELECT path FROM aliases") { $0.string(0) })
+        Set(try db.map("SELECT path FROM aliases") { absPath($0.string(0)) })
     }
 
     // MARK: - Processing queue
@@ -406,11 +451,12 @@ actor Store {
 
     // MARK: - Moves & renames
 
+    /// `newPath` is absolute.
     func updatePath(_ docID: Int64, to newPath: String) throws {
         let url = URL(fileURLWithPath: newPath)
         try db.run("""
             UPDATE documents SET path=?, directory=?, filename=?, ext=?, missing=0, missing_since=NULL WHERE id=?
-            """, [.text(newPath), .text(url.deletingLastPathComponent().path),
+            """, [.text(relPath(newPath)), .text(relPath(url.deletingLastPathComponent().path)),
                   .text(url.lastPathComponent), .text(url.pathExtension.lowercased()), .int(docID)])
     }
 

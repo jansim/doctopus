@@ -10,7 +10,7 @@ extension UTType {
 /// What travels on the pasteboard when documents are dragged. Deliberately thin
 /// — the receiver looks everything else up by id.
 struct DocumentDragItem: Codable, Transferable, Hashable, Sendable {
-    var id: Int64
+    var id: DocumentRef
     var path: String
 
     init(_ row: DocumentRow) {
@@ -65,7 +65,11 @@ extension AppModel {
         case .move(let folder):
             move(dropped, to: URL(fileURLWithPath: folder))
         case .tag(let tag):
-            addTag(tag.name, to: dropped)
+            // A tag belongs to one library, so rows from any other are simply
+            // not part of this drop.
+            let mine = dropped.filter { $0.library == tag.library }
+            guard !mine.isEmpty else { return false }
+            addTag(tag.name, to: mine)
         case .field(let field, let value):
             guard confirmFieldChange(field: field, value: value, count: dropped.count) else { return false }
             setFieldValue(dropped, field: field, value: value)

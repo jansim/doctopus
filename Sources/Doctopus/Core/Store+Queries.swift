@@ -13,21 +13,26 @@ extension Store {
         switch selection {
         case .all: break
         case .inbox:
-            wheres.append("d.directory LIKE ?")
-            args.append(.text("%/Inbox"))
+            wheres.append("(d.directory = ? OR d.directory LIKE ?)")
+            args.append(.text("Inbox")); args.append(.text("%/Inbox"))
         case .queue:
             wheres.append("d.id IN (SELECT doc_id FROM processing)")
         case .folder(let path):
-            // Subtree, plus anything present here only as a Finder alias.
-            wheres.append("""
-                (d.directory = ? OR d.directory LIKE ?
-                 OR EXISTS (SELECT 1 FROM aliases a WHERE a.doc_id = d.id AND a.path LIKE ?))
-                """)
-            args.append(.text(path)); args.append(.text(path + "/%"))
-            args.append(.text(path + "/%"))
-        case .tag(let id):
+            // `path` is absolute; the database stores directories relative to root.
+            let rel = relPath(path)
+            if !rel.isEmpty {
+                // Subtree, plus anything present here only as a Finder alias.
+                wheres.append("""
+                    (d.directory = ? OR d.directory LIKE ?
+                     OR EXISTS (SELECT 1 FROM aliases a WHERE a.doc_id = d.id AND a.path LIKE ?))
+                    """)
+                args.append(.text(rel)); args.append(.text(rel + "/%"))
+                args.append(.text(rel + "/%"))
+            }
+            // rel == "" means the library root itself: no directory filter.
+        case .tag(let ref):
             wheres.append("d.id IN (SELECT doc_id FROM document_tags WHERE tag_id=?)")
-            args.append(.int(id))
+            args.append(.int(ref.tag))
         case .finderTag(let name):
             wheres.append("d.id IN (SELECT doc_id FROM finder_tags WHERE name = ? COLLATE NOCASE)")
             args.append(.text(name))
@@ -134,7 +139,8 @@ extension Store {
 
         var rows = try db.map(sql, args) { r in
             DocumentRow(
-                id: r.int(0), path: r.string(1), directory: r.string(2), filename: r.string(3),
+                doc: r.int(0), path: absPath(r.string(1)), directory: absPath(r.string(2)),
+                filename: r.string(3),
                 ext: r.string(4), size: r.int(5), originalSize: r.intOrNil(6),
                 createdAt: Date(timeIntervalSince1970: r.double(7)),
                 mtime: Date(timeIntervalSince1970: r.double(8)),
@@ -159,15 +165,15 @@ extension Store {
         }
 
         // Both tag systems, so either can be shown as a column.
-        let tagged = try tags(forDocuments: rows.map(\.id))
+        let tagged = try tags(forDocuments: rows.map(\.doc))
         for i in rows.indices {
-            rows[i].tags = tagged.own[rows[i].id] ?? []
-            rows[i].finderTags = tagged.finder[rows[i].id] ?? []
+            rows[i].tags = tagged.own[rows[i].doc] ?? []
+            rows[i].finderTags = tagged.finder[rows[i].doc] ?? []
         }
 
         // Fold every field's value into one uniform dictionary so the views
         // never need to know whether a field is built in or user-defined.
-        let custom = try customValues(for: rows.map(\.id), fields: allFields)
+        let custom = try customValues(for: rows.map(\.doc), fields: allFields)
         for i in rows.indices {
             var values: [String: String] = [:]
             for field in allFields {
@@ -178,7 +184,7 @@ extension Store {
                 default: break
                 }
             }
-            if let extra = custom[rows[i].id] { values.merge(extra) { _, new in new } }
+            if let extra = custom[rows[i].doc] { values.merge(extra) { _, new in new } }
             rows[i].values = values.compactMapValues { $0 }
         }
         return rows
@@ -198,7 +204,7 @@ extension Store {
         } else {
             let comparison = exact ? "v.value = ?" : "v.value LIKE ?"
             wheres.append("d.id IN (SELECT v.doc_id FROM field_values v WHERE v.field_id=? AND \(comparison))")
-            args.append(.int(field.id))
+            args.append(.int(field.fieldID))
             args.append(.text(exact ? value : "%\(value)%"))
         }
     }
@@ -216,7 +222,8 @@ extension Store {
             WHERE d.id=?
             """, [.int(id)], { r -> DocumentDetail in
             let row = DocumentRow(
-                id: r.int(0), path: r.string(1), directory: r.string(2), filename: r.string(3),
+                doc: r.int(0), path: absPath(r.string(1)), directory: absPath(r.string(2)),
+                filename: r.string(3),
                 ext: r.string(4), size: r.int(5), originalSize: r.intOrNil(6),
                 createdAt: Date(timeIntervalSince1970: r.double(7)),
                 mtime: Date(timeIntervalSince1970: r.double(8)),
@@ -261,35 +268,38 @@ extension Store {
 
     /// Builds the physical folder tree from the indexed directory column. Cheap
     /// enough to rebuild on every change — one grouped scan, no filesystem I/O.
-    func folderTree(roots: [String]) throws -> [FolderNode] {
+    /// Directories are stored relative to the root (`""` is the root itself);
+    /// the nodes it returns carry absolute paths.
+    func folderTree() throws -> [FolderNode] {
         var counts: [String: Int] = [:]
         try db.query("SELECT directory, COUNT(*) FROM documents WHERE missing=0 GROUP BY directory") {
             counts[$0.string(0)] = Int($0.int(1))
         }
 
         var children: [String: Set<String>] = [:]
-        for dir in counts.keys {
-            guard let root = roots.first(where: { dir == $0 || dir.hasPrefix($0 + "/") }) else { continue }
+        for dir in counts.keys where !dir.isEmpty {
             var cur = dir
-            while cur.count > root.count {
+            while !cur.isEmpty {
                 let parent = (cur as NSString).deletingLastPathComponent
+                if parent == cur { break }   // "/" is its own parent — a stray absolute path
                 children[parent, default: []].insert(cur)
                 cur = parent
             }
         }
 
-        func build(_ path: String, isRoot: Bool) -> FolderNode {
-            let kids = (children[path] ?? []).sorted { lhs, rhs in
+        func build(_ rel: String, isRoot: Bool) -> FolderNode {
+            let kids = (children[rel] ?? []).sorted { lhs, rhs in
                 (lhs as NSString).lastPathComponent.localizedStandardCompare(
                     (rhs as NSString).lastPathComponent) == .orderedAscending
             }.map { build($0, isRoot: false) }
-            let own = counts[path] ?? 0
-            return FolderNode(path: path, name: (path as NSString).lastPathComponent,
+            let own = counts[rel] ?? 0
+            return FolderNode(path: absPath(rel),
+                              name: isRoot ? root.lastPathComponent : (rel as NSString).lastPathComponent,
                               children: kids, count: own,
                               deepCount: own + kids.reduce(0) { $0 + $1.deepCount },
                               isRoot: isRoot)
         }
-        return roots.map { build($0, isRoot: true) }
+        return [build("", isRoot: true)]
     }
 
     func facets(column: String) throws -> [Facet] {
@@ -310,6 +320,13 @@ extension Store {
         var needsReview = 0
         var bytes: Int64 = 0
         var saved: Int64 = 0
+
+        /// Summed across the open libraries for the app-wide footer.
+        static func + (a: Stats, b: Stats) -> Stats {
+            Stats(total: a.total + b.total, pending: a.pending + b.pending,
+                  failed: a.failed + b.failed, needsReview: a.needsReview + b.needsReview,
+                  bytes: a.bytes + b.bytes, saved: a.saved + b.saved)
+        }
     }
 
     func stats() throws -> Stats {
@@ -326,10 +343,12 @@ extension Store {
         return s
     }
 
-    /// Distinct folders under the roots, for the "Move to…" menu.
+    /// Distinct absolute folders under the root, for the "Move to…" menu.
     func allDirectories() throws -> [String] {
         var set = Set<String>()
-        try db.query("SELECT DISTINCT directory FROM documents WHERE missing=0") { set.insert($0.string(0)) }
+        try db.query("SELECT DISTINCT directory FROM documents WHERE missing=0") {
+            set.insert(absPath($0.string(0)))
+        }
         return set.sorted()
     }
 }

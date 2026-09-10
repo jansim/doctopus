@@ -21,7 +21,7 @@ extension Store {
             SELECT id, key, name, builtin_column, icon, show_in_sidebar, show_in_list, position, enabled
             FROM fields \(filter) ORDER BY position, id
             """) {
-            Field(id: $0.int(0), key: $0.string(1), name: $0.string(2),
+            Field(fieldID: $0.int(0), key: $0.string(1), name: $0.string(2),
                   builtinColumn: $0.stringOrNil(3), icon: $0.string(4),
                   showInSidebar: $0.bool(5), showInList: $0.bool(6),
                   position: $0.int(7), enabled: $0.bool(8))
@@ -34,7 +34,7 @@ extension Store {
             UPDATE fields SET name=?, icon=?, show_in_sidebar=?, show_in_list=?, position=?, enabled=?
             WHERE id=?
             """, [.text(f.name), .text(f.icon), .bool(f.showInSidebar), .bool(f.showInList),
-                  .int(f.position), .bool(f.enabled), .int(f.id)])
+                  .int(f.position), .bool(f.enabled), .int(f.fieldID)])
     }
 
     @discardableResult
@@ -87,20 +87,20 @@ extension Store {
             return
         }
         guard let clean else {
-            try db.run("DELETE FROM field_values WHERE doc_id=? AND field_id=?", [.int(docID), .int(field.id)])
+            try db.run("DELETE FROM field_values WHERE doc_id=? AND field_id=?", [.int(docID), .int(field.fieldID)])
             return
         }
         try db.run("""
             INSERT INTO field_values(doc_id, field_id, value) VALUES(?,?,?)
             ON CONFLICT(doc_id, field_id) DO UPDATE SET value=excluded.value
-            """, [.int(docID), .int(field.id), .text(clean)])
+            """, [.int(docID), .int(field.fieldID), .text(clean)])
     }
 
     /// Custom-field values for a batch of rows, in one query.
     func customValues(for docIDs: [Int64], fields: [Field]) throws -> [Int64: [String: String]] {
         let custom = fields.filter { !$0.isBuiltin }
         guard !custom.isEmpty, !docIDs.isEmpty else { return [:] }
-        let keyByID = Dictionary(uniqueKeysWithValues: custom.map { ($0.id, $0.key) })
+        let keyByID = Dictionary(uniqueKeysWithValues: custom.map { ($0.fieldID, $0.key) })
         let placeholders = docIDs.map { _ in "?" }.joined(separator: ",")
         var out: [Int64: [String: String]] = [:]
         try db.query("SELECT doc_id, field_id, value FROM field_values WHERE doc_id IN (\(placeholders))",
@@ -124,7 +124,7 @@ extension Store {
                 WHERE v.field_id = ? AND TRIM(v.value) <> ''
                 GROUP BY v.value COLLATE NOCASE
                 ORDER BY COUNT(*) DESC, v.value COLLATE NOCASE
-                """, [.int(field.id)]) { Facet(value: $0.string(0), count: Int($0.int(1))) }
+                """, [.int(field.fieldID)]) { Facet(value: $0.string(0), count: Int($0.int(1))) }
         }
         let icons = try valueIcons(field: field)
         for i in values.indices { values[i].icon = icons[values[i].value] }
@@ -143,8 +143,8 @@ extension Store {
         // merge keeps whichever icon the target already had.
         try db.run("""
             UPDATE OR IGNORE value_icons SET value=? WHERE field_id=? AND value=?
-            """, [.text(clean), .int(field.id), .text(old)])
-        try db.run("DELETE FROM value_icons WHERE field_id=? AND value=?", [.int(field.id), .text(old)])
+            """, [.text(clean), .int(field.fieldID), .text(old)])
+        try db.run("DELETE FROM value_icons WHERE field_id=? AND value=?", [.int(field.fieldID), .text(old)])
         if let column = field.builtinColumn {
             let allowed = ["correspondent", "doc_type", "language", "amount", "intent"]
             guard allowed.contains(column) else { return 0 }
@@ -158,22 +158,22 @@ extension Store {
             try db.run("""
                 DELETE FROM field_values WHERE field_id=? AND value=? COLLATE NOCASE
                   AND doc_id IN (SELECT doc_id FROM field_values WHERE field_id=? AND value=? COLLATE NOCASE)
-                """, [.int(field.id), .text(old), .int(field.id), .text(clean)])
+                """, [.int(field.fieldID), .text(old), .int(field.fieldID), .text(clean)])
             try db.run("UPDATE field_values SET value=? WHERE field_id=? AND value=? COLLATE NOCASE",
-                       [.text(clean), .int(field.id), .text(old)])
+                       [.text(clean), .int(field.fieldID), .text(old)])
             return Int(db.changes)
         }
     }
 
     func deleteFieldValue(field: Field, value: String) throws {
-        try db.run("DELETE FROM value_icons WHERE field_id=? AND value=?", [.int(field.id), .text(value)])
+        try db.run("DELETE FROM value_icons WHERE field_id=? AND value=?", [.int(field.fieldID), .text(value)])
         if let column = field.builtinColumn {
             let allowed = ["correspondent", "doc_type", "language", "amount", "intent"]
             guard allowed.contains(column) else { return }
             try db.run("UPDATE metadata SET \(column)=NULL WHERE \(column)=? COLLATE NOCASE", [.text(value)])
         } else {
             try db.run("DELETE FROM field_values WHERE field_id=? AND value=? COLLATE NOCASE",
-                       [.int(field.id), .text(value)])
+                       [.int(field.fieldID), .text(value)])
         }
     }
 

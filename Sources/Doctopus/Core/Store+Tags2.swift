@@ -9,18 +9,18 @@ extension Store {
     func setValueIcon(field: Field, value: String, icon: String?) throws {
         guard let icon, !icon.isEmpty else {
             try db.run("DELETE FROM value_icons WHERE field_id=? AND value=?",
-                       [.int(field.id), .text(value)])
+                       [.int(field.fieldID), .text(value)])
             return
         }
         try db.run("""
             INSERT INTO value_icons(field_id, value, icon) VALUES(?,?,?)
             ON CONFLICT(field_id, value) DO UPDATE SET icon=excluded.icon
-            """, [.int(field.id), .text(value), .text(icon)])
+            """, [.int(field.fieldID), .text(value), .text(icon)])
     }
 
     func valueIcons(field: Field) throws -> [String: String] {
         var out: [String: String] = [:]
-        try db.query("SELECT value, icon FROM value_icons WHERE field_id=?", [.int(field.id)]) {
+        try db.query("SELECT value, icon FROM value_icons WHERE field_id=?", [.int(field.fieldID)]) {
             out[$0.string(0)] = $0.string(1)
         }
         return out
@@ -85,7 +85,7 @@ extension Store {
             ORDER BY t.name COLLATE NOCASE
             """, args) { row in
             own[row.int(0), default: []].append(
-                Tag(id: row.int(1), name: row.string(2), color: row.int(3), mirrors: false, folder: nil))
+                Tag(tagID: row.int(1), name: row.string(2), color: row.int(3), mirrors: false, folder: nil))
         }
 
         var finder: [Int64: [String]] = [:]

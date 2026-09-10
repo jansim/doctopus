@@ -5,41 +5,49 @@ import Foundation
 enum SelfTest {
     static func run(path: String?) {
         let raw = path ?? "Testing/DemoLibrary"
-        let root = URL(fileURLWithPath: (raw as NSString).expandingTildeInPath).standardizedFileURL
+        let source = URL(fileURLWithPath: (raw as NSString).expandingTildeInPath).standardizedFileURL
 
         let semaphore = DispatchSemaphore(value: 0)
         Task {
-            await execute(root: root)
+            await execute(source: source)
             semaphore.signal()
         }
         semaphore.wait()
     }
 
-    /// `Doctopus --add-root <folder>` — registers a folder without opening the UI.
-    static func addRoot(_ path: String) {
-        let url = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
-            .standardizedFileURL
-        let support = (try? FileManager.default.url(for: .applicationSupportDirectory,
-                                                    in: .userDomainMask, appropriateFor: nil, create: true))
-            ?? FileManager.default.temporaryDirectory
-        let dbURL = support.appendingPathComponent("Doctopus/index.sqlite")
+    /// `Doctopus --new-library <folder>` — creates a `library.doctopus` in a
+    /// folder without opening the UI, and marks it as the library to open next
+    /// launch.
+    static func newLibrary(_ path: String) {
+        let folder = URL(fileURLWithPath: (path as NSString).expandingTildeInPath).standardizedFileURL
+        let container = folder.appendingPathComponent("library.doctopus", isDirectory: true)
         let semaphore = DispatchSemaphore(value: 0)
         Task {
             defer { semaphore.signal() }
-            guard let store = try? Store(url: dbURL) else { print("✗ could not open index"); return }
-            _ = try? await store.addRoot(path: url.path, bookmark: nil)
-            print("Added \(url.path) to the index.")
+            guard (try? Store(directory: container)) != nil else {
+                print("✗ could not create library"); return
+            }
+            if let bookmark = try? folder.bookmarkData(
+                includingResourceValuesForKeys: nil, relativeTo: nil) {
+                UserDefaults.standard.set([bookmark], forKey: "openLibraries_v1")
+            }
+            print("Created \(container.path)")
         }
         semaphore.wait()
     }
 
-    private static func execute(root: URL) async {
-        let dbURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("doctopus-selftest-\(UUID().uuidString).sqlite")
-        defer { try? FileManager.default.removeItem(at: dbURL) }
+    private static func execute(source: URL) async {
+        // Work on a throwaway copy so the checked-in fixture is never written to
+        // and its library.doctopus does not end up in the tree.
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("doctopus-selftest-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        do { try FileManager.default.copyItem(at: source, to: root) }
+        catch { print("✗ could not stage library: \(error)"); exit(1) }
 
-        guard let store = try? Store(url: dbURL) else { print("✗ could not open store"); exit(1) }
-        print("Index:  \(dbURL.lastPathComponent)")
+        let container = root.appendingPathComponent("library.doctopus", isDirectory: true)
+        guard let store = try? Store(directory: container) else { print("✗ could not open store"); exit(1) }
+        print("Library: \(container.lastPathComponent)")
         print("Root:   \(root.path)\n")
 
         var settings = AppSettings()
@@ -62,7 +70,6 @@ enum SelfTest {
                               },
                               onDataChanged: {})
 
-        _ = try? await store.addRoot(path: root.path, bookmark: nil)
         for rule in Router.starterRules { _ = try? await store.upsertRule(rule) }
 
         let clock = Date()
@@ -80,7 +87,7 @@ enum SelfTest {
         var sources: Set<String> = []
         var textless: [String] = []
         for row in rows {
-            let detail = try? await store.detail(row.id)
+            let detail = try? await store.detail(row.doc)
             if let source = detail?.ocrSource { sources.insert(source) }
             if detail?.ocrWords ?? 0 == 0 { textless.append(row.filename) }
         }
@@ -100,7 +107,7 @@ enum SelfTest {
 
         print("\nDOCUMENTS")
         for row in rows {
-            guard let detail = try? await store.detail(row.id) else { continue }
+            guard let detail = try? await store.detail(row.doc) else { continue }
             print("  \(row.filename)")
             print("    title:  \(row.title ?? "—")")
             print("    from:   \(row.correspondent ?? "—")   type: \(row.docType ?? "—")   lang: \(row.language ?? "—")")
@@ -135,7 +142,7 @@ enum SelfTest {
         }
 
         print("\nFOLDER TREE")
-        let tree = (try? await store.folderTree(roots: [root.path])) ?? []
+        let tree = (try? await store.folderTree()) ?? []
         Check.that("folder tree built", !tree.isEmpty && tree[0].deepCount == stats.total)
         printTree(tree, depth: 0)
 
@@ -152,7 +159,7 @@ enum SelfTest {
         let router = Router(rules: (try? await store.rules()) ?? [], threshold: settings.routingThreshold,
                             derivedTemplate: settings.derivedTemplate, root: root, deriveWhenNoRule: true)
         for row in rows {
-            let text = (try? await store.ocrText(row.id)) ?? ""
+            let text = (try? await store.ocrText(row.doc)) ?? ""
             let findings = DocumentAnalyzer.analyze(url: row.url, text: text, fallbackDate: row.createdAt,
                                                     knownCorrespondents: [])
             let decision = router.evaluate(text: text, filename: row.filename, findings: findings,
@@ -186,9 +193,9 @@ enum SelfTest {
 
         // A custom field behaves the same way, including the merge.
         if let id = try? await store.addCustomField(name: "Project"),
-           let project = ((try? await store.fields()) ?? []).first(where: { $0.id == id }) {
+           let project = ((try? await store.fields()) ?? []).first(where: { $0.fieldID == id }) {
             for (index, row) in rows.prefix(3).enumerated() {
-                try? await store.setFieldValue(docID: row.id, field: project,
+                try? await store.setFieldValue(docID: row.doc, field: project,
                                                value: index == 0 ? "Alpha" : "Beta")
             }
             let before = (try? await store.facets(field: project)) ?? []
@@ -211,7 +218,7 @@ enum SelfTest {
             _ = FinderTags.add("Doctopus Test", to: sample.url)
             let entries = FinderTags.entries(sample.url)
             let onDisk = entries.map(\.name)
-            try? await store.indexFinderTags(docID: sample.id, entries: entries)
+            try? await store.indexFinderTags(docID: sample.doc, entries: entries)
             let listed = (try? await store.finderTags()) ?? []
             let filtered = (try? await store.listDocuments(selection: .finderTag("Doctopus Test"),
                                                            query: SearchQuery(""), sort: .added,
@@ -243,7 +250,7 @@ enum SelfTest {
             _ = FinderTags.write(before, to: sample.url)
             Check.that("removing them leaves the file as it was",
                        FinderTags.entries(sample.url) == before)
-            try? await store.indexFinderTags(docID: sample.id, entries: FinderTags.entries(sample.url))
+            try? await store.indexFinderTags(docID: sample.doc, entries: FinderTags.entries(sample.url))
         }
 
         print("\nVALUE ICONS")
@@ -266,8 +273,8 @@ enum SelfTest {
         print("\nTAG MERGE")
         let invoiceTag = (try? await store.tagID(named: "invoice")) ?? 0
         let billTag = (try? await store.tagID(named: "bills")) ?? 0
-        for row in rows.prefix(2) { try? await store.assign(tag: invoiceTag, to: row.id) }
-        for row in rows.prefix(3) { try? await store.assign(tag: billTag, to: row.id) }
+        for row in rows.prefix(2) { try? await store.assign(tag: invoiceTag, to: row.doc) }
+        for row in rows.prefix(3) { try? await store.assign(tag: billTag, to: row.doc) }
         try? await store.setTagColor(billTag, 3)
         let before = (try? await store.tags()) ?? []
         print("  before  \(before.map { "\($0.name) (\($0.count), colour \($0.color))" }.joined(separator: ", "))")
@@ -281,7 +288,7 @@ enum SelfTest {
         if let target = rows.first(where: { $0.directory.hasSuffix("Work") })?.url.deletingLastPathComponent(),
            let source = rows.first(where: { $0.directory.hasSuffix("Inbox") }) {
             if let created = try? AliasManager.createAlias(to: source.url, in: target) {
-                try? await store.recordAlias(docID: source.id, tagID: nil, path: created.path)
+                try? await store.recordAlias(docID: source.doc, tagID: nil, path: created.path)
                 let listed = (try? await store.listDocuments(selection: .folder(target.path),
                                                              query: SearchQuery(""), sort: .added,
                                                              ascending: false)) ?? []
@@ -317,14 +324,13 @@ enum SelfTest {
             .appendingPathComponent("doctopus-import-\(UUID().uuidString).pdf")
         if let sample = rows.first, let data = try? Data(contentsOf: sample.url),
            (try? data.write(to: outside)) != nil {
-            let rootID = ((try? await store.roots()) ?? []).first?.id ?? 0
             // No auto-routing: routing has its own dry run above, and this
             // should not scatter folders through the fixture library.
             var quiet = settings
             quiet.autoRouteImports = false
             quiet.deriveWhenNoRule = false
             await indexer.update(settings: quiet)
-            await indexer.importFiles([outside], into: root.appendingPathComponent("Inbox"), rootID: rootID)
+            await indexer.importFiles([outside], into: root.appendingPathComponent("Inbox"))
             let copied = ((try? await store.listDocuments(selection: .all, query: SearchQuery(""),
                                                           sort: .added, ascending: false)) ?? [])
                 .first { $0.filename == outside.lastPathComponent }
@@ -403,7 +409,7 @@ enum SelfTest {
         var noModel = settings
         noModel.llmBackend = .off
         await indexer.update(settings: noModel)
-        let blocked = await indexer.analyze(ids: rows.map(\.id))
+        let blocked = await indexer.analyze(ids: rows.map(\.doc))
         print("  analyze with no backend: \(blocked.blocked ?? "ran anyway")")
         Check.that("a manual run with no model reports why", blocked.blocked != nil)
 
@@ -431,7 +437,7 @@ enum SelfTest {
             Check.that("the configured endpoint is reachable", reachable.isReady, reachable.label)
 
             await indexer.update(settings: live)
-            let subject = Array(rows.prefix(2).map(\.id))
+            let subject = Array(rows.prefix(2).map(\.doc))
             let run = await indexer.analyze(ids: subject)
             print("  analyzed \(run.updated), skipped \(run.skipped), failed \(run.failed)"
                   + (run.blocked.map { " — blocked: \($0)" } ?? ""))

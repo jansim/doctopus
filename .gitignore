@@ -65,3 +65,7 @@ fastlane/test_output
 build/
 Testing/DemoLibrary/
 .DS_Store
+
+# A library's index lives in a visible `*.doctopus` directory inside the folder
+# it indexes; never commit one that lands in the tree.
+*.doctopus/

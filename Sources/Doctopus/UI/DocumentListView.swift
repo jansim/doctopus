@@ -193,6 +193,17 @@ private struct DocumentTableView: View {
                 .defaultVisibility(field.showInList ? .visible : .hidden)
             }
 
+            // Only worth a column once the list can hold rows from more than
+            // one place; two libraries can easily hold files of the same name.
+            TableColumn("Library") { (row: DocumentRow) in
+                Text(model.library(row.library)?.displayName ?? "—")
+                    .lineLimit(1)
+                    .foregroundStyle(.secondary)
+            }
+            .width(min: 70, ideal: 120)
+            .customizationID("library")
+            .defaultVisibility(model.libraries.count > 1 ? .visible : .hidden)
+
             TableColumn("Date", sortUsing: DocumentSort(field: .docDate)) { row in
                 Text((row.docDate ?? row.createdAt), format: .dateTime.year().month(.abbreviated).day())
                     .monospacedDigit()
@@ -251,7 +262,7 @@ private struct DocumentTableView: View {
             }
         }
         .tableStyle(.inset(alternatesRowBackgrounds: true))
-        .contextMenu(forSelectionType: Int64.self) { ids in
+        .contextMenu(forSelectionType: DocumentRef.self) { ids in
             DocumentMenu(rows: model.documents.filter { ids.contains($0.id) },
                          renameSheet: $renameSheet, tagSheet: $tagSheet)
         } primaryAction: { ids in
@@ -463,10 +474,10 @@ private struct DocumentMenu: View {
             Divider()
             Menu("Tags") {
                 Button("Add Tag…") { tagSheet = true }
-                if !model.tags.isEmpty {
+                if !model.tagNames.isEmpty {
                     Divider()
-                    ForEach(model.tags) { tag in
-                        Button(tag.name) { model.addTag(tag.name, to: rows) }
+                    ForEach(model.tagNames, id: \.self) { name in
+                        Button(name) { model.addTag(name, to: rows) }
                     }
                 }
                 Menu("Finder Tags") {

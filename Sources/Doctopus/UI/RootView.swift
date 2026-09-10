@@ -14,7 +14,7 @@ struct RootView: View {
                 .navigationSplitViewColumnWidth(min: 210, ideal: 250, max: 360)
         } detail: {
             Group {
-                if model.roots.isEmpty {
+                if model.libraries.isEmpty {
                     WelcomeView()
                 } else {
                     // Queue mode is the same browser with review affordances
@@ -51,7 +51,7 @@ struct RootView: View {
     private var toolbar: some ToolbarContent {
         ToolbarItem(placement: .navigation) {
             Menu {
-                Button("Add Folder to Index…") { model.addRoot() }
+                Button("Add Folder to Index…") { model.addLibrary() }
                 Button("Import Files…") { importFiles() }
                 ScanMenu(destination: model.contextImportDirectory)
                 Divider()
@@ -180,7 +180,7 @@ private struct SearchSuggestions: View {
     private func completions(for token: String) -> [String] {
         let prefix = String(token.dropLast()).lowercased()
         switch prefix {
-        case "tag": return model.tags.map(\.name)
+        case "tag": return model.tagNames
         case "is": return ["review", "approved", "untagged", "tagged", "pending", "failed", "optimized"]
         case "ext": return ["pdf", "png", "jpg"]
         default:
@@ -207,7 +207,7 @@ struct WelcomeView: View {
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 420)
-            Button("Choose Folder…") { model.addRoot() }
+            Button("Choose Folder…") { model.addLibrary() }
                 .controlSize(.large)
                 .buttonStyle(.borderedProminent)
         }

@@ -43,9 +43,28 @@
             <array><string>public.data</string></array>
             <key>UTTypeTagSpecification</key><dict/>
         </dict>
+        <dict>
+            <key>UTTypeIdentifier</key><string>io.doctopus.library</string>
+            <key>UTTypeDescription</key><string>Doctopus Library</string>
+            <!-- A plain, visible directory: browses as an ordinary folder in Finder. -->
+            <key>UTTypeConformsTo</key>
+            <array><string>public.directory</string></array>
+            <key>UTTypeTagSpecification</key>
+            <dict>
+                <key>public.filename-extension</key>
+                <array><string>doctopus</string></array>
+            </dict>
+        </dict>
     </array>
     <key>CFBundleDocumentTypes</key>
     <array>
+        <dict>
+            <key>CFBundleTypeName</key><string>Doctopus Library</string>
+            <key>CFBundleTypeRole</key><string>Editor</string>
+            <key>LSHandlerRank</key><string>Owner</string>
+            <key>LSItemContentTypes</key>
+            <array><string>io.doctopus.library</string></array>
+        </dict>
         <dict>
             <key>CFBundleTypeName</key><string>Document</string>
             <key>CFBundleTypeRole</key><string>Viewer</string>
