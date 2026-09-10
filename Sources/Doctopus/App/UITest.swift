@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 import QuickLookThumbnailing
+import QuickLookUI
 
 /// Headless checks for the parts of the UI that only break when they are
 /// actually on screen: hit testing and thumbnail rendering. Runs a real
@@ -115,9 +116,10 @@ enum UITest {
         if let dir = snapshots { snapshot(host, to: dir + "/gallery.png") }
 
         let cell = CGFloat(model.settings.galleryThumbnailSize)
+        let middle = NSPoint(x: 18 + cell / 2, y: size.height - (18 + cell * 0.65))
         // Middle of the first thumbnail, and its top-left corner — the corner
         // is the one that used to do nothing.
-        for (where_, point) in [("middle", NSPoint(x: 18 + cell / 2, y: size.height - (18 + cell * 0.65))),
+        for (where_, point) in [("middle", middle),
                                 ("corner", NSPoint(x: 22, y: size.height - 24))] {
             model.selectedIDs = []
             // One click, briefly: this is about a click landing, not about
@@ -127,6 +129,28 @@ enum UITest {
             }
             Check.that("clicking the \(where_) of a gallery thumbnail selects it", selected)
         }
+
+        // Regression: a double-click gesture stacked on the single-click one
+        // made SwiftUI hold every click back for the double-click interval, in
+        // case a second one followed, so a selection in the gallery trailed
+        // the mouse by half a second where the list's was instant.
+        model.selectedIDs = []
+        let start = Date()
+        post(window, at: middle)
+        let landed = await settle({ !model.selectedIDs.isEmpty }, timeout: 2, every: .milliseconds(5))
+        let elapsed = Date().timeIntervalSince(start)
+        Check.that("a gallery click selects without waiting out the double-click interval",
+                   landed && elapsed < NSEvent.doubleClickInterval * 0.6,
+                   "\(Int(elapsed * 1000)) ms, interval \(Int(NSEvent.doubleClickInterval * 1000)) ms")
+
+        // Which leaves telling a double-click apart to the tap handler.
+        model.selectedIDs = []
+        post(window, at: middle)
+        post(window, at: middle, clickCount: 2)
+        let opened = await settle({ QuickLookController.shared.isOpen }, timeout: 3)
+        Check.that("double-clicking a gallery thumbnail opens Quick Look", opened,
+                   "\(model.selectedIDs.count) selected")
+        if opened { QLPreviewPanel.shared().orderOut(nil) }
         model.selectedIDs = []
     }
 
@@ -581,13 +605,13 @@ enum UITest {
         return false
     }
 
-    private static func post(_ window: NSWindow, at point: NSPoint) {
+    private static func post(_ window: NSWindow, at point: NSPoint, clickCount: Int = 1) {
         for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
             guard let event = NSEvent.mouseEvent(
                 with: type, location: point, modifierFlags: [],
                 timestamp: ProcessInfo.processInfo.systemUptime,
                 windowNumber: window.windowNumber, context: nil,
-                eventNumber: Int.random(in: 1000...9999), clickCount: 1, pressure: 1)
+                eventNumber: Int.random(in: 1000...9999), clickCount: clickCount, pressure: 1)
             else { continue }
             // Posted rather than sent: NSTableView's mouseDown runs its own
             // tracking loop and pulls the mouseUp off the queue itself.
@@ -610,11 +634,12 @@ enum UITest {
         return value
     }
 
-    private static func settle(_ condition: () -> Bool, timeout: TimeInterval = 30) async -> Bool {
+    private static func settle(_ condition: () -> Bool, timeout: TimeInterval = 30,
+                               every interval: Duration = .milliseconds(200)) async -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
             if condition() { return true }
-            try? await Task.sleep(for: .milliseconds(200))
+            try? await Task.sleep(for: interval)
         }
         return condition()
     }
