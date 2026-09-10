@@ -45,8 +45,12 @@ actor Indexer {
 
     /// Full in-place pass over every root. Adds new files, notices changed ones,
     /// marks vanished ones missing, and relinks moves by content hash.
-    func indexAll() async {
-        guard !running else { return }
+    ///
+    /// Returns how many documents were (re)processed, or nil when a pass was
+    /// already running and this call did nothing.
+    @discardableResult
+    func indexAll() async -> Int? {
+        guard !running else { return nil }
         running = true
         cancelled = false
         defer { running = false; onProgress(IndexProgress()); onDataChanged() }
@@ -59,7 +63,7 @@ actor Indexer {
         seen.reserveCapacity(found.count)
 
         for f in found {
-            if cancelled { return }
+            if cancelled { return nil }
             seen.insert(f.url.path)
             let facts = Store.FileFacts(path: f.url.path,
                                         size: f.size, mtime: f.mtime, created: f.created)
@@ -78,7 +82,7 @@ actor Indexer {
         }
 
         onDataChanged()
-        await process(documents: toProcess, phase: "Indexing", isImport: false)
+        return await process(documents: toProcess, phase: "Indexing", isImport: false)
     }
 
     /// Targeted refresh for FSEvents batches — far cheaper than a full rescan.
@@ -153,9 +157,11 @@ actor Indexer {
 
     // MARK: - Processing
 
-    /// Runs the per-document pipeline with bounded parallelism.
-    func process(documents: [(Int64, String)], phase: String, isImport: Bool) async {
-        guard !documents.isEmpty else { return }
+    /// Runs the per-document pipeline with bounded parallelism. Returns how
+    /// many documents it got through before finishing or being cancelled.
+    @discardableResult
+    func process(documents: [(Int64, String)], phase: String, isImport: Bool) async -> Int {
+        guard !documents.isEmpty else { return 0 }
         let total = documents.count
         var done = 0
         onProgress(IndexProgress(phase: phase, done: 0, total: total))
@@ -181,6 +187,7 @@ actor Indexer {
         }
         onProgress(IndexProgress())
         onDataChanged()
+        return done
     }
 
     /// The whole per-document pipeline. Every stage degrades independently: a
@@ -366,12 +373,13 @@ actor Indexer {
     // MARK: - On-demand operations
 
     /// Re-runs the pipeline for specific documents (context menu "Reprocess").
-    func reprocess(ids: [Int64], asImport: Bool = false) async {
+    @discardableResult
+    func reprocess(ids: [Int64], asImport: Bool = false) async -> Int {
         var work: [(Int64, String)] = []
         for id in ids {
             if let path = try? await store.documentPath(id) { work.append((id, path)) }
         }
-        await process(documents: work, phase: "Reprocessing", isImport: asImport)
+        return await process(documents: work, phase: "Reprocessing", isImport: asImport)
     }
 
     // MARK: - Model enrichment
@@ -488,8 +496,9 @@ actor Indexer {
     /// as a scan staged in the temporary directory. A document dropped in from
     /// anywhere else is copied and the original left exactly where it was:
     /// importing must never relocate or delete something outside the library.
+    @discardableResult
     func importFiles(_ urls: [URL], into destination: URL,
-                     movingSource: Bool = false) async {
+                     movingSource: Bool = false) async -> Int {
         var work: [(Int64, String)] = []
         try? FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
         let rootPath = store.root.path
@@ -521,6 +530,7 @@ actor Indexer {
             }
         }
         await process(documents: work, phase: "Importing", isImport: true)
+        return work.count
     }
 
     /// Applies a naming template to documents on demand. Never automatic.

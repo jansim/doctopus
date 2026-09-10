@@ -23,6 +23,8 @@ struct RootView: View {
                     DocumentListView()
                 }
             }
+            // Over the centre pane, clear of the results bar at its foot.
+            .noticeOverlay(model, bottomPadding: 40)
             .inspector(isPresented: $showInspector) {
                 InspectorView()
                     .inspectorColumnWidth(min: 280, ideal: 340, max: 480)
@@ -37,6 +39,7 @@ struct RootView: View {
         .onReceive(NotificationCenter.default.publisher(for: .showRenameSheet)) { _ in
             if !model.selectedIDs.isEmpty { renameSheet = true }
         }
+        // Alerts are for things that went wrong; a routine result is a toast.
         .alert("Doctopus", isPresented: Binding(
             get: { model.errorMessage != nil },
             set: { if !$0 { model.errorMessage = nil } })
