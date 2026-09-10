@@ -20,6 +20,7 @@ A high-performance, native macOS document management utility inspired by the org
 - Scan-in-Place (Context Menu): Right-clicking any folder in the app’s tree and choosing Import from iPhone/iPad > Scan Documents forces the scanned output to land directly in that specific folder, bypassing auto-routing.
 - Auto-Routing Engine: Unspecified imports and inbox scans evaluate against a confidence threshold to automatically route into appropriate folders on disk:
   - Recent Processing Queue: A dedicated UI section displays recently filed items with confidence badges, applied rules/models, and an "Approved / Needs Review" status toggle.
+  - Rules are edited in Settings › Routing: what a rule looks at (text, filename, correspondent or type), its pattern, destination template, tags and confidence, and where it sits in the evaluation order. The editor shows how the pattern will be read, how many documents already in the library it matches, and where a document would land.
 - Optimization: Scans and image-heavy PDFs undergo on-device raster optimization and compression without (severely) degrading readability or stripping text layers. (think PDFSqueezer, ImageOptim, ...)
 
 ### Metadata & Search

@@ -280,6 +280,8 @@ private struct RoutingSettings: View {
     @Environment(AppModel.self) private var model
     @State private var rules: [Rule] = []
     @State private var selected: Rule.ID?
+    /// The rule open in the editor sheet — an unsaved draft when adding.
+    @State private var editing: Rule?
 
     var body: some View {
         @Bindable var model = model
@@ -311,22 +313,57 @@ private struct RoutingSettings: View {
             Divider()
 
             Table(rules, selection: $selected) {
-                TableColumn("Rule") { r in Text(r.name) }
-                TableColumn("Matches") { r in Text(r.pattern).font(.caption.monospaced()).lineLimit(1) }
-                TableColumn("Destination") { r in Text(r.destination).font(.caption.monospaced()).lineLimit(1) }
+                TableColumn("Rule") { r in
+                    Text(r.name).foregroundStyle(r.enabled ? .primary : .secondary)
+                }
+                TableColumn("Matches") { r in
+                    Text(r.pattern)
+                        .font(.caption.monospaced()).lineLimit(1)
+                        .help("\(RuleEditor.label(forField: r.field)): \(r.pattern)")
+                }
+                TableColumn("Destination") { r in
+                    Text(r.destination).font(.caption.monospaced()).lineLimit(1)
+                        .help(r.tagNames.map { "\(r.destination) · tags: \($0)" } ?? r.destination)
+                }
                 TableColumn("On") { r in
                     Toggle("", isOn: Binding(get: { r.enabled }, set: { toggle(r, $0) })).labelsHidden()
                 }
                 .width(30)
             }
+            .contextMenu(forSelectionType: Rule.ID.self) { ids in
+                if let id = ids.first, let rule = rules.first(where: { $0.id == id }) {
+                    Button("Edit…") { editing = rule }
+                    Button("Duplicate") { duplicate(rule) }
+                    Divider()
+                    Button("Move Up") { move(id, by: -1) }.disabled(rules.first?.id == id)
+                    Button("Move Down") { move(id, by: 1) }.disabled(rules.last?.id == id)
+                    Divider()
+                    Button("Delete", role: .destructive) { remove(id) }
+                }
+            } primaryAction: { ids in
+                // Double-click (or Return) opens the rule.
+                if let id = ids.first { editing = rules.first { $0.id == id } }
+            }
             .frame(minHeight: 130)
 
-            HStack {
+            HStack(spacing: 10) {
                 Button { addRule() } label: { Image(systemName: "plus") }
-                Button { removeSelected() } label: { Image(systemName: "minus") }
+                    .help("Add a rule")
+                Button { if let selected { remove(selected) } } label: { Image(systemName: "minus") }
                     .disabled(selected == nil)
+                    .help("Delete the selected rule")
+                Button { editing = selectedRule } label: { Image(systemName: "pencil") }
+                    .disabled(selected == nil)
+                    .help("Edit the selected rule")
+                Divider().frame(height: 14)
+                Button { if let selected { move(selected, by: -1) } } label: { Image(systemName: "chevron.up") }
+                    .disabled(selected == nil || rules.first?.id == selected)
+                    .help("Evaluate earlier")
+                Button { if let selected { move(selected, by: 1) } } label: { Image(systemName: "chevron.down") }
+                    .disabled(selected == nil || rules.last?.id == selected)
+                    .help("Evaluate later")
                 Spacer()
-                Text("Rules are evaluated top to bottom; the first match wins. Each library has its own.")
+                Text("Evaluated top to bottom; the first match wins. Double-click a rule to edit it.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             .buttonStyle(.borderless)
@@ -334,7 +371,15 @@ private struct RoutingSettings: View {
         }
         .task { await load() }
         .task(id: model.settingsLibrary?.id) { await load() }
+        .sheet(item: $editing) { rule in
+            if let library = model.settingsLibrary {
+                RuleEditor(rule: rule, library: library,
+                           threshold: model.settings.routingThreshold) { save($0) }
+            }
+        }
     }
+
+    private var selectedRule: Rule? { rules.first { $0.id == selected } }
 
     private func load() async {
         rules = (try? await model.settingsLibrary?.store.rules()) ?? []
@@ -343,19 +388,59 @@ private struct RoutingSettings: View {
     private func toggle(_ rule: Rule, _ on: Bool) {
         var r = rule
         r.enabled = on
-        Task { _ = try? await model.settingsLibrary?.store.upsertRule(r); await load() }
+        save(r)
     }
 
+    private func save(_ rule: Rule) {
+        guard let store = model.settingsLibrary?.store else { return }
+        Task {
+            let id = (try? await store.upsertRule(rule)) ?? rule.id
+            await load()
+            selected = id
+        }
+    }
+
+    /// A new rule is only a draft until the editor saves it, so cancelling
+    /// leaves nothing behind. It goes to the bottom of the list, where it
+    /// cannot pre-empt a rule that already works.
     private func addRule() {
-        let r = Rule(id: 0, name: "New Rule", pattern: "keyword", field: "text",
-                     destination: "Unsorted/{year}", tagNames: nil, weight: 0.85,
-                     enabled: false, priority: 0)
-        Task { _ = try? await model.settingsLibrary?.store.upsertRule(r); await load() }
+        let lowest = rules.map(\.priority).min() ?? 10
+        editing = Rule(id: 0, name: "", pattern: "", field: "text",
+                       destination: "", tagNames: nil, weight: 0.9,
+                       enabled: true, priority: lowest - 10)
     }
 
-    private func removeSelected() {
-        guard let id = selected else { return }
-        Task { try? await model.settingsLibrary?.store.deleteRule(id); await load() }
+    private func duplicate(_ rule: Rule) {
+        var copy = rule
+        copy.id = 0
+        copy.name = rule.name + " copy"
+        copy.priority = rule.priority - 1
+        editing = copy
+    }
+
+    private func remove(_ id: Rule.ID) {
+        guard let store = model.settingsLibrary?.store else { return }
+        Task {
+            try? await store.deleteRule(id)
+            if selected == id { selected = nil }
+            await load()
+        }
+    }
+
+    /// Order is priority, so moving a rule rewrites every priority to match
+    /// the new order rather than trying to squeeze one number in between.
+    private func move(_ id: Rule.ID, by offset: Int) {
+        guard let store = model.settingsLibrary?.store,
+              let index = rules.firstIndex(where: { $0.id == id }) else { return }
+        let target = index + offset
+        guard rules.indices.contains(target) else { return }
+        var ordered = rules.map(\.id)
+        ordered.swapAt(index, target)
+        Task {
+            try? await store.reorderRules(ordered)
+            await load()
+            selected = id
+        }
     }
 }
 

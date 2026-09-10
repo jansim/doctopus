@@ -168,6 +168,47 @@ enum SelfTest {
             print("  \(row.filename.padded(38)) → \(target.padded(28)) \(Int(decision.confidence * 100))%  [\(decision.rule)]")
         }
 
+        print("\nRULE EDITING")
+        let samples = (try? await store.ruleSamples()) ?? []
+        Check.that("every document is a rule sample", samples.count == stats.total,
+                   "\(samples.count)/\(stats.total)")
+        Check.that("a pattern is read the way the router will read it",
+                   Router.kind(of: "invoice, rechnung") == .words(["invoice", "rechnung"])
+                       && Router.kind(of: "^inv.*") == .regex
+                       && { if case .invalidRegex = Router.kind(of: "inv(oice") { return true }; return false }())
+        if var rule = ((try? await store.rules()) ?? []).last,
+           let payslip = rows.first(where: { $0.filename.lowercased().contains("gehalt") }) {
+            let original = rule
+            // Point the lowest rule at the payslip's filename, then move it to
+            // the top: the router has to pick up both the edit and the order.
+            rule.name = "Edited"
+            rule.field = "filename"
+            rule.pattern = "gehaltsabrechnung"
+            rule.destination = "Edited/{year}"
+            rule.weight = 0.99
+            _ = try? await store.upsertRule(rule)
+            let others = ((try? await store.rules()) ?? []).map(\.id).filter { $0 != rule.id }
+            try? await store.reorderRules([rule.id] + others)
+            let edited = (try? await store.rules()) ?? []
+            Check.that("an edited rule is saved and can be moved to the top",
+                       edited.first?.id == rule.id && edited.first?.pattern == "gehaltsabrechnung"
+                           && edited.first?.field == "filename")
+            let text = (try? await store.ocrText(payslip.doc)) ?? ""
+            let findings = DocumentAnalyzer.analyze(url: payslip.url, text: text,
+                                                    fallbackDate: payslip.createdAt, knownCorrespondents: [])
+            let decision = Router(rules: edited, threshold: settings.routingThreshold,
+                                  derivedTemplate: settings.derivedTemplate, root: root,
+                                  deriveWhenNoRule: true)
+                .evaluate(text: text, filename: payslip.filename, findings: findings, insight: nil,
+                          currentDirectory: payslip.url.deletingLastPathComponent())
+            print("  \(payslip.filename) → \(decision.destination?.path.replacingOccurrences(of: root.path + "/", with: "") ?? "(stays put)") [\(decision.rule)]")
+            Check.that("routing follows the edited rule", decision.rule == "Edited"
+                       && decision.destination?.path.contains("/Edited/") == true)
+            _ = try? await store.upsertRule(original)
+            try? await store.reorderRules(((try? await store.rules()) ?? [])
+                .sorted { $0.priority > $1.priority }.map(\.id))
+        }
+
         print("\nFIELDS")
         let fields = (try? await store.fields()) ?? []
         for field in fields {

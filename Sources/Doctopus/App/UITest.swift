@@ -48,6 +48,7 @@ enum UITest {
             await rowThumbnailIsAPage(model)
             await inspectorDraws(model, snapshots: snapshots)
             await intelligencePaneDraws(model, snapshots: snapshots)
+            await ruleEditorDraws(model, snapshots: snapshots)
             await uiStatePersists(model)
             await sidebarShowsBothTagSystems(model, snapshots: snapshots)
             await secondLibraryMerges(model, alongside: library, snapshots: snapshots)
@@ -261,6 +262,22 @@ enum UITest {
             Check.that("the \(backend.label) settings pane draws", inkedRows(host) > 20,
                        "\(inkedRows(host)) rows with ink")
         }
+    }
+
+    /// The rule editor is a sheet over a fixed-size Settings window, so a
+    /// layout that overflows it shows up as a blank or clipped pane.
+    private static func ruleEditorDraws(_ model: AppModel, snapshots: String?) async {
+        guard let library = model.libraries.first,
+              let rule = (try? await library.store.rules())?.first else {
+            Check.that("the rule editor draws", false, "no rule to edit"); return
+        }
+        let editor = RuleEditor(rule: rule, library: library,
+                                threshold: model.settings.routingThreshold) { _ in }
+        let (window, host) = host(editor.environment(model), size: NSSize(width: 540, height: 460))
+        defer { window.orderOut(nil) }
+        try? await Task.sleep(for: .seconds(1))
+        if let dir = snapshots { snapshot(host, to: dir + "/rule-editor.png") }
+        Check.that("the rule editor draws", inkedRows(host) > 20, "\(inkedRows(host)) rows with ink")
     }
 
     /// Mirrors what `AppModel` writes for the sort, which is private to it.
