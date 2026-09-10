@@ -32,18 +32,11 @@ struct Router: Sendable {
                   insight: DocumentInsight?, currentDirectory: URL) -> Decision {
         let correspondent = insight?.correspondent ?? findings.correspondent
         let docType = insight?.docType ?? findings.docType
-        let haystackText = text.lowercased()
-        let haystackName = filename.lowercased()
 
         for rule in rules where rule.enabled {
-            let subject: String
-            switch rule.field {
-            case "filename": subject = haystackName
-            case "correspondent": subject = (correspondent ?? "").lowercased()
-            case "type": subject = (docType ?? "").lowercased()
-            default: subject = haystackText + "\n" + haystackName
-            }
-            guard matches(rule.pattern, in: subject) else { continue }
+            let subject = Self.subject(for: rule.field, text: text, filename: filename,
+                                       correspondent: correspondent, docType: docType)
+            guard Self.matches(rule.pattern, in: subject) else { continue }
 
             let confidence = min(0.99, rule.weight * qualityFactor(findings, insight))
             guard confidence >= threshold else {
@@ -96,8 +89,51 @@ struct Router: Sendable {
             .map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
     }
 
+    /// What a rule's `field` points it at. Lowercased, since word matching is
+    /// case-insensitive; the rule editor's preview goes through here too, so
+    /// it can never disagree with the router about what a rule sees.
+    static func subject(for field: String, text: String, filename: String,
+                        correspondent: String?, docType: String?) -> String {
+        switch field {
+        case "filename": return filename.lowercased()
+        case "correspondent": return (correspondent ?? "").lowercased()
+        case "type": return (docType ?? "").lowercased()
+        default: return text.lowercased() + "\n" + filename.lowercased()
+        }
+    }
+
+    /// How a pattern will be read. The router decides this silently, so the
+    /// rule editor spells it out — a regex that does not compile falls back to
+    /// plain words, which is rarely what whoever typed it meant.
+    enum PatternKind: Equatable {
+        case empty
+        case words([String])
+        case regex
+        case invalidRegex(String)
+    }
+
+    static func kind(of pattern: String) -> PatternKind {
+        let p = pattern.trimmingCharacters(in: .whitespaces)
+        guard !p.isEmpty else { return .empty }
+        if p.rangeOfCharacter(from: CharacterSet(charactersIn: "^$*+?[]()|\\")) != nil {
+            do {
+                _ = try NSRegularExpression(pattern: p, options: [.caseInsensitive])
+                return .regex
+            } catch {
+                return .invalidRegex((error as NSError).localizedDescription)
+            }
+        }
+        return .words(words(in: p))
+    }
+
+    private static func words(in pattern: String) -> [String] {
+        pattern.split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
+            .filter { !$0.isEmpty }
+    }
+
     /// Substring match, or a real regex when the pattern looks like one.
-    private func matches(_ pattern: String, in subject: String) -> Bool {
+    static func matches(_ pattern: String, in subject: String) -> Bool {
         let p = pattern.trimmingCharacters(in: .whitespaces)
         guard !p.isEmpty else { return false }
         if p.rangeOfCharacter(from: CharacterSet(charactersIn: "^$*+?[]()|\\")) != nil,
@@ -109,14 +145,12 @@ struct Router: Sendable {
         // that still catches "Rechnungsnummer" for the term "rechnung", but no
         // longer fires on "Gehaltsabrechnung", where the term is buried inside
         // an unrelated compound.
-        return p.split(separator: ",").contains { term in
-            let needle = term.trimmingCharacters(in: .whitespaces).lowercased()
-            guard !needle.isEmpty else { return false }
-            return subject.startsWithWord(needle)
-        }
+        return words(in: p).contains { subject.startsWithWord($0) }
     }
 
-    private func expand(_ template: String, correspondent: String?, docType: String?, date: Date?) -> URL {
+    /// Where `template` would file a document with these attributes. Public so
+    /// the rule editor can show a destination before any document takes it.
+    func expand(_ template: String, correspondent: String?, docType: String?, date: Date?) -> URL {
         let ctx = Naming.Context(date: date, correspondent: correspondent, title: nil,
                                  docType: docType, language: nil, counter: nil,
                                  originalStem: "Unfiled", ext: "")

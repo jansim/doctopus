@@ -449,6 +449,43 @@ actor Store {
         try db.run("DELETE FROM rules WHERE id=?", [.int(id)])
     }
 
+    /// Rewrites priorities so the rules run in exactly the order given, first
+    /// to last. Spaced by ten, like field positions.
+    func reorderRules(_ ids: [Int64]) throws {
+        try db.transaction {
+            for (index, id) in ids.enumerated() {
+                try db.run("UPDATE rules SET priority=? WHERE id=?",
+                           [.int(Int64((ids.count - index) * 10)), .int(id)])
+            }
+        }
+    }
+
+    /// What a rule sees of one document, for trying a pattern out before it is
+    /// saved. Filename and extracted metadata as well as text, since a rule can
+    /// be pointed at any of them.
+    struct RuleSample: Sendable {
+        var filename: String
+        var text: String
+        var correspondent: String?
+        var docType: String?
+    }
+
+    /// The most recent documents, as rule samples. Text is read in one pass
+    /// over the FTS table rather than joined per row: `doc_id` is unindexed
+    /// there, so a join would scan it once for every document.
+    func ruleSamples(limit: Int = 5000) throws -> [RuleSample] {
+        var texts: [Int64: String] = [:]
+        try db.query("SELECT doc_id, text FROM ocr_content") { texts[$0.int(0)] = $0.string(1) }
+        return try db.map("""
+            SELECT d.id, d.filename, m.correspondent, m.doc_type FROM documents d
+            LEFT JOIN metadata m ON m.doc_id = d.id
+            WHERE d.missing=0 ORDER BY d.created_at DESC LIMIT ?
+            """, [.int(Int64(limit))]) {
+            RuleSample(filename: $0.string(1), text: texts[$0.int(0)] ?? "",
+                       correspondent: $0.stringOrNil(2), docType: $0.stringOrNil(3))
+        }
+    }
+
     // MARK: - Moves & renames
 
     /// `newPath` is absolute.
