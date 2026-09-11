@@ -260,6 +260,8 @@ extension Store {
         d.tags = try tags(for: id)
         d.tagSuggestions = try tagSuggestions(for: id)
         d.pathSuggestions = try pathSuggestions(for: id)
+        d.similarFolders = try similarFolders(for: id)
+        d.folderAliases = try folderAliases(for: id)
         d.row.finderTags = try finderTags(docID: id)
         d.aliases = try aliases(for: id).map(\.path)
         return d

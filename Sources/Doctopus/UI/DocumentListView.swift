@@ -7,15 +7,35 @@ struct DocumentListView: View {
     @Environment(AppModel.self) private var model
     @State private var renameSheet = false
     @State private var tagSheet = false
+    @State private var filingRow: DocumentRow?
     @State private var dropTargeted = false
 
     var body: some View {
-        @Bindable var model = model
+        // The approval view splits: the list on top, the selected document's
+        // review below, where what was worked out can be corrected and the
+        // folders it goes in chosen.
+        Group {
+            if model.selection.isQueueMode {
+                VSplitView {
+                    browser
+                        .frame(minHeight: 140, idealHeight: 300, maxHeight: .infinity)
+                    ReviewPanel()
+                        .frame(minHeight: 220, idealHeight: 300, maxHeight: .infinity)
+                }
+            } else {
+                browser
+            }
+        }
+        .sheet(isPresented: $renameSheet) { RenameSheet(isPresented: $renameSheet) }
+        .sheet(isPresented: $tagSheet) { AddTagSheet(isPresented: $tagSheet) }
+        .sheet(item: $filingRow) { row in FilingSheet(row: row) }
+    }
 
+    private var browser: some View {
         Group {
             switch model.viewMode {
-            case .list: DocumentTableView(renameSheet: $renameSheet, tagSheet: $tagSheet)
-            case .gallery: DocumentGalleryView(renameSheet: $renameSheet, tagSheet: $tagSheet)
+            case .list: DocumentTableView(renameSheet: $renameSheet, tagSheet: $tagSheet, filingRow: $filingRow)
+            case .gallery: DocumentGalleryView(renameSheet: $renameSheet, tagSheet: $tagSheet, filingRow: $filingRow)
             }
         }
         .overlay(alignment: .center) { emptyState }
@@ -23,8 +43,6 @@ struct DocumentListView: View {
             model.quickLook()
             return .handled
         }
-        .sheet(isPresented: $renameSheet) { RenameSheet(isPresented: $renameSheet) }
-        .sheet(isPresented: $tagSheet) { AddTagSheet(isPresented: $tagSheet) }
         .dropDestination(for: URL.self) { urls, _ in
             let supported = urls.filter { FileScanner.supportedExtensions.contains($0.pathExtension.lowercased()) }
             guard !supported.isEmpty else { return false }
@@ -111,6 +129,7 @@ private struct DocumentTableView: View {
     @Environment(AppModel.self) private var model
     @Binding var renameSheet: Bool
     @Binding var tagSheet: Bool
+    @Binding var filingRow: DocumentRow?
 
     /// Reflects the model's sort onto the headers, so the arrow is in the same
     /// place whether the order was chosen from a header or from the toolbar.
@@ -266,7 +285,7 @@ private struct DocumentTableView: View {
         .tableStyle(.inset(alternatesRowBackgrounds: true))
         .contextMenu(forSelectionType: DocumentRef.self) { ids in
             DocumentMenu(rows: model.documents.filter { ids.contains($0.id) },
-                         renameSheet: $renameSheet, tagSheet: $tagSheet)
+                         renameSheet: $renameSheet, tagSheet: $tagSheet, filingRow: $filingRow)
         } primaryAction: { ids in
             model.quickLook(startingAt: model.documents.first { ids.contains($0.id) })
         }
@@ -356,6 +375,7 @@ private struct DocumentGalleryView: View {
     @Environment(AppModel.self) private var model
     @Binding var renameSheet: Bool
     @Binding var tagSheet: Bool
+    @Binding var filingRow: DocumentRow?
 
     private var cell: CGFloat { CGFloat(model.settings.galleryThumbnailSize) }
 
@@ -370,7 +390,7 @@ private struct DocumentGalleryView: View {
                         .onTapGesture { select(row) }
                         .contextMenu {
                             DocumentMenu(rows: model.selectedIDs.contains(row.id) ? model.selectedRows : [row],
-                                         renameSheet: $renameSheet, tagSheet: $tagSheet)
+                                         renameSheet: $renameSheet, tagSheet: $tagSheet, filingRow: $filingRow)
                         }
                 }
             }
@@ -455,6 +475,7 @@ private struct DocumentMenu: View {
     let rows: [DocumentRow]
     @Binding var renameSheet: Bool
     @Binding var tagSheet: Bool
+    @Binding var filingRow: DocumentRow?
 
     var body: some View {
         if rows.isEmpty {
@@ -507,6 +528,9 @@ private struct DocumentMenu: View {
             }
             Divider()
             Button(rows.count == 1 ? "Rename…" : "Rename \(rows.count) Files…") { renameSheet = true }
+            if rows.count == 1 {
+                Button("File In…") { filingRow = rows[0] }
+            }
             Button("Move to Folder…") { model.moveToFolderPicker(rows) }
             Divider()
             Button("Reprocess") { model.reprocess(rows) }
