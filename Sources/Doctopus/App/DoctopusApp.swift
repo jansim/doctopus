@@ -60,7 +60,11 @@ struct DoctopusApp: App {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSServicesMenuRequestor {
-    var model: AppModel?
+    var model: AppModel? { didSet { openPending() } }
+    /// Libraries opened before there was a model to open them in. A library
+    /// double-clicked in Finder while Doctopus is not running is handed over
+    /// as it launches, before the window — and so the model — exists.
+    private var pendingOpens: [URL] = []
 
     // Continuity Camera. The system looks for an import item in the main menu
     // exactly once, while the app is still launching: installed any later —
@@ -77,9 +81,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSServicesMenuRequesto
 
     /// Opening a `library.doctopus` (or a folder holding one) from Finder.
     func application(_ application: NSApplication, open urls: [URL]) {
+        pendingOpens += urls
+        openPending()
+    }
+
+    private func openPending() {
         guard let model else { return }
-        for url in urls where url.hasDirectoryPath {
-            model.openLibrary(at: url)
+        let urls = pendingOpens
+        pendingOpens = []
+        // Checked on disk: a URL handed over for a package need not end in a
+        // slash, so `hasDirectoryPath` would turn it away.
+        for url in urls where (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true {
+            MainActor.assumeIsolated { model.openLibrary(at: url) }
         }
     }
 
@@ -169,13 +182,8 @@ struct DoctopusCommands: Commands {
     }
 
     private func importPanel() {
-        let panel = NSOpenPanel()
-        panel.allowsMultipleSelection = true
-        panel.canChooseDirectories = false
-        panel.allowedContentTypes = [.pdf, .png, .jpeg]
-        panel.prompt = "Import"
-        guard panel.runModal() == .OK else { return }
-        model.importFiles(panel.urls, into: nil)
+        guard let urls = ImportPanel.choose() else { return }
+        model.importFiles(urls, into: nil)
     }
 }
 

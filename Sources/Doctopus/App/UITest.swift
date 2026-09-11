@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 import QuickLookThumbnailing
+import QuickLookUI
 
 /// Headless checks for the parts of the UI that only break when they are
 /// actually on screen: hit testing and thumbnail rendering. Runs a real
@@ -53,8 +54,9 @@ enum UITest {
             await uiStatePersists(model)
             await sidebarShowsBothTagSystems(model, snapshots: snapshots)
             await secondLibraryMerges(model, alongside: library, snapshots: snapshots)
-            // Last: it imports documents, which the checks above count.
+            // Last: they import documents, which the checks above count.
             await reviewPanelFiles(model, snapshots: snapshots)
+            await droppingAFolderImportsIt(model)
             Check.finish("ui checks")
         }
         app.run()
@@ -115,9 +117,10 @@ enum UITest {
         if let dir = snapshots { snapshot(host, to: dir + "/gallery.png") }
 
         let cell = CGFloat(model.settings.galleryThumbnailSize)
+        let middle = NSPoint(x: 18 + cell / 2, y: size.height - (18 + cell * 0.65))
         // Middle of the first thumbnail, and its top-left corner — the corner
         // is the one that used to do nothing.
-        for (where_, point) in [("middle", NSPoint(x: 18 + cell / 2, y: size.height - (18 + cell * 0.65))),
+        for (where_, point) in [("middle", middle),
                                 ("corner", NSPoint(x: 22, y: size.height - 24))] {
             model.selectedIDs = []
             // One click, briefly: this is about a click landing, not about
@@ -127,6 +130,28 @@ enum UITest {
             }
             Check.that("clicking the \(where_) of a gallery thumbnail selects it", selected)
         }
+
+        // Regression: a double-click gesture stacked on the single-click one
+        // made SwiftUI hold every click back for the double-click interval, in
+        // case a second one followed, so a selection in the gallery trailed
+        // the mouse by half a second where the list's was instant.
+        model.selectedIDs = []
+        let start = Date()
+        post(window, at: middle)
+        let landed = await settle({ !model.selectedIDs.isEmpty }, timeout: 2, every: .milliseconds(5))
+        let elapsed = Date().timeIntervalSince(start)
+        Check.that("a gallery click selects without waiting out the double-click interval",
+                   landed && elapsed < NSEvent.doubleClickInterval * 0.6,
+                   "\(Int(elapsed * 1000)) ms, interval \(Int(NSEvent.doubleClickInterval * 1000)) ms")
+
+        // Which leaves telling a double-click apart to the tap handler.
+        model.selectedIDs = []
+        post(window, at: middle)
+        post(window, at: middle, clickCount: 2)
+        let opened = await settle({ QuickLookController.shared.isOpen }, timeout: 3)
+        Check.that("double-clicking a gallery thumbnail opens Quick Look", opened,
+                   "\(model.selectedIDs.count) selected")
+        if opened { QLPreviewPanel.shared().orderOut(nil) }
         model.selectedIDs = []
     }
 
@@ -544,7 +569,56 @@ enum UITest {
         model.setSort(.docDate, ascending: false)
     }
 
+    /// Regression: a drop onto the document pane only took files of a type
+    /// Doctopus reads, so a folder dragged in from Finder bounced straight
+    /// back. It is driven through AppKit's own drag entry points, since what
+    /// broke was what the drop target accepts.
+    private static func droppingAFolderImportsIt(_ model: AppModel) async {
+        let fm = FileManager.default
+        model.selection = .all
+        let size = NSSize(width: 760, height: 420)
+        let (window, host) = host(DocumentListView().environment(model), size: size)
+        defer { window.orderOut(nil) }
+        try? await Task.sleep(for: .seconds(1))
+
+        let folder = fm.temporaryDirectory.appendingPathComponent("doctopus-drop-\(UUID().uuidString)")
+        let nested = folder.appendingPathComponent("Receipts/2025", isDirectory: true)
+        try? fm.createDirectory(at: nested, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: folder) }
+        let tag = String(UUID().uuidString.prefix(6))
+        for (i, row) in model.documents.prefix(2).enumerated() {
+            try? fm.copyItem(at: row.url, to: (i == 0 ? folder : nested)
+                .appendingPathComponent("dropped-\(tag)-\(i).pdf"))
+        }
+
+        let pasteboard = NSPasteboard(name: .init("doctopus-uitest-\(UUID().uuidString)"))
+        defer { pasteboard.releaseGlobally() }
+        pasteboard.clearContents()
+        pasteboard.writeObjects([folder as NSURL])
+        let drag = SyntheticDrag(pasteboard: pasteboard, window: window,
+                                 at: NSPoint(x: size.width / 2, y: size.height / 2))
+        // SwiftUI registers a subview of the hosting view for drops, not the
+        // hosting view itself.
+        guard let target = dropTarget(in: host) else {
+            Check.that("dropping a folder imports the documents inside it", false, "no drop target"); return
+        }
+        let accepted = target.draggingEntered(drag) != [] && target.draggingUpdated(drag) != []
+            && target.prepareForDragOperation(drag) && target.performDragOperation(drag)
+        target.concludeDragOperation(drag)
+
+        let arrived = await settle({ model.documents.filter { $0.filename.contains(tag) }.count == 2 },
+                                   timeout: 30)
+        Check.that("dropping a folder imports the documents inside it", accepted && arrived,
+                   "accepted \(accepted), \(model.documents.filter { $0.filename.contains(tag) }.count) of 2 arrived")
+        for row in model.documents where row.filename.contains(tag) { try? fm.removeItem(at: row.url) }
+    }
+
     // MARK: - Harness
+
+    private static func dropTarget(in view: NSView) -> NSView? {
+        if !view.registeredDraggedTypes.isEmpty { return view }
+        return view.subviews.lazy.compactMap { dropTarget(in: $0) }.first
+    }
 
     private static func host<V: View>(_ view: V, size: NSSize) -> (NSWindow, NSView) {
         let host = NSHostingView(rootView: view)
@@ -581,13 +655,13 @@ enum UITest {
         return false
     }
 
-    private static func post(_ window: NSWindow, at point: NSPoint) {
+    private static func post(_ window: NSWindow, at point: NSPoint, clickCount: Int = 1) {
         for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
             guard let event = NSEvent.mouseEvent(
                 with: type, location: point, modifierFlags: [],
                 timestamp: ProcessInfo.processInfo.systemUptime,
                 windowNumber: window.windowNumber, context: nil,
-                eventNumber: Int.random(in: 1000...9999), clickCount: 1, pressure: 1)
+                eventNumber: Int.random(in: 1000...9999), clickCount: clickCount, pressure: 1)
             else { continue }
             // Posted rather than sent: NSTableView's mouseDown runs its own
             // tracking loop and pulls the mouseUp off the queue itself.
@@ -610,11 +684,12 @@ enum UITest {
         return value
     }
 
-    private static func settle(_ condition: () -> Bool, timeout: TimeInterval = 30) async -> Bool {
+    private static func settle(_ condition: () -> Bool, timeout: TimeInterval = 30,
+                               every interval: Duration = .milliseconds(200)) async -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
             if condition() { return true }
-            try? await Task.sleep(for: .milliseconds(200))
+            try? await Task.sleep(for: interval)
         }
         return condition()
     }
@@ -648,4 +723,35 @@ enum UITest {
         try? png.write(to: URL(fileURLWithPath: path))
         print("  snapshot: \(path)")
     }
+}
+
+/// The least of a drag session AppKit hands a drop target: a pasteboard, a
+/// place and an operation. Everything about the drag image is inert.
+private final class SyntheticDrag: NSObject, NSDraggingInfo {
+    let draggingPasteboard: NSPasteboard
+    let draggingLocation: NSPoint
+    private weak var window: NSWindow?
+
+    init(pasteboard: NSPasteboard, window: NSWindow, at point: NSPoint) {
+        draggingPasteboard = pasteboard
+        draggingLocation = point
+        self.window = window
+    }
+
+    var draggingDestinationWindow: NSWindow? { window }
+    var draggingSourceOperationMask: NSDragOperation { .copy }
+    var draggedImageLocation: NSPoint { draggingLocation }
+    var draggedImage: NSImage? { nil }
+    var draggingSource: Any? { nil }
+    var draggingSequenceNumber: Int { 1 }
+    var draggingFormation: NSDraggingFormation = .default
+    var animatesToDestination = false
+    var numberOfValidItemsForDrop = 1
+    var springLoadingHighlight: NSSpringLoadingHighlight { .none }
+    func slideDraggedImage(to screenPoint: NSPoint) {}
+    func resetSpringLoading() {}
+    func enumerateDraggingItems(options enumOpts: NSDraggingItemEnumerationOptions = [],
+                                for view: NSView?, classes classArray: [AnyClass],
+                                searchOptions: [NSPasteboard.ReadingOptionKey: Any] = [:],
+                                using block: (NSDraggingItem, Int, UnsafeMutablePointer<ObjCBool>) -> Void) {}
 }

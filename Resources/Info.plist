@@ -46,9 +46,11 @@
         <dict>
             <key>UTTypeIdentifier</key><string>io.doctopus.library</string>
             <key>UTTypeDescription</key><string>Doctopus Library</string>
-            <!-- A plain, visible directory: browses as an ordinary folder in Finder. -->
+            <!-- A package: Finder shows it as one item that opens in Doctopus
+                 on a double-click. Show Package Contents still gets at the
+                 index inside. -->
             <key>UTTypeConformsTo</key>
-            <array><string>public.directory</string></array>
+            <array><string>com.apple.package</string></array>
             <key>UTTypeTagSpecification</key>
             <dict>
                 <key>public.filename-extension</key>
@@ -62,6 +64,9 @@
             <key>CFBundleTypeName</key><string>Doctopus Library</string>
             <key>CFBundleTypeRole</key><string>Editor</string>
             <key>LSHandlerRank</key><string>Owner</string>
+            <key>LSTypeIsPackage</key><true/>
+            <!-- A document icon drawn by the system from the app icon. -->
+            <key>CFBundleTypeIconSystemGenerated</key><integer>1</integer>
             <key>LSItemContentTypes</key>
             <array><string>io.doctopus.library</string></array>
         </dict>

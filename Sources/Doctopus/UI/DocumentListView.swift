@@ -44,12 +44,7 @@ struct DocumentListView: View {
             return .handled
         }
         .dropDestination(for: URL.self) { urls, _ in
-            let supported = urls.filter { FileScanner.supportedExtensions.contains($0.pathExtension.lowercased()) }
-            guard !supported.isEmpty else { return false }
-            // No explicit destination: a drop lands in the selected folder and
-            // stays there, or in the Inbox and gets routed from it.
-            model.importFiles(supported, into: nil)
-            return true
+            model.handleDroppedFiles(urls)
         } isTargeted: { dropTargeted = $0 }
         .overlay {
             if dropTargeted {
@@ -386,8 +381,12 @@ private struct DocumentGalleryView: View {
                 ForEach(model.documents) { row in
                     GalleryCell(row: row, width: cell)
                         .draggable(DocumentDragItem(row))
-                        .onTapGesture(count: 2) { model.quickLook(startingAt: row) }
-                        .onTapGesture { select(row) }
+                        // One tap handler that reads the click count, rather
+                        // than a double-tap gesture stacked on a single-tap
+                        // one: SwiftUI holds a single tap back until a second
+                        // click can no longer follow, which left every
+                        // selection a few hundred milliseconds behind the mouse.
+                        .onTapGesture { click(row) }
                         .contextMenu {
                             DocumentMenu(rows: model.selectedIDs.contains(row.id) ? model.selectedRows : [row],
                                          renameSheet: $renameSheet, tagSheet: $tagSheet, filingRow: $filingRow)
@@ -403,6 +402,16 @@ private struct DocumentGalleryView: View {
                 .contentShape(Rectangle())
                 .onTapGesture { model.selectedIDs = [] }
                 .contextMenu { BackgroundMenu() }
+        }
+    }
+
+    /// The first click of a double-click has already selected the cell by the
+    /// time the second arrives, so the second only has to open it.
+    private func click(_ row: DocumentRow) {
+        if (NSApp.currentEvent?.clickCount ?? 1) >= 2 {
+            model.quickLook(startingAt: row)
+        } else {
+            select(row)
         }
     }
 
@@ -571,13 +580,8 @@ private struct BackgroundMenu: View {
     }
 
     private func importFiles() {
-        let panel = NSOpenPanel()
-        panel.allowsMultipleSelection = true
-        panel.canChooseDirectories = false
-        panel.allowedContentTypes = [.pdf, .png, .jpeg]
-        panel.prompt = "Import"
-        guard panel.runModal() == .OK else { return }
-        model.importFiles(panel.urls, into: nil)
+        guard let urls = ImportPanel.choose() else { return }
+        model.importFiles(urls, into: nil)
     }
 }
 
