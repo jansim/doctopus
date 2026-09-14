@@ -284,6 +284,7 @@ extension Store {
         d.folderAliases = try folderAliases(for: id)
         d.history = try history(for: id)
         d.notes = try notes(for: id)
+        d.dateCandidates = try dateCandidates(for: id)
         d.row.finderTags = try finderTags(docID: id)
         d.aliases = try aliases(for: id).map(\.path)
         return d

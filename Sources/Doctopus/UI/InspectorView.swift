@@ -135,6 +135,7 @@ private struct DetailInspector: View {
                             displayedComponents: .date)
                         .labelsHidden()
                         .datePickerStyle(.compact)
+                        .dayResolution()
                         if let source = detail.dateSource {
                             Text(dateSourceLabel(source))
                                 .font(.caption2)
@@ -681,6 +682,7 @@ private struct FieldValueRow: View {
                         displayedComponents: .date)
                         .labelsHidden()
                         .datePickerStyle(.compact)
+                        .dayResolution()
                     if !value.isEmpty {
                         Button {
                             model.setFieldValue(document, field: field, value: nil)
@@ -751,6 +753,16 @@ struct EditableRow: View {
                 .textFieldStyle(.plain)
                 .onSubmit { if draft != committed { onCommit(draft) } }
         }
+    }
+}
+
+extension View {
+    /// Puts a date control on the same clock the days are stored on. Without
+    /// it, picking 4 March east of Greenwich hands back an instant that is
+    /// still 3 March in UTC, and the day is saved one off.
+    func dayResolution() -> some View {
+        environment(\.timeZone, TimeZone(secondsFromGMT: 0) ?? .gmt)
+            .environment(\.calendar, DayDate.calendar)
     }
 }
 

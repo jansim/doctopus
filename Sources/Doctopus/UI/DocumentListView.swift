@@ -222,7 +222,10 @@ private struct DocumentTableView: View {
             .defaultVisibility(model.libraries.count > 1 ? .visible : .hidden)
 
             TableColumn("Date", sortUsing: DocumentSort(field: .docDate)) { row in
-                Text((row.docDate ?? row.createdAt), format: .dateTime.year().month(.abbreviated).day())
+                // A document date is a stored day; showing it through the local
+                // calendar is how it slips to the day before.
+                Text(row.docDate.map(DayDate.display)
+                     ?? row.createdAt.formatted(.dateTime.year().month(.abbreviated).day()))
                     .monospacedDigit()
                     .foregroundStyle(row.docDate == nil ? .secondary : .primary)
             }

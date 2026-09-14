@@ -487,7 +487,8 @@ actor Store {
                 amount=COALESCE(excluded.amount, metadata.amount),
                 amount_value=COALESCE(excluded.amount_value, metadata.amount_value)
             """, [.int(p.docID), .text(p.title), .text(p.correspondent), .text(p.docType),
-                  .text(p.language), .text(p.summary), .text(p.intent), .date(p.docDate),
+                  .text(p.language), .text(p.summary), .text(p.intent),
+                  .date(p.docDate.map { DayDate.startOfDay($0) }),
                   .text(p.dateSource), .double(p.confidence), .text(p.source), .text(p.amount),
                   .double(p.amount.flatMap { FieldType.number(from: $0) })])
         try refreshSearchIndex(p.docID)
@@ -507,10 +508,51 @@ actor Store {
         try refreshSearchIndex(docID)
     }
 
-    func setDocumentDate(_ docID: Int64, _ date: Date?) throws {
+    /// A document is issued on a day, so that is what is stored: the UTC start
+    /// of it, never an instant in a timezone nobody recorded.
+    func setDocumentDate(_ docID: Int64, _ date: Date?, source: String = "manual") throws {
         try db.run("INSERT OR IGNORE INTO metadata(doc_id) VALUES(?)", [.int(docID)])
-        try db.run("UPDATE metadata SET doc_date=?, date_source='manual' WHERE doc_id=?",
-                   [.date(date), .int(docID)])
+        try db.run("UPDATE metadata SET doc_date=?, date_source=? WHERE doc_id=?",
+                   [.date(date.map { DayDate.startOfDay($0) }), .text(source), .int(docID)])
+    }
+
+    // MARK: - Date candidates
+
+    /// Replaces the dates found for a document, best first. Keeping the ones
+    /// that were not chosen is what lets the review offer them as a click
+    /// rather than making someone retype the right one.
+    func setDateCandidates(_ candidates: [DateCandidate], for docID: Int64) throws {
+        try db.transaction {
+            try db.run("DELETE FROM date_candidates WHERE doc_id=?", [.int(docID)])
+            for (rank, c) in candidates.enumerated() {
+                try db.run("""
+                    INSERT OR IGNORE INTO date_candidates(doc_id, date, source, labelled, cue, rank)
+                    VALUES(?,?,?,?,?,?)
+                    """, [.int(docID), .date(DayDate.startOfDay(c.date)), .text(c.source),
+                          .bool(c.labelled), .text(c.cue), .int(Int64(rank))])
+            }
+        }
+    }
+
+    func dateCandidates(for docID: Int64) throws -> [DateCandidate] {
+        try db.map("""
+            SELECT date, source, labelled, cue FROM date_candidates
+            WHERE doc_id=? ORDER BY rank
+            """, [.int(docID)]) {
+            DateCandidate(date: Date(timeIntervalSince1970: $0.double(0)), source: $0.string(1),
+                          labelled: $0.bool(2), cue: $0.stringOrNil(3))
+        }
+    }
+
+    /// The language most of this library's documents are in, which is what an
+    /// automatic date order reads itself from.
+    func dominantLanguage() throws -> String? {
+        try db.first("""
+            SELECT m.language FROM metadata m
+            JOIN documents d ON d.id = m.doc_id AND d.missing=0 AND d.deleted_at IS NULL
+            WHERE m.language IS NOT NULL AND TRIM(m.language) <> ''
+            GROUP BY m.language COLLATE NOCASE ORDER BY COUNT(*) DESC LIMIT 1
+            """) { $0.stringOrNil(0) } ?? nil
     }
 
     // MARK: - Tags

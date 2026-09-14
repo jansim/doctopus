@@ -110,7 +110,7 @@ enum SelfTest {
             print("  \(row.filename)")
             print("    title:  \(row.title ?? "—")")
             print("    from:   \(row.correspondent ?? "—")   type: \(row.docType ?? "—")   lang: \(row.language ?? "—")")
-            print("    date:   \(row.docDate.map { $0.formatted(date: .abbreviated, time: .omitted) } ?? "—") (\(detail.dateSource ?? "—"))")
+            print("    date:   \(row.docDate.map(DayDate.text) ?? "—") (\(detail.dateSource ?? "—"))")
             print("    ocr:    \(detail.ocrWords ?? 0) words via \(detail.ocrSource ?? "—")"
                   + (detail.ocrConfidence.map { String(format: ", %.0f%% confidence", $0 * 100) } ?? ""))
             if let amount = detail.amount { print("    amount: \(amount)") }
@@ -528,6 +528,74 @@ enum SelfTest {
             }
             Check.that("what the API returned is stored as its own source",
                        !enriched.isEmpty && enriched.allSatisfy { $0.metadataSource == "remote" && $0.row.summary != nil })
+        }
+
+        print("\nDATES")
+        // The same numeric date, read two ways. Which one is right is the
+        // library's business, not the Mac's — that is the whole setting.
+        let ambiguous = "Rechnungsdatum: 03/04/2026"
+        let asDMY = DocumentAnalyzer.dateInText(ambiguous,
+            options: DocumentAnalyzer.Options(dateOrder: .dmy))
+        let asMDY = DocumentAnalyzer.dateInText(ambiguous,
+            options: DocumentAnalyzer.Options(dateOrder: .mdy))
+        print("  03/04/2026 as D/M/Y    \(asDMY.map(DayDate.text) ?? "—")")
+        print("  03/04/2026 as M/D/Y    \(asMDY.map(DayDate.text) ?? "—")")
+        Check.that("an ambiguous date is read the way the library says",
+                   asDMY.map(DayDate.text) == "2026-04-03" && asMDY.map(DayDate.text) == "2026-03-04")
+        Check.that("automatic takes the order from the language, not from this Mac",
+                   DateOrder.automatic.resolved(language: "en-US") == .mdy
+                       && DateOrder.automatic.resolved(language: "de") == .dmy
+                       && DateOrder.automatic.resolved(language: "ja") == .ymd)
+        Check.that("a number over twelve settles the order whatever it is set to",
+                   DocumentAnalyzer.dateInText("dated 25/12/2025",
+                       options: DocumentAnalyzer.Options(dateOrder: .mdy)).map(DayDate.text)
+                       == "2025-12-25")
+
+        // A document is never issued in the future.
+        let nextYear = DayDate.calendar.date(byAdding: .year, value: 1, to: Date())!
+        let future = "Datum: \(DayDate.text(nextYear))"
+        Check.that("a document is never issued in the future",
+                   DocumentAnalyzer.dateInText(future) == nil,
+                   DocumentAnalyzer.dateInText(future).map(DayDate.text) ?? "none")
+        Check.that("…but a field holding a due date may still be",
+                   DocumentAnalyzer.anyDate(in: future).map(DayDate.text) == DayDate.text(nextYear))
+
+        // A date in the ignore list never counts, however well labelled.
+        let letterhead = "Formular Stand: 12/01/2019 · Rechnungsdatum: 14/02/2024"
+        let ignoring = DocumentAnalyzer.Options(dateOrder: .dmy, ignoredDays: ["2019-01-12"])
+        Check.that("an ignored day is never taken as the document's date",
+                   DocumentAnalyzer.datesInText(letterhead, source: "ocr", options: ignoring)
+                       .allSatisfy { DayDate.text($0.date) != "2019-01-12" })
+
+        // Everything found is kept, labelled ones first.
+        let several = "Printed 01/02/2020. Rechnungsdatum: 14/02/2024. Paid 20/02/2024."
+        let candidates = DocumentAnalyzer.rank(
+            DocumentAnalyzer.datesInText(several, source: "ocr",
+                                         options: DocumentAnalyzer.Options(dateOrder: .dmy)))
+        print("  candidates             "
+              + candidates.map { "\(DayDate.text($0.date))\($0.labelled ? "*" : "")" }
+                  .joined(separator: ", "))
+        Check.that("every plausible date is kept, the labelled one first",
+                   candidates.count > 1 && candidates.first?.labelled == true
+                       && candidates.first.map { DayDate.text($0.date) } == "2024-02-14",
+                   "\(candidates.count) candidates")
+        Check.that("a day the month does not have is a misread, not a date",
+                   DocumentAnalyzer.dateInText("31/02/2024",
+                       options: DocumentAnalyzer.Options(dateOrder: .dmy)) == nil)
+
+        // Every stored document date is a day, so two Macs read it the same.
+        let stored = ((try? await store.listDocuments(selection: .all, query: SearchQuery(""),
+                                                      sort: .added, ascending: false)) ?? [])
+            .compactMap(\.docDate)
+        Check.that("every stored date is the start of a day",
+                   stored.allSatisfy { $0 == DayDate.startOfDay($0) },
+                   "\(stored.count) dates")
+
+        if let subject = rows.first {
+            let kept = (try? await store.dateCandidates(for: subject.doc)) ?? []
+            print("  \(subject.filename.padded(38)) \(kept.count) candidate(s) kept")
+            Check.that("the dates a document offered are kept for the review",
+                       !kept.isEmpty || subject.docDate == nil)
         }
 
         print("\nTYPED FIELDS")

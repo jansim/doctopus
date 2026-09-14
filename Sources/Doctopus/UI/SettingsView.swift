@@ -82,6 +82,21 @@ private struct GeneralSettings: View {
                     Text("Aliases live in a Tags folder inside the library's folder. Individual tags can override this from the sidebar.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
+
+                Section("Dates") {
+                    Picker("Read 03/04/2026 as", selection: $model.settings.dateOrder) {
+                        ForEach(DateOrder.allCases, id: \.self) { order in
+                            Text(order.label).tag(order)
+                        }
+                    }
+                    Text("A numeric date with no month name in it is ambiguous, and reading it by this Mac's own region means the same library answering differently on another one. Automatic reads it from the language most of these documents are in.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    TextField("Never a document date", text: $model.settings.ignoredDates,
+                              prompt: Text("2019-01-01, 2020-05-04"))
+                        .font(.system(.body, design: .monospaced))
+                    Text("Days to skip when reading a document's date, as yyyy-MM-dd — the date printed in a letterhead, or a form's revision date, which otherwise gets picked up on every document that uses it.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
             }
 
             Section("Indexing") {

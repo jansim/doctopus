@@ -137,6 +137,9 @@ struct DocumentDetail: Sendable {
     var history: [HistoryEvent] = []
     /// What anyone has written about it, newest first.
     var notes: [Note] = []
+    /// Every date the extractor found, best first — including the ones it did
+    /// not pick, which is what makes correcting a date a click.
+    var dateCandidates: [DateCandidate] = []
 }
 
 /// A folder the router thought a document could be filed in.

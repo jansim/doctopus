@@ -2,7 +2,7 @@ import Foundation
 
 /// Versioned schema. Migrations are append-only: bump `current` and add a case.
 enum Schema {
-    static let current = 12
+    static let current = 13
 
     static func migrate(_ db: Database) throws {
         let version = try db.first("PRAGMA user_version") { Int($0.int(0)) } ?? 0
@@ -18,6 +18,7 @@ enum Schema {
         if version < 10 { try v10(db) }
         if version < 11 { try v11(db) }
         if version < 12 { try v12(db) }
+        if version < 13 { try v13(db) }
         try db.exec("PRAGMA user_version=\(current)")
     }
 
@@ -31,6 +32,40 @@ enum Schema {
             [.text(table), .text(column)]) { $0.int(0) } ?? 0
         guard present == 0 else { return }
         try db.exec("ALTER TABLE \(table) ADD COLUMN \(column) \(declaration)")
+    }
+
+    /// Days, and the dates that were not chosen.
+    ///
+    /// `doc_date` was a timestamp holding whatever instant the extractor
+    /// happened to produce, so the same document read as two different days in
+    /// two timezones. It is normalised here to the UTC start of its day, and
+    /// every reading of it goes through `DayDate` from now on — a document is
+    /// issued on a day, not at an instant.
+    ///
+    /// `date_candidates` keeps the dates that were found and not picked.
+    /// Extraction gets `03/04/2026` wrong often enough that offering the
+    /// runner-up as a chip in the review is the cheapest accuracy win there is,
+    /// and throwing the alternatives away was the only reason it could not.
+    private static func v13(_ db: Database) throws {
+        try db.exec("""
+        CREATE TABLE IF NOT EXISTS date_candidates (
+            doc_id   INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+            date     REAL NOT NULL,   -- UTC start of day
+            source   TEXT NOT NULL,   -- 'ocr' | 'pdf' | 'exif' | 'filename'
+            labelled INTEGER NOT NULL DEFAULT 0,
+            cue      TEXT,
+            rank     INTEGER NOT NULL,
+            PRIMARY KEY (doc_id, date)
+        );
+        CREATE INDEX IF NOT EXISTS idx_date_candidates_doc ON date_candidates(doc_id, rank);
+        """)
+
+        // Round every stored date down to the start of its UTC day. SQLite's
+        // own arithmetic does this without needing to load the library.
+        try db.exec("""
+        UPDATE metadata SET doc_date = CAST(FLOOR(doc_date / 86400.0) AS INTEGER) * 86400
+        WHERE doc_date IS NOT NULL;
+        """)
     }
 
     /// Typed fields.

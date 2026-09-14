@@ -151,7 +151,9 @@ extension FieldType {
     /// are dropped: a field holding a date holds a day.
     static func day(from raw: String) -> Date? {
         if let iso = dayFormatter.date(from: raw) { return iso }
-        if let found = DocumentAnalyzer.dateInText(raw) { return DayDate.startOfDay(found) }
+        // A field's date may well be in the future — a due date usually is —
+        // so this deliberately does not go through the issue-date reader.
+        if let found = DocumentAnalyzer.anyDate(in: raw) { return DayDate.startOfDay(found) }
         return nil
     }
 
@@ -169,8 +171,10 @@ extension FieldType {
 ///
 /// A document is issued on a day, not at an instant, and half the off-by-one
 /// bugs in an archive come from round-tripping that through a timestamp in a
-/// timezone nobody recorded. Everything here works in UTC so the same library
-/// reads the same on two Macs.
+/// timezone nobody recorded. `doc_date` is stored as the UTC start of its day
+/// and every reading of it — formatting, the year a routing template expands
+/// to, sorting — goes through here, so the same library reads the same on two
+/// Macs in two timezones.
 enum DayDate {
     static var calendar: Calendar {
         var c = Calendar(identifier: .gregorian)
@@ -180,5 +184,89 @@ enum DayDate {
 
     static func startOfDay(_ date: Date) -> Date {
         calendar.startOfDay(for: date)
+    }
+
+    static func components(_ date: Date) -> DateComponents {
+        calendar.dateComponents([.year, .month, .day], from: date)
+    }
+
+    /// `2026-03-04`. The one spelling everything stores and compares.
+    static func text(_ date: Date) -> String {
+        FieldType.dayFormatter.string(from: date)
+    }
+
+    static func parse(_ text: String) -> Date? {
+        FieldType.dayFormatter.date(from: text)
+    }
+
+    /// How a day is shown to a person: their format, but the stored day, not
+    /// whatever day that instant falls on where they are.
+    nonisolated(unsafe) static let display: DateFormatter = {
+        let f = DateFormatter()
+        f.timeZone = TimeZone(secondsFromGMT: 0)
+        f.dateStyle = .medium
+        f.timeStyle = .none
+        return f
+    }()
+
+    static func display(_ date: Date) -> String { display.string(from: date) }
+}
+
+/// How to read `03/04/2026`.
+///
+/// `NSDataDetector` reads it by the *system* locale, which is recorded nowhere
+/// and differs between machines — so the same library gives two answers on two
+/// Macs. This is the setting that stops that, defaulting from the library's own
+/// dominant language rather than from the Mac.
+enum DateOrder: String, CaseIterable, Sendable, Codable {
+    case automatic, dmy, mdy, ymd
+
+    var label: String {
+        switch self {
+        case .automatic: return "From the library's language"
+        case .dmy: return "Day / Month / Year"
+        case .mdy: return "Month / Day / Year"
+        case .ymd: return "Year / Month / Day"
+        }
+    }
+
+    /// Languages that write the month first, and those that write the year
+    /// first. Everywhere else puts the day first, which is why it is the
+    /// fallback rather than a listed case.
+    private static let monthFirst: Set<String> = ["en-us", "en_us"]
+    private static let yearFirst: Set<String> = ["ja", "zh", "ko", "hu", "lt"]
+
+    func resolved(language: String?) -> DateOrder {
+        guard self == .automatic else { return self }
+        guard let code = language?.lowercased().nilIfBlank else { return .dmy }
+        if DateOrder.yearFirst.contains(String(code.prefix(2))) { return .ymd }
+        if DateOrder.monthFirst.contains(code) { return .mdy }
+        // Bare "en" is ambiguous by design — most English-speaking countries
+        // write the day first, and the one that does not is spelled "en-US".
+        return .dmy
+    }
+}
+
+/// One date found in a document, and how much to believe it.
+struct DateCandidate: Identifiable, Hashable, Sendable {
+    /// The UTC start of the day.
+    var date: Date
+    /// Where it was found: `ocr`, `pdf`, `exif`, `filename`.
+    var source: String
+    /// True when an explicit label ("Rechnungsdatum:", "Issued") sat next to it.
+    var labelled: Bool
+    /// The label itself, when there was one.
+    var cue: String?
+
+    var id: String { "\(DayDate.text(date))#\(source)" }
+
+    var sourceLabel: String {
+        switch source {
+        case "ocr": return "in the text"
+        case "pdf": return "from the PDF"
+        case "exif": return "from EXIF"
+        case "filename": return "from the name"
+        default: return source
+        }
     }
 }

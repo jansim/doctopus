@@ -36,6 +36,7 @@ actor Indexer {
 
     func update(settings: AppSettings) async {
         self.settings = settings
+        languageCache = nil
         await intelligence.update(settings: settings)
     }
     func cancel() { cancelled = true }
@@ -260,7 +261,12 @@ actor Indexer {
         let known = (try? await store.facets(column: "correspondent"))?.map(\.value) ?? []
         let created = (try? url.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? Date()
         let findings = DocumentAnalyzer.analyze(url: url, text: extracted.text,
-                                                fallbackDate: created, knownCorrespondents: known)
+                                                fallbackDate: created, knownCorrespondents: known,
+                                                options: await analyzerOptions())
+        // Every date found is kept, not just the one that won. `03/04/2026` is
+        // wrong half the time however carefully it is read, and the runner-up
+        // as a chip in the review is a click rather than a retype.
+        try? await store.setDateCandidates(findings.dates, for: id)
 
         // 4. Optional model enrichment, on-device or over the network.
         var insight: DocumentInsight?
@@ -305,6 +311,19 @@ actor Indexer {
                                            from: nil, to: nil, approved: true)
         }
         return name
+    }
+
+    /// How this library reads a date, cached for the length of a pass: the
+    /// dominant language is a grouped scan, and asking per document would run
+    /// it once for every file in a bulk import.
+    private var languageCache: String??
+    private func analyzerOptions() async -> DocumentAnalyzer.Options {
+        if languageCache == nil {
+            languageCache = .some((try? await store.dominantLanguage()) ?? nil)
+        }
+        return DocumentAnalyzer.Options(dateOrder: settings.dateOrder,
+                                        ignoredDays: settings.ignoredDays,
+                                        language: languageCache ?? nil)
     }
 
     private func summaryLine(_ t: ExtractedText, _ f: DocumentAnalyzer.Findings, _ i: DocumentInsight?) -> String {
