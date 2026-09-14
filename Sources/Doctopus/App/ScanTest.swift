@@ -11,6 +11,11 @@ import AppKit
 /// This is also the harness that established the two rules ScanCoordinator is
 /// built on: the import item must be in the main menu before launch finishes,
 /// and only that one item is ever expanded.
+///
+/// Delivery here goes to a plain AppKit requestor, which is *not* how the app
+/// receives it: SwiftUI's hosting views answer the responder chain first, so
+/// the real app takes captures through `acceptsScans()`. A clean `fire` run
+/// says nothing about that half — scan into the app itself to check it.
 @MainActor
 enum ScanTest {
     final class Delegate: NSObject, NSApplicationDelegate, NSServicesMenuRequestor {

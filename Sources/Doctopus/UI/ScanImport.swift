@@ -43,6 +43,8 @@ final class ScanCoordinator: NSObject {
     /// bypasses auto-routing entirely.
     var pendingDestination: URL?
     var onScan: (([ScannedItem], URL?) -> Void)?
+    /// A capture arrived but none of it could be read.
+    var onScanFailed: ((String) -> Void)?
 
     private weak var deviceItem: NSMenuItem?
 
@@ -116,38 +118,71 @@ final class ScanCoordinator: NSObject {
         live.performActionForItem(at: index)
     }
 
-    /// Called by AppKit once the capture arrives, via the app delegate's
-    /// `NSServicesMenuRequestor` conformance.
-    func accept(_ pasteboard: NSPasteboard) -> Bool {
-        var items: [ScannedItem] = []
+    /// What the app takes from a capture: PDF for document scans, and still
+    /// images in whatever format the device chooses.
+    ///
+    /// Concrete image types are spelled out: SwiftUI turns these into pasteboard
+    /// types literally, so `.image` alone is not offered `public.jpeg`.
+    static let importTypes: [UTType] = [.pdf, .jpeg, .png, .heic, .tiff, .image]
 
-        if let urls = pasteboard.readObjects(forClasses: [NSURL.self], options: nil) as? [URL] {
-            for url in urls {
-                guard let data = try? Data(contentsOf: url),
-                      let item = item(from: data, ext: url.pathExtension) else { continue }
-                items.append(item)
+    /// Called by SwiftUI once the capture arrives, via `acceptsScans()` on
+    /// whichever pane has focus.
+    ///
+    /// Not an `NSServicesMenuRequestor` on the app delegate, which is what
+    /// `--scantest` exercises: in the SwiftUI app `NSHostingView` and the
+    /// delegate proxy SwiftUI installs answer `validRequestor` themselves, so
+    /// an AppKit requestor further up the chain is never asked.
+    func accept(_ providers: [NSItemProvider]) -> Bool {
+        let captures = providers.compactMap { provider in
+            provider.registeredContentTypes
+                .first { type in Self.importTypes.contains { type.conforms(to: $0) } }
+                .map { (provider, $0) }
+        }
+        guard !captures.isEmpty else { return false }
+
+        // The capture sits on a pasteboard the system discards the moment this
+        // returns, and the providers read from it lazily: loaded any later,
+        // they fail with NSItemProvider error -1000. So wait for them here,
+        // keeping the run loop turning in case a loader calls back on main.
+        let loads = Loads(count: captures.count)
+        for (i, (provider, type)) in captures.enumerated() {
+            _ = provider.loadDataRepresentation(for: type) { data, _ in
+                loads.finish(i, with: data)
             }
         }
-        if items.isEmpty, let pdf = pasteboard.data(forType: .pdf) {
-            items.append(ScannedItem(data: pdf, ext: "pdf"))
+        let deadline = Date(timeIntervalSinceNow: 30)
+        while !loads.isComplete, Date() < deadline {
+            RunLoop.current.run(mode: .default, before: Date(timeIntervalSinceNow: 0.05))
         }
-        if items.isEmpty {
-            // Whatever image type the device sent; anything exotic (HEIC) goes
-            // through NSBitmapImageRep so the pipeline only ever sees JPEG/PNG.
-            for identifier in NSImage.imageTypes {
-                let type = NSPasteboard.PasteboardType(identifier)
-                guard let data = pasteboard.data(forType: type) else { continue }
-                let ext = UTType(identifier)?.preferredFilenameExtension ?? ""
-                if let item = item(from: data, ext: ext) { items.append(item) }
-                break
-            }
-        }
-        guard !items.isEmpty else { return false }
 
+        let items = zip(captures, loads.results).compactMap { capture, data in
+            data.flatMap { item(from: $0, ext: capture.1.preferredFilenameExtension ?? "") }
+        }
         let destination = pendingDestination
         pendingDestination = nil
-        onScan?(items, destination)
+        // Importing can wait until the system's callback has returned.
+        DispatchQueue.main.async { [self] in
+            if items.isEmpty {
+                onScanFailed?("The scan from your iPhone or iPad could not be read.")
+            } else {
+                onScan?(items, destination)
+            }
+        }
+        // Taken either way: an unreadable scan gets our own message rather
+        // than the system's bare Cocoa error on top of it.
         return true
+    }
+
+    /// Provider loads, which finish on arbitrary queues.
+    private final class Loads: @unchecked Sendable {
+        private let lock = NSLock()
+        private var slots: [Data??]
+
+        init(count: Int) { slots = Array(repeating: nil, count: count) }
+
+        func finish(_ index: Int, with data: Data?) { lock.withLock { slots[index] = .some(data) } }
+        var isComplete: Bool { lock.withLock { !slots.contains { $0 == nil } } }
+        var results: [Data?] { lock.withLock { slots.map { $0 ?? nil } } }
     }
 
     /// The index handles PDF, JPEG and PNG. Anything else a device might send
@@ -163,6 +198,21 @@ final class ScanCoordinator: NSObject {
             else { return nil }
             return ScannedItem(data: jpg, ext: "jpg")
         }
+    }
+}
+
+extension View {
+    /// Makes this view somewhere a Continuity Camera capture can land.
+    ///
+    /// Needed on every NavigationSplitView column, not just around the split
+    /// view: each column is its own `NSHostingView`, and a hosting view with no
+    /// importing view in its own hierarchy answers `validRequestor` with nil
+    /// rather than passing the question up the responder chain. The system
+    /// asks only the key window's first responder — which almost always sits
+    /// inside a column — so without this it finds no requestor and fails the
+    /// capture with Cocoa error 66563.
+    func acceptsScans() -> some View {
+        importsItemProviders(ScanCoordinator.importTypes) { ScanCoordinator.shared.accept($0) }
     }
 }
 

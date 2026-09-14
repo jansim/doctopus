@@ -11,6 +11,7 @@ struct RootView: View {
 
         NavigationSplitView(columnVisibility: $columnVisibility) {
             SidebarView()
+                .acceptsScans()
                 .navigationSplitViewColumnWidth(min: 210, ideal: 250, max: 360)
         } detail: {
             Group {
@@ -23,10 +24,12 @@ struct RootView: View {
                     DocumentListView()
                 }
             }
+            .acceptsScans()
             // Over the centre pane, clear of the results bar at its foot.
             .noticeOverlay(model, bottomPadding: 40)
             .inspector(isPresented: $showInspector) {
                 InspectorView()
+                    .acceptsScans()
                     .inspectorColumnWidth(min: 280, ideal: 340, max: 480)
             }
         }
@@ -35,6 +38,9 @@ struct RootView: View {
         .searchable(text: $model.searchText, placement: .toolbar,
                     prompt: "Search text, titles, tags…")
         .searchSuggestions { SearchSuggestions() }
+        // Each column is its own hosting view and needs its own; this one
+        // covers focus outside them, such as the toolbar.
+        .acceptsScans()
         .sheet(isPresented: $renameSheet) { RenameSheet(isPresented: $renameSheet) }
         .onReceive(NotificationCenter.default.publisher(for: .showRenameSheet)) { _ in
             if !model.selectedIDs.isEmpty { renameSheet = true }
