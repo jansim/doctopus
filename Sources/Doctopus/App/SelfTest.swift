@@ -530,6 +530,36 @@ enum SelfTest {
                        !enriched.isEmpty && enriched.allSatisfy { $0.metadataSource == "remote" && $0.row.summary != nil })
         }
 
+        print("\nHISTORY")
+        // The queue is a bounded recency view; the history behind it is not.
+        // Overflowing the queue has to leave the record of what happened
+        // intact — that was the whole point of splitting the two.
+        if let subject = rows.first {
+            let firstEvents = (try? await store.history(for: subject.doc)) ?? []
+            let oldest = firstEvents.last
+            for n in 0...Store.queueLength {
+                try? await store.logProcessing(docID: subject.doc, action: "indexed",
+                                               detail: "filler \(n)", confidence: nil, rule: nil,
+                                               from: nil, to: nil, approved: true)
+            }
+            let queue = (try? await store.processingQueue(limit: 10_000)) ?? []
+            let kept = (try? await store.history(for: subject.doc)) ?? []
+            let total = (try? await store.eventCount()) ?? 0
+            print("  queue holds \(queue.count), history holds \(total) event(s) "
+                  + "(\(kept.count) for \(subject.filename))")
+            Check.that("the queue stays bounded", queue.count <= Store.queueLength,
+                       "\(queue.count) entries")
+            Check.that("the history is not trimmed with it",
+                       kept.count > queue.count, "\(kept.count) events kept")
+            Check.that("the first thing that happened to a document is still on record",
+                       oldest == nil || kept.contains { $0.id == oldest!.id })
+            let detailed = try? await store.detail(subject.doc)
+            Check.that("a document's history reaches the inspector",
+                       (detailed?.history.count ?? 0) > 0)
+            Check.that("history is newest first",
+                       zip(kept, kept.dropFirst()).allSatisfy { $0.at >= $1.at })
+        }
+
         print("\nSEARCH INDEX")
         // Everything a person can see is a column of `doc_fts`, so each of
         // these is a ranked hit rather than an unindexed LIKE over the table.

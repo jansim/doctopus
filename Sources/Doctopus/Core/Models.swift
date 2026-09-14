@@ -133,6 +133,8 @@ struct DocumentDetail: Sendable {
     /// The subset of `aliases` someone filed by hand, as opposed to the ones a
     /// mirrored tag keeps — the document's secondary places.
     var folderAliases: [String] = []
+    /// Everything that has happened to this document, newest first.
+    var history: [HistoryEvent] = []
 }
 
 /// A folder the router thought a document could be filed in.
@@ -215,6 +217,57 @@ struct ProcessingEntry: Identifiable, Hashable, Sendable {
     var approved: Bool
     var filename: String
     var missing: Bool
+}
+
+/// One thing that happened to a document, straight from the append-only
+/// `events` table. The queue shows a bounded slice of the same data with an
+/// approval state attached; this is the whole record, and it is never trimmed.
+struct HistoryEvent: Identifiable, Hashable, Sendable {
+    var id: Int64
+    var at: Date
+    var action: String
+    var detail: String?
+    var confidence: Double?
+    var rule: String?
+    /// Absolute paths, when the event was a move or a rename.
+    var fromPath: String?
+    var toPath: String?
+
+    var icon: String {
+        switch action {
+        case "routed": return "arrow.triangle.branch"
+        case "optimized": return "arrow.down.circle"
+        case "renamed": return "character.cursor.ibeam"
+        case "moved": return "folder"
+        case "imported": return "tray.and.arrow.down"
+        case "analyzed": return "sparkles"
+        default: return "doc.text.magnifyingglass"
+        }
+    }
+
+    var label: String {
+        switch action {
+        case "routed": return "Filed"
+        case "optimized": return "Optimized"
+        case "renamed": return "Renamed"
+        case "moved": return "Moved"
+        case "imported": return "Imported"
+        case "analyzed": return "Analyzed"
+        case "indexed": return "Indexed"
+        default: return action.capitalized
+        }
+    }
+
+    /// "Inbox → Finances/Invoices/2026", when the event moved the file.
+    func move(relativeTo root: String) -> String? {
+        guard let fromPath, let toPath, fromPath != toPath else { return nil }
+        func trim(_ p: String) -> String {
+            let stripped = p.hasPrefix(root + "/") ? String(p.dropFirst(root.count + 1)) : p
+            return (stripped as NSString).deletingLastPathComponent.nilIfBlank ?? stripped
+        }
+        let from = trim(fromPath), to = trim(toPath)
+        return from == to ? nil : "\(from) → \(to)"
+    }
 }
 
 struct Rule: Identifiable, Hashable, Sendable {

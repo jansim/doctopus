@@ -24,6 +24,7 @@ private struct DetailInspector: View {
     @Environment(AppModel.self) private var model
     let detail: DocumentDetail
     @State private var showRawText = false
+    @State private var showAllHistory = false
     @State private var tagInput = ""
     @State private var finderTagInput = ""
 
@@ -41,6 +42,7 @@ private struct DetailInspector: View {
                 finderTagsSection
                 fileSection
                 if !detail.aliases.isEmpty { aliasSection }
+                if !detail.history.isEmpty { historySection }
                 textSection
             }
             .padding(14)
@@ -373,6 +375,46 @@ private struct DetailInspector: View {
                         .font(.caption)
                 }
                 .buttonStyle(.link)
+            }
+        }
+    }
+
+    // MARK: - History
+
+    /// Everything that has happened to this document, newest first. The queue
+    /// only keeps the most recent few hundred events library-wide; this comes
+    /// from `events`, which is never trimmed, so the answer to "why is this
+    /// file here" survives however many documents arrive after it.
+    private var historySection: some View {
+        Section2("History") {
+            ForEach(detail.history.prefix(showAllHistory ? detail.history.count : 6)) { event in
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Image(systemName: event.icon)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .frame(width: 14)
+                    VStack(alignment: .leading, spacing: 1) {
+                        HStack(spacing: 5) {
+                            Text(event.label).font(.caption).fontWeight(.medium)
+                            Text(event.at.formatted(date: .abbreviated, time: .shortened))
+                                .font(.caption2).foregroundStyle(.tertiary)
+                        }
+                        if let move = event.move(relativeTo: model.library(row.library)?.root.path ?? "") {
+                            Text(move).font(.caption2).foregroundStyle(.secondary)
+                        } else if let detail = event.detail?.nilIfBlank {
+                            Text(detail).font(.caption2).foregroundStyle(.secondary)
+                                .lineLimit(2)
+                        }
+                    }
+                    Spacer(minLength: 0)
+                }
+            }
+            if detail.history.count > 6 {
+                Button(showAllHistory ? "Show less"
+                                      : "Show all \(detail.history.count) events") {
+                    showAllHistory.toggle()
+                }
+                .buttonStyle(.link).font(.caption)
             }
         }
     }

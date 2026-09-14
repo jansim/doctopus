@@ -505,15 +505,29 @@ actor Store {
         Set(try db.map("SELECT path FROM aliases") { absPath($0.string(0)) })
     }
 
-    // MARK: - Processing queue
+    // MARK: - History and the processing queue
+    //
+    // Two different things, kept apart. `events` is the record of what happened
+    // to a document: append-only, never trimmed, and the only honest answer to
+    // "why is this file here". `processing` is the recency view the review
+    // reads — bounded, with the one piece of state that is its own, whether an
+    // entry has been signed off — and it reads everything else back from the
+    // event it points at.
 
+    /// How many entries the review queue keeps on show. The history behind it
+    /// is not trimmed; only this view is.
+    static let queueLength = 500
+
+    @discardableResult
     func logProcessing(docID: Int64, action: String, detail: String?, confidence: Double?,
-                       rule: String?, from: String?, to: String?, approved: Bool) throws {
-        try db.run("""
-            INSERT INTO processing(doc_id, at, action, detail, confidence, rule, from_path, to_path, status)
-            VALUES(?,?,?,?,?,?,?,?,?)
+                       rule: String?, from: String?, to: String?, approved: Bool) throws -> Int64 {
+        let eventID = try db.run("""
+            INSERT INTO events(doc_id, at, action, detail, confidence, rule, from_path, to_path)
+            VALUES(?,?,?,?,?,?,?,?)
             """, [.int(docID), .double(Date().timeIntervalSince1970), .text(action), .text(detail),
-                  .double(confidence), .text(rule), .text(from), .text(to), .bool(approved)])
+                  .double(confidence), .text(rule), .text(from), .text(to)])
+        try db.run("INSERT INTO processing(event_id, doc_id, status) VALUES(?,?,?)",
+                   [.int(eventID), .int(docID), .bool(approved)])
         // An entry that needs review makes the document need review, so the
         // status dot and the inspector agree with the queue. An approved entry
         // leaves the document as it was: a later "indexed" does not settle an
@@ -521,16 +535,23 @@ actor Store {
         if !approved {
             try db.run("UPDATE documents SET approved=0 WHERE id=?", [.int(docID)])
         }
-        // Keep the queue bounded; it is a recency view, not an audit log.
-        try db.run("DELETE FROM processing WHERE id NOT IN (SELECT id FROM processing ORDER BY at DESC LIMIT 500)")
+        // Keep the view bounded. Ids are monotonic, so this is a range delete
+        // rather than a sort of the whole table on every insert.
+        try db.run("""
+            DELETE FROM processing
+            WHERE id < COALESCE((SELECT id FROM processing ORDER BY id DESC LIMIT 1 OFFSET ?), 0)
+            """, [.int(Store.queueLength)])
+        return eventID
     }
 
     func processingQueue(limit: Int = 200) throws -> [ProcessingEntry] {
         try db.map("""
-            SELECT p.id, p.doc_id, p.at, p.action, p.detail, p.confidence, p.rule,
-                   p.from_path, p.to_path, p.status, d.filename, d.missing
-            FROM processing p JOIN documents d ON d.id=p.doc_id
-            ORDER BY p.at DESC LIMIT ?
+            SELECT p.id, p.doc_id, e.at, e.action, e.detail, e.confidence, e.rule,
+                   e.from_path, e.to_path, p.status, d.filename, d.missing
+            FROM processing p
+            JOIN events e ON e.id = p.event_id
+            JOIN documents d ON d.id = p.doc_id
+            ORDER BY e.at DESC LIMIT ?
             """, [.int(limit)]) {
             ProcessingEntry(id: $0.int(0), docID: $0.int(1),
                             at: Date(timeIntervalSince1970: $0.double(2)), action: $0.string(3),
@@ -539,6 +560,28 @@ actor Store {
                             toPath: $0.stringOrNil(8), approved: $0.bool(9),
                             filename: $0.string(10), missing: $0.bool(11))
         }
+    }
+
+    /// Everything that has happened to one document, newest first. Unlike the
+    /// queue this is complete: nothing trims it, so an import from a year and
+    /// fifty thousand documents ago is still here.
+    func history(for docID: Int64, limit: Int = 200) throws -> [HistoryEvent] {
+        try db.map("""
+            SELECT id, at, action, detail, confidence, rule, from_path, to_path
+            FROM events WHERE doc_id=? ORDER BY at DESC, id DESC LIMIT ?
+            """, [.int(docID), .int(limit)]) {
+            HistoryEvent(id: $0.int(0), at: Date(timeIntervalSince1970: $0.double(1)),
+                         action: $0.string(2), detail: $0.stringOrNil(3),
+                         confidence: $0.doubleOrNil(4), rule: $0.stringOrNil(5),
+                         fromPath: $0.stringOrNil(6).map { absPath($0) },
+                         toPath: $0.stringOrNil(7).map { absPath($0) })
+        }
+    }
+
+    /// How many events the library has recorded in total — the number the
+    /// capped queue used to throw away.
+    func eventCount() throws -> Int {
+        try db.first("SELECT COUNT(*) FROM events") { Int($0.int(0)) } ?? 0
     }
 
     func setProcessingApproved(_ id: Int64, _ approved: Bool) throws {

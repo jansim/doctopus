@@ -2,7 +2,7 @@ import Foundation
 
 /// Versioned schema. Migrations are append-only: bump `current` and add a case.
 enum Schema {
-    static let current = 8
+    static let current = 9
 
     static func migrate(_ db: Database) throws {
         let version = try db.first("PRAGMA user_version") { Int($0.int(0)) } ?? 0
@@ -14,6 +14,7 @@ enum Schema {
         if version < 6 { try v6(db) }
         if version < 7 { try v7(db) }
         if version < 8 { try v8(db) }
+        if version < 9 { try v9(db) }
         try db.exec("PRAGMA user_version=\(current)")
     }
 
@@ -27,6 +28,73 @@ enum Schema {
             [.text(table), .text(column)]) { $0.int(0) } ?? 0
         guard present == 0 else { return }
         try db.exec("ALTER TABLE \(table) ADD COLUMN \(column) \(declaration)")
+    }
+
+    /// History, split from the review queue.
+    ///
+    /// `processing` was doing two jobs and doing the second one badly: it was
+    /// the recency view the review reads, *and* the only record of what
+    /// happened to a document — while being trimmed to 500 rows on every
+    /// insert. So the 501st import silently erased the first, and there was no
+    /// answer to "why is this file here", let alone an undo.
+    ///
+    /// `events` is that record: append-only, never trimmed, ~100 bytes a row.
+    /// `processing` keeps only what is actually its own — which event is on
+    /// show and whether it has been signed off — and reads the rest back
+    /// through `event_id`.
+    private static func v9(_ db: Database) throws {
+        let alreadyThere = try db.first(
+            "SELECT COUNT(*) FROM pragma_table_info('processing') WHERE name='event_id'") { $0.int(0) } ?? 0
+        guard alreadyThere == 0 else { return }
+
+        try db.exec("""
+        CREATE TABLE IF NOT EXISTS events (
+            id          INTEGER PRIMARY KEY,
+            doc_id      INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+            at          REAL NOT NULL,
+            action      TEXT NOT NULL,  -- 'imported' | 'routed' | 'indexed' | 'optimized' | 'renamed' | 'moved' | 'analyzed'
+            detail      TEXT,
+            confidence  REAL,
+            rule        TEXT,
+            from_path   TEXT,
+            to_path     TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_events_doc ON events(doc_id, at DESC);
+        CREATE INDEX IF NOT EXISTS idx_events_at  ON events(at DESC);
+        """)
+
+        // The existing queue is the history we have; carry it over keeping the
+        // row ids, so the rebuilt `processing` can point straight at it.
+        let hadQueue = try db.first(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='processing'") { $0.int(0) } ?? 0
+        if hadQueue > 0 {
+            try db.exec("""
+            INSERT OR IGNORE INTO events(id, doc_id, at, action, detail, confidence, rule, from_path, to_path)
+            SELECT id, doc_id, at, action, detail, confidence, rule, from_path, to_path FROM processing;
+            """)
+        }
+
+        try db.exec("""
+        CREATE TABLE processing_v9 (
+            id       INTEGER PRIMARY KEY,
+            event_id INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+            doc_id   INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+            status   INTEGER NOT NULL DEFAULT 0 -- 0 needs review, 1 approved
+        );
+        """)
+        if hadQueue > 0 {
+            try db.exec("""
+            INSERT INTO processing_v9(id, event_id, doc_id, status)
+            SELECT p.id, p.id, p.doc_id, p.status FROM processing p
+            WHERE EXISTS (SELECT 1 FROM events e WHERE e.id = p.id);
+            """)
+            try db.exec("DROP TABLE processing")
+        }
+        try db.exec("""
+        ALTER TABLE processing_v9 RENAME TO processing;
+        CREATE INDEX IF NOT EXISTS idx_processing_doc   ON processing(doc_id);
+        CREATE INDEX IF NOT EXISTS idx_processing_event ON processing(event_id);
+        """)
     }
 
     /// The search index, rebuilt as a real one.

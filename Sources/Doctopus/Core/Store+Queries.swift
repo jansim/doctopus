@@ -98,14 +98,15 @@ extension Store {
         if selection.isQueueMode {
             joinQueue = """
             LEFT JOIN processing p
-                ON p.id = (SELECT id FROM processing WHERE doc_id = d.id ORDER BY at DESC LIMIT 1)
+                ON p.id = (SELECT id FROM processing WHERE doc_id = d.id ORDER BY id DESC LIMIT 1)
+            LEFT JOIN events pe ON pe.id = p.event_id
             """
-            queueColumns = "p.id, p.at, p.action, p.detail, p.confidence, p.rule, p.status"
+            queueColumns = "p.id, pe.at, pe.action, pe.detail, pe.confidence, pe.rule, p.status"
         }
 
         let order: String
         if selection.isQueueMode {
-            order = "p.at DESC"
+            order = "pe.at DESC"
         } else if sort == .relevance && !joinFTS.isEmpty {
             // bm25() is more negative the better the match.
             order = "h.r ASC, d.created_at DESC"
@@ -260,6 +261,7 @@ extension Store {
         d.pathSuggestions = try pathSuggestions(for: id)
         d.similarFolders = try similarFolders(for: id)
         d.folderAliases = try folderAliases(for: id)
+        d.history = try history(for: id)
         d.row.finderTags = try finderTags(docID: id)
         d.aliases = try aliases(for: id).map(\.path)
         return d

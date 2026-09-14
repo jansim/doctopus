@@ -18,7 +18,7 @@ extension Store {
             } else {
                 try db.run("""
                     UPDATE processing SET status=0
-                    WHERE id = (SELECT id FROM processing WHERE doc_id=? ORDER BY at DESC LIMIT 1)
+                    WHERE id = (SELECT id FROM processing WHERE doc_id=? ORDER BY id DESC LIMIT 1)
                     """, [.int(docID)])
             }
             try db.run("UPDATE documents SET approved=? WHERE id=?", [.bool(approved), .int(docID)])
