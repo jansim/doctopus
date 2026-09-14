@@ -530,6 +530,45 @@ enum SelfTest {
                        !enriched.isEmpty && enriched.allSatisfy { $0.metadataSource == "remote" && $0.row.summary != nil })
         }
 
+        print("\nLIBRARY FORMAT")
+        let metaURL = container.appendingPathComponent("meta.json")
+        let stamped = (try? JSONSerialization.jsonObject(with: Data(contentsOf: metaURL)))
+            as? [String: Any]
+        print("  meta.json               formatVersion=\(stamped?["formatVersion"] as? Int ?? -1) "
+              + "appVersion=\(stamped?["appVersion"] as? String ?? "—")")
+        Check.that("the writing app stamps the library format it understands",
+                   stamped?["formatVersion"] as? Int == Store.formatVersion)
+
+        // A library from a future version is refused rather than misread.
+        let future = FileManager.default.temporaryDirectory
+            .appendingPathComponent("doctopus-future-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("library.doctopus", isDirectory: true)
+        try? FileManager.default.createDirectory(at: future, withIntermediateDirectories: true)
+        let ahead: [String: Any] = ["id": UUID().uuidString,
+                                    "formatVersion": Store.formatVersion + 1,
+                                    "appVersion": "99.0"]
+        try? JSONSerialization.data(withJSONObject: ahead)
+            .write(to: future.appendingPathComponent("meta.json"))
+        var refused: String?
+        do { _ = try Store(directory: future) }
+        catch let error as Store.OpenError { refused = error.description }
+        catch { refused = nil }
+        print("  a newer library         \(refused ?? "opened anyway")")
+        Check.that("a library from a newer Doctopus is refused, with a reason",
+                   refused?.contains("format version") == true)
+        try? FileManager.default.removeItem(at: future.deletingLastPathComponent())
+
+        print("\nCONTENT HASHES")
+        if let sample = rows.first, let detail = try? await store.detail(sample.doc),
+           let hash = detail.hash {
+            let found = (try? await store.documents(matchingHash: hash)) ?? []
+            print("  \(sample.filename.padded(38)) \(hash.prefix(12))… → \(found.count) match(es)")
+            Check.that("a document is findable by the hash of its bytes",
+                       found.contains(sample.doc))
+            Check.that("a hash nothing carries matches nothing",
+                       ((try? await store.documents(matchingHash: "0")) ?? []).isEmpty)
+        }
+
         Check.finish("pipeline self-test")
     }
 

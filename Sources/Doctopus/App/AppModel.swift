@@ -345,7 +345,15 @@ final class AppModel {
         let bookmark = rootBookmark ?? (try? root.bookmarkData(
             includingResourceValuesForKeys: nil, relativeTo: nil))
 
-        guard let store = try? Store(directory: container) else {
+        let store: Store
+        do {
+            store = try Store(directory: container)
+        } catch let error as Store.OpenError {
+            // A library written by a newer Doctopus says so, rather than
+            // looking like a broken folder.
+            errorMessage = error.description
+            return
+        } catch {
             errorMessage = "Could not open a library at \(root.lastPathComponent)."
             return
         }

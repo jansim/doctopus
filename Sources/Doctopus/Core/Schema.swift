@@ -2,7 +2,7 @@ import Foundation
 
 /// Versioned schema. Migrations are append-only: bump `current` and add a case.
 enum Schema {
-    static let current = 6
+    static let current = 7
 
     static func migrate(_ db: Database) throws {
         let version = try db.first("PRAGMA user_version") { Int($0.int(0)) } ?? 0
@@ -12,7 +12,29 @@ enum Schema {
         if version < 4 { try v4(db) }
         if version < 5 { try v5(db) }
         if version < 6 { try v6(db) }
+        if version < 7 { try v7(db) }
         try db.exec("PRAGMA user_version=\(current)")
+    }
+
+    /// Adds a column for a column-adding migration, once. SQLite has no
+    /// `ADD COLUMN IF NOT EXISTS`, and a migration can be re-entered when an
+    /// older build wrote the table but not the `user_version`.
+    private static func addColumn(_ db: Database, table: String, column: String,
+                                  declaration: String) throws {
+        let present = try db.first(
+            "SELECT COUNT(*) FROM pragma_table_info(?) WHERE name=?",
+            [.text(table), .text(column)]) { $0.int(0) } ?? 0
+        guard present == 0 else { return }
+        try db.exec("ALTER TABLE \(table) ADD COLUMN \(column) \(declaration)")
+    }
+
+    /// The hash of the bytes as they arrived, before any optimization rewrote
+    /// them. `documents.hash` tracks what is on disk now, so re-importing the
+    /// same original matches nothing once Doctopus has re-encoded it; the
+    /// pre-optimization hash is what a duplicate check has to compare against.
+    private static func v7(_ db: Database) throws {
+        try addColumn(db, table: "documents", column: "original_hash", declaration: "TEXT")
+        try db.exec("CREATE INDEX IF NOT EXISTS idx_documents_original_hash ON documents(original_hash)")
     }
 
     /// Folders the router thought a new document could go in, kept whether or

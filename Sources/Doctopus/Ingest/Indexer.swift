@@ -215,7 +215,10 @@ actor Indexer {
             return name
         }
 
-        if let hash = FileScanner.hash(url) { try? await store.setHash(id, hash) }
+        // Hashed before anything rewrites it, so the pre-optimization bytes are
+        // on record: that is the hash an identical original would present on a
+        // later import.
+        if let hash = FileScanner.hash(url) { try? await store.setHash(id, hash, isOriginal: true) }
 
         // The Finder's tags are read straight off the file every pass, so the
         // index follows whatever was done in the Finder without owning it.

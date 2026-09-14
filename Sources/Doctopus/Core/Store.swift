@@ -65,17 +65,66 @@ actor Store {
 
     // MARK: - meta.json
 
-    private struct Meta: Codable { var id: String; var formatVersion: Int; var name: String? }
+    /// What this build of Doctopus writes. A library stamped with a higher
+    /// number was written by a newer app, and reading it with this one would
+    /// misinterpret whatever it does not know about — so it is refused instead.
+    static let formatVersion = 2
+
+    /// This build's marketing version, stamped into `meta.json` so a library
+    /// that has to be refused can say which app last wrote it.
+    static var appVersion: String {
+        (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "unknown"
+    }
+
+    enum OpenError: Swift.Error, CustomStringConvertible {
+        /// The library was written by a newer Doctopus than this one.
+        case futureFormat(found: Int, supported: Int, writtenBy: String?)
+
+        var description: String {
+            switch self {
+            case .futureFormat(let found, let supported, let writtenBy):
+                let by = writtenBy.map { " (last written by Doctopus \($0))" } ?? ""
+                return "This library uses format version \(found)\(by), but this "
+                    + "version of Doctopus only understands \(supported). Update Doctopus to open it."
+            }
+        }
+    }
+
+    private struct Meta: Codable {
+        var id: String
+        var formatVersion: Int
+        var name: String?
+        /// The marketing version of the app that last wrote this file.
+        var appVersion: String?
+    }
 
     private static func loadOrCreateMeta(in container: URL) throws -> LibraryID {
         let metaURL = container.appendingPathComponent("meta.json")
         if let data = try? Data(contentsOf: metaURL),
-           let meta = try? JSONDecoder().decode(Meta.self, from: data),
+           var meta = try? JSONDecoder().decode(Meta.self, from: data),
            !meta.id.isEmpty {
+            // Refuse a library from the future rather than silently misreading
+            // it: a newer app may have written columns and tables this build
+            // would drop on the first write.
+            guard meta.formatVersion <= formatVersion else {
+                throw OpenError.futureFormat(found: meta.formatVersion,
+                                             supported: formatVersion,
+                                             writtenBy: meta.appVersion)
+            }
+            // Opening an older library upgrades it in step with the schema
+            // migrations that are about to run.
+            if meta.formatVersion < formatVersion || meta.appVersion != appVersion {
+                meta.formatVersion = formatVersion
+                meta.appVersion = appVersion
+                if let updated = try? JSONEncoder().encode(meta) {
+                    try? updated.write(to: metaURL, options: .atomic)
+                }
+            }
             return meta.id
         }
-        let meta = Meta(id: UUID().uuidString, formatVersion: 1,
-                        name: container.deletingLastPathComponent().lastPathComponent)
+        let meta = Meta(id: UUID().uuidString, formatVersion: formatVersion,
+                        name: container.deletingLastPathComponent().lastPathComponent,
+                        appVersion: appVersion)
         let data = try JSONEncoder().encode(meta)
         try? data.write(to: metaURL, options: .atomic)
         return meta.id
@@ -123,7 +172,10 @@ actor Store {
                 WHERE id=?
                 """, [.int(f.size), .double(f.mtime.timeIntervalSince1970),
                       .text(dir), .text(name), .text(ext), .int(id)])
-            if changed { try db.run("UPDATE documents SET hash=NULL, ocr_state=0 WHERE id=?", [.int(id)]) }
+            if changed {
+                try db.run("UPDATE documents SET hash=NULL, original_hash=NULL, ocr_state=0 WHERE id=?",
+                           [.int(id)])
+            }
             return (id, false, changed || state == OCRState.pending.rawValue)
         }
 
@@ -187,8 +239,28 @@ actor Store {
         return doomed.count
     }
 
-    func setHash(_ id: Int64, _ hash: String) throws {
-        try db.run("UPDATE documents SET hash=? WHERE id=?", [.text(hash), .int(id)])
+    /// Records the content hash of the file as it is on disk now. `isOriginal`
+    /// additionally stamps `original_hash`: the bytes as they arrived, before
+    /// optimization rewrote them. Both are needed, because a document imported
+    /// and then re-encoded no longer hashes to what its source file does.
+    func setHash(_ id: Int64, _ hash: String, isOriginal: Bool = false) throws {
+        if isOriginal {
+            try db.run("UPDATE documents SET hash=?, original_hash=? WHERE id=?",
+                       [.text(hash), .text(hash), .int(id)])
+        } else {
+            try db.run("UPDATE documents SET hash=? WHERE id=?", [.text(hash), .int(id)])
+        }
+    }
+
+    /// Documents whose bytes match `hash`, as stored now or as they arrived.
+    /// Matching both is what makes the check fire for documents Doctopus
+    /// optimized itself — their `hash` is of the re-encoded file, which the
+    /// original will never match.
+    func documents(matchingHash hash: String, excluding docID: Int64? = nil) throws -> [Int64] {
+        try db.map("""
+            SELECT id FROM documents
+            WHERE (hash = ? OR original_hash = ?) AND id <> COALESCE(?, -1)
+            """, [.text(hash), .text(hash), .int(docID)]) { $0.int(0) }
     }
 
     func documentIDsNeedingOCR(limit: Int = 5000) throws -> [(id: Int64, path: String, ext: String)] {
