@@ -308,6 +308,9 @@ enum Selection: Hashable, Sendable {
     case field(String, String)
     case untagged
     case needsReview
+    /// Documents moved to the Trash: the row is kept so the file can be put
+    /// back with everything that was ever on it.
+    case deleted
 
     /// Both queue selections render the browser with its review affordances —
     /// Needs Review is simply the queue filtered to undecided entries.

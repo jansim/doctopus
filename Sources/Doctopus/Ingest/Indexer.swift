@@ -72,8 +72,12 @@ actor Indexer {
         }
         _ = try? await store.reconcileMissing(seenPaths: seen)
 
-        // Documents gone for over a week are not coming back as a move.
-        _ = try? await store.purgeMissing(olderThan: 7 * 24 * 3600)
+        // A row whose file has been gone for a month is not coming back as a
+        // move — unless the file is sitting in the Trash, which `purgeMissing`
+        // checks before forgetting anything. Documents deleted on purpose age
+        // out on the same clock.
+        _ = try? await store.purgeMissing()
+        _ = try? await store.purgeDeleted()
 
         // Anything still pending from a previous interrupted run.
         if let pending = try? await store.documentIDsNeedingOCR() {

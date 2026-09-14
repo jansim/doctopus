@@ -122,7 +122,7 @@ extension Store {
         } else {
             values = try db.map("""
                 SELECT v.value, COUNT(*) FROM field_values v
-                JOIN documents d ON d.id = v.doc_id AND d.missing = 0
+                JOIN documents d ON d.id = v.doc_id AND d.missing = 0 AND d.deleted_at IS NULL
                 WHERE v.field_id = ? AND TRIM(v.value) <> ''
                 GROUP BY v.value COLLATE NOCASE
                 ORDER BY COUNT(*) DESC, v.value COLLATE NOCASE

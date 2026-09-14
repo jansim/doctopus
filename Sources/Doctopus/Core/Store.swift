@@ -197,7 +197,7 @@ actor Store {
     func reconcileMissing(seenPaths: Set<String>) throws -> Int {
         let seenRelative = Set(seenPaths.map { relPath($0) })
         var stale: [Int64] = []
-        try db.query("SELECT id, path FROM documents WHERE missing=0") { row in
+        try db.query("SELECT id, path FROM documents WHERE missing=0 AND deleted_at IS NULL") { row in
             if !seenRelative.contains(row.string(1)) { stale.append(row.int(0)) }
         }
         let now = Date().timeIntervalSince1970
@@ -212,7 +212,7 @@ actor Store {
     /// so a Finder move keeps all metadata. `newPath` is absolute.
     func relinkByHash(hash: String, newPath: String) throws -> Int64? {
         let match = try db.first(
-            "SELECT id FROM documents WHERE hash=? AND missing=1 LIMIT 1", [.text(hash)],
+            "SELECT id FROM documents WHERE hash=? AND missing=1 AND deleted_at IS NULL LIMIT 1", [.text(hash)],
             { $0.int(0) })
         guard let id = match else { return nil }
         let url = URL(fileURLWithPath: newPath)
@@ -231,17 +231,101 @@ actor Store {
                    [.double(Date().timeIntervalSince1970), .text(relPath(path))])
     }
 
+    /// How long a row whose file has vanished is kept. It is the row that makes
+    /// a Finder move survive — relinked by content hash, with its tags, title
+    /// and history intact — and rows are tiny, so the old week was far too
+    /// short to buy anything. Paperless settled on thirty days; so does this.
+    static let missingGrace: TimeInterval = 30 * 24 * 3600
+
     /// Missing rows are kept for a while on purpose: they are what lets a file
     /// moved in Finder be relinked by content hash with its tags and metadata
-    /// intact. Past the grace period they are just dead weight.
+    /// intact. Past the grace period they are just dead weight — unless the
+    /// file is sitting in the Trash, where it can still be put back, and
+    /// forgetting the row now is exactly what would turn that into a brand-new
+    /// document with nothing on it.
     @discardableResult
-    func purgeMissing(olderThan seconds: TimeInterval) throws -> Int {
+    func purgeMissing(olderThan seconds: TimeInterval = Store.missingGrace) throws -> Int {
+        let cutoff = Date().timeIntervalSince1970 - seconds
+        let doomed = try db.map("""
+            SELECT id, filename, deleted_path FROM documents
+            WHERE missing=1 AND deleted_at IS NULL AND COALESCE(missing_since, 0) < ?
+            """, [.double(cutoff)]) { ($0.int(0), $0.string(1), $0.stringOrNil(2)) }
+        guard !doomed.isEmpty else { return 0 }
+
+        let inTrash = Store.trashedFilenames()
+        var purged = 0
+        for (id, filename, trashPath) in doomed {
+            if let trashPath, FileManager.default.fileExists(atPath: trashPath) { continue }
+            if inTrash.contains(filename) { continue }
+            try deleteDocument(id)
+            purged += 1
+        }
+        return purged
+    }
+
+    /// What is in the user's Trash right now, by filename. macOS renames a
+    /// collision on the way in ("scan 2.pdf"), so this is a hint rather than a
+    /// proof — but erring towards keeping a row costs a hundred bytes, and
+    /// erring the other way costs everything anyone ever typed about it.
+    private static func trashedFilenames() -> Set<String> {
+        guard let trash = try? FileManager.default.url(for: .trashDirectory, in: .userDomainMask,
+                                                       appropriateFor: nil, create: false),
+              let contents = try? FileManager.default.contentsOfDirectory(
+                at: trash, includingPropertiesForKeys: nil,
+                options: [.skipsSubdirectoryDescendants])
+        else { return [] }
+        return Set(contents.map(\.lastPathComponent))
+    }
+
+    // MARK: - Soft delete
+
+    /// Marks a document deleted without forgetting it. `trashPath` is where the
+    /// file ended up in the Trash, which is what Restore needs to put it back.
+    func softDelete(_ docID: Int64, trashPath: String?) throws {
+        let now = Date().timeIntervalSince1970
+        try db.run("""
+            UPDATE documents SET deleted_at=?, deleted_path=?, missing=1,
+                                 missing_since=COALESCE(missing_since, ?)
+            WHERE id=?
+            """, [.double(now), .text(trashPath), .double(now), .int(docID)])
+    }
+
+    /// Where in the Trash a deleted document's file went, if it is still there.
+    func trashedFile(_ docID: Int64) throws -> String? {
+        guard let path = try db.first("SELECT deleted_path FROM documents WHERE id=?",
+                                      [.int(docID)], { $0.stringOrNil(0) }) ?? nil
+        else { return nil }
+        return FileManager.default.fileExists(atPath: path) ? path : nil
+    }
+
+    /// Brings a deleted document back. The caller puts the file back first;
+    /// this revives the row, with everything that was ever on it.
+    func restore(_ docID: Int64, at path: String? = nil) throws {
+        if let path {
+            try updatePath(docID, to: path)
+        }
+        try db.run("""
+            UPDATE documents SET deleted_at=NULL, deleted_path=NULL, missing=0, missing_since=NULL
+            WHERE id=?
+            """, [.int(docID)])
+    }
+
+    /// Deleted rows past the grace period, for good. The file is the Trash's
+    /// business; this only forgets the row.
+    @discardableResult
+    func purgeDeleted(olderThan seconds: TimeInterval = Store.missingGrace) throws -> Int {
         let cutoff = Date().timeIntervalSince1970 - seconds
         let doomed = try db.map(
-            "SELECT id FROM documents WHERE missing=1 AND COALESCE(missing_since, 0) < ?",
+            "SELECT id FROM documents WHERE deleted_at IS NOT NULL AND deleted_at < ?",
             [.double(cutoff)]) { $0.int(0) }
         for id in doomed { try deleteDocument(id) }
         return doomed.count
+    }
+
+    func deletedCount() throws -> Int {
+        try db.first("SELECT COUNT(*) FROM documents WHERE deleted_at IS NOT NULL") {
+            Int($0.int(0))
+        } ?? 0
     }
 
     /// Records the content hash of the file as it is on disk now. `isOriginal`
@@ -271,14 +355,14 @@ actor Store {
     func documentIDsNeedingOCR(limit: Int = 5000) throws -> [(id: Int64, path: String, ext: String)] {
         try db.map("""
             SELECT id, path, ext FROM documents
-            WHERE ocr_state=0 AND missing=0 ORDER BY created_at DESC LIMIT ?
+            WHERE ocr_state=0 AND missing=0 AND deleted_at IS NULL ORDER BY created_at DESC LIMIT ?
             """, [.int(limit)]) { ($0.int(0), absPath($0.string(1)), $0.string(2)) }
     }
 
     /// Every document still present on disk, newest first. The input for a
     /// library-wide manual pass, which wants ids rather than whole rows.
     func allDocumentIDs(limit: Int = 20000) throws -> [Int64] {
-        try db.map("SELECT id FROM documents WHERE missing=0 ORDER BY created_at DESC LIMIT ?",
+        try db.map("SELECT id FROM documents WHERE missing=0 AND deleted_at IS NULL ORDER BY created_at DESC LIMIT ?",
                    [.int(limit)]) { $0.int(0) }
     }
 
@@ -427,7 +511,7 @@ actor Store {
             SELECT t.id, t.name, t.color, t.mirrors, t.folder, COUNT(dt.doc_id)
             FROM tags t
             LEFT JOIN document_tags dt ON dt.tag_id = t.id
-            LEFT JOIN documents d ON d.id = dt.doc_id AND d.missing=0
+            LEFT JOIN documents d ON d.id = dt.doc_id AND d.missing=0 AND d.deleted_at IS NULL
             GROUP BY t.id ORDER BY t.name COLLATE NOCASE
             """) {
             Tag(tagID: $0.int(0), name: $0.string(1), color: $0.int(2),
@@ -660,7 +744,7 @@ actor Store {
                    (SELECT f.body FROM doc_fts f WHERE f.rowid = d.id)
             FROM documents d
             LEFT JOIN metadata m ON m.doc_id = d.id
-            WHERE d.missing=0 ORDER BY d.created_at DESC LIMIT ?
+            WHERE d.missing=0 AND d.deleted_at IS NULL ORDER BY d.created_at DESC LIMIT ?
             """, [.int(Int64(limit))]) {
             RuleSample(filename: $0.string(0), text: $0.stringOrNil(3) ?? "",
                        correspondent: $0.stringOrNil(1), docType: $0.stringOrNil(2))

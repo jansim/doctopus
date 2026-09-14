@@ -80,6 +80,7 @@ struct DocumentListView: View {
         switch model.selection {
         case .needsReview: return "Everything the pipeline filed has been reviewed."
         case .queue: return "Imports, scans, moves and optimizations show up here as they happen."
+        case .deleted: return "Documents you move to the Trash wait here, so putting one back brings its tags and history with it."
         default: return "Documents added to this folder appear here as they are indexed. Right-click to scan one in from your iPhone."
         }
     }
@@ -555,7 +556,12 @@ private struct DocumentMenu: View {
             Divider()
             Menu("Import") { BackgroundMenu() }
             Divider()
-            Button("Move to Trash", role: .destructive) { model.moveToTrash(rows) }
+            if model.selection == .deleted {
+                Button("Put Back") { model.restore(rows) }
+                Button("Remove from Library", role: .destructive) { model.forget(rows) }
+            } else {
+                Button("Move to Trash", role: .destructive) { model.moveToTrash(rows) }
+            }
         }
     }
 }

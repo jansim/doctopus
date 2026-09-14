@@ -84,7 +84,7 @@ extension Store {
             let rows = try db.map("""
                 SELECT d.directory, COUNT(*) FROM documents d
                 JOIN metadata m ON m.doc_id = d.id
-                WHERE d.missing=0 AND d.id<>? AND m.\(column) = ? COLLATE NOCASE
+                WHERE d.missing=0 AND d.deleted_at IS NULL AND d.id<>? AND m.\(column) = ? COLLATE NOCASE
                 GROUP BY d.directory ORDER BY COUNT(*) DESC LIMIT ?
                 """, [.int(docID), .text(value), .int(Int64(limit))]) { ($0.string(0), Int($0.int(1))) }
             let total = max(1, rows.reduce(0) { $0 + $1.1 })

@@ -18,6 +18,11 @@ struct SidebarView: View {
                     model.queue.filter { !$0.approved }.count)
                 row(.untagged, "Untagged", "tag.slash", nil)
                 row(.queue, "Recent Processing", "clock.arrow.circlepath", model.queue.count)
+                // Only worth a row when there is something in it: an empty
+                // Trash is not a place anyone needs to visit.
+                if model.stats.deleted > 0 {
+                    row(.deleted, "Recently Deleted", "trash", model.stats.deleted)
+                }
             }
 
             // Folders and tags belong to one library each, so with more than

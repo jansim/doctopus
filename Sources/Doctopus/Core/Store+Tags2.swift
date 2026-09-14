@@ -62,7 +62,7 @@ extension Store {
     func finderTags() throws -> [Facet] {
         try db.map("""
             SELECT f.name, COUNT(*) FROM finder_tags f
-            JOIN documents d ON d.id = f.doc_id AND d.missing = 0
+            JOIN documents d ON d.id = f.doc_id AND d.missing = 0 AND d.deleted_at IS NULL
             GROUP BY f.name COLLATE NOCASE
             ORDER BY f.name COLLATE NOCASE
             """) { Facet(value: $0.string(0), count: Int($0.int(1))) }

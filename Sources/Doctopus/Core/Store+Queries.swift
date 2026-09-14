@@ -7,11 +7,15 @@ extension Store {
     func listDocuments(selection: Selection, query: SearchQuery, sort: SortField,
                        ascending: Bool, limit: Int = 500) throws -> [DocumentRow] {
         let allFields = try cachedFields()
-        var wheres: [String] = ["d.missing=0"]
         var args: [Database.Value] = []
+        // Deleted documents are out of every listing but their own, which is
+        // the only place the row is allowed to show through at all.
+        var wheres: [String] = selection == .deleted
+            ? ["d.deleted_at IS NOT NULL"]
+            : ["d.missing=0", "d.deleted_at IS NULL"]
 
         switch selection {
-        case .all: break
+        case .all, .deleted: break
         case .inbox:
             wheres.append("(d.directory = ? OR d.directory LIKE ?)")
             args.append(.text("Inbox")); args.append(.text("%/Inbox"))
@@ -105,7 +109,9 @@ extension Store {
         }
 
         let order: String
-        if selection.isQueueMode {
+        if selection == .deleted {
+            order = "d.deleted_at DESC"
+        } else if selection.isQueueMode {
             order = "pe.at DESC"
         } else if sort == .relevance && !joinFTS.isEmpty {
             // bm25() is more negative the better the match.
@@ -275,7 +281,7 @@ extension Store {
     /// the nodes it returns carry absolute paths.
     func folderTree() throws -> [FolderNode] {
         var counts: [String: Int] = [:]
-        try db.query("SELECT directory, COUNT(*) FROM documents WHERE missing=0 GROUP BY directory") {
+        try db.query("SELECT directory, COUNT(*) FROM documents WHERE missing=0 AND deleted_at IS NULL GROUP BY directory") {
             counts[$0.string(0)] = Int($0.int(1))
         }
 
@@ -310,7 +316,7 @@ extension Store {
         guard allowed.contains(column) else { return [] }
         return try db.map("""
             SELECT m.\(column), COUNT(*) FROM metadata m
-            JOIN documents d ON d.id=m.doc_id AND d.missing=0
+            JOIN documents d ON d.id=m.doc_id AND d.missing=0 AND d.deleted_at IS NULL
             WHERE m.\(column) IS NOT NULL AND TRIM(m.\(column)) <> ''
             GROUP BY m.\(column) COLLATE NOCASE ORDER BY COUNT(*) DESC, m.\(column) COLLATE NOCASE
             """) { Facet(value: $0.string(0), count: Int($0.int(1))) }
@@ -323,12 +329,16 @@ extension Store {
         var needsReview = 0
         var bytes: Int64 = 0
         var saved: Int64 = 0
+        /// Documents in the Trash whose rows are still here, waiting to be
+        /// restored or to age out.
+        var deleted = 0
 
         /// Summed across the open libraries for the app-wide footer.
         static func + (a: Stats, b: Stats) -> Stats {
             Stats(total: a.total + b.total, pending: a.pending + b.pending,
                   failed: a.failed + b.failed, needsReview: a.needsReview + b.needsReview,
-                  bytes: a.bytes + b.bytes, saved: a.saved + b.saved)
+                  bytes: a.bytes + b.bytes, saved: a.saved + b.saved,
+                  deleted: a.deleted + b.deleted)
         }
     }
 
@@ -338,18 +348,19 @@ extension Store {
             SELECT COUNT(*),
                    SUM(ocr_state=0), SUM(ocr_state=2), SUM(approved=0),
                    SUM(size), SUM(COALESCE(original_size,size) - size)
-            FROM documents WHERE missing=0
+            FROM documents WHERE missing=0 AND deleted_at IS NULL
             """) { r in
             s.total = Int(r.int(0)); s.pending = Int(r.int(1)); s.failed = Int(r.int(2))
             s.needsReview = Int(r.int(3)); s.bytes = r.int(4); s.saved = max(0, r.int(5))
         }
+        s.deleted = try deletedCount()
         return s
     }
 
     /// Distinct absolute folders under the root, for the "Move to…" menu.
     func allDirectories() throws -> [String] {
         var set = Set<String>()
-        try db.query("SELECT DISTINCT directory FROM documents WHERE missing=0") {
+        try db.query("SELECT DISTINCT directory FROM documents WHERE missing=0 AND deleted_at IS NULL") {
             set.insert(absPath($0.string(0)))
         }
         return set.sorted()

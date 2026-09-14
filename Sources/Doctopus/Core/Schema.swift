@@ -2,7 +2,7 @@ import Foundation
 
 /// Versioned schema. Migrations are append-only: bump `current` and add a case.
 enum Schema {
-    static let current = 9
+    static let current = 10
 
     static func migrate(_ db: Database) throws {
         let version = try db.first("PRAGMA user_version") { Int($0.int(0)) } ?? 0
@@ -15,6 +15,7 @@ enum Schema {
         if version < 7 { try v7(db) }
         if version < 8 { try v8(db) }
         if version < 9 { try v9(db) }
+        if version < 10 { try v10(db) }
         try db.exec("PRAGMA user_version=\(current)")
     }
 
@@ -28,6 +29,20 @@ enum Schema {
             [.text(table), .text(column)]) { $0.int(0) } ?? 0
         guard present == 0 else { return }
         try db.exec("ALTER TABLE \(table) ADD COLUMN \(column) \(declaration)")
+    }
+
+    /// Soft delete.
+    ///
+    /// Move to Trash did the file half well — it used the real Trash and never
+    /// unlinked anything — and then hard-deleted the row. So a file rescued
+    /// from the Trash a week later came back as a brand-new document with no
+    /// title, no tags and no history. `deleted_at` keeps the row instead, out
+    /// of every ordinary query but ready to be revived, and `deleted_path`
+    /// records where in the Trash the file went so Restore can put it back.
+    private static func v10(_ db: Database) throws {
+        try addColumn(db, table: "documents", column: "deleted_at", declaration: "REAL")
+        try addColumn(db, table: "documents", column: "deleted_path", declaration: "TEXT")
+        try db.exec("CREATE INDEX IF NOT EXISTS idx_documents_deleted ON documents(deleted_at)")
     }
 
     /// History, split from the review queue.

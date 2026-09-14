@@ -530,6 +530,49 @@ enum SelfTest {
                        !enriched.isEmpty && enriched.allSatisfy { $0.metadataSource == "remote" && $0.row.summary != nil })
         }
 
+        print("\nRECENTLY DELETED")
+        // A deleted document keeps its row, stays out of every listing but its
+        // own, and comes back whole — with its tags, title and history — when
+        // the file is put back.
+        if let victim = rows.first(where: { $0.directory.hasSuffix("Personal") }) ?? rows.first {
+            let tagID = (try? await store.tagID(named: "doctopus-restore")) ?? 0
+            try? await store.assign(tag: tagID, to: victim.doc)
+            try? await store.softDelete(victim.doc, trashPath: nil)
+
+            let listed = (try? await store.listDocuments(selection: .all, query: SearchQuery(""),
+                                                         sort: .added, ascending: false)) ?? []
+            let inTrash = (try? await store.listDocuments(selection: .deleted, query: SearchQuery(""),
+                                                          sort: .added, ascending: false)) ?? []
+            let after = (try? await store.stats()) ?? Store.Stats()
+            print("  deleted \(victim.filename) → \(after.deleted) in Recently Deleted, "
+                  + "\(after.total) listed")
+            Check.that("a deleted document leaves every ordinary listing",
+                       !listed.contains { $0.doc == victim.doc })
+            Check.that("…and is exactly what Recently Deleted holds",
+                       inTrash.contains { $0.doc == victim.doc } && after.deleted == 1)
+            Check.that("…and stops being searchable",
+                       !((try? await store.listDocuments(
+                            selection: .all, query: SearchQuery(victim.filename),
+                            sort: .relevance, ascending: false)) ?? []).contains { $0.doc == victim.doc })
+            Check.that("…but its row, and everything on it, is still there",
+                       ((try? await store.tags(for: victim.doc)) ?? []).contains { $0.tagID == tagID })
+
+            // A file waiting in the Trash is never forgotten by the purge, even
+            // long past the grace period.
+            let purged = (try? await store.purgeMissing(olderThan: 0)) ?? -1
+            Check.that("the purge leaves a document that was deleted on purpose alone",
+                       purged == 0, "\(purged) purged")
+
+            try? await store.restore(victim.doc)
+            let back = (try? await store.listDocuments(selection: .all, query: SearchQuery(""),
+                                                       sort: .added, ascending: false)) ?? []
+            Check.that("putting it back revives the row it always had",
+                       back.contains { $0.doc == victim.doc }
+                           && ((try? await store.tags(for: victim.doc)) ?? []).contains { $0.tagID == tagID })
+            try? await store.unassign(tag: tagID, from: victim.doc)
+            try? await store.deleteTag(tagID)
+        }
+
         print("\nHISTORY")
         // The queue is a bounded recency view; the history behind it is not.
         // Overflowing the queue has to leave the record of what happened

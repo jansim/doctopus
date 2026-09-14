@@ -965,8 +965,14 @@ final class AppModel {
             for (lib, rows) in grouped(rows) {
                 for row in rows {
                     do {
-                        try FileManager.default.trashItem(at: row.url, resultingItemURL: nil)
-                        try? await lib.store.deleteDocument(row.doc)
+                        var landed: NSURL?
+                        try FileManager.default.trashItem(at: row.url, resultingItemURL: &landed)
+                        // The row stays, marked deleted and remembering where
+                        // in the Trash the file went. Rescuing the file a month
+                        // later brings the document back with its title, tags
+                        // and history rather than as something brand new.
+                        try? await lib.store.softDelete(row.doc,
+                                                        trashPath: (landed as URL?)?.path)
                         trashed += 1
                     } catch {
                         failed.append(row.filename)
@@ -981,6 +987,63 @@ final class AppModel {
                 notify(trashed == 1 && rows.count == 1 ? "Moved “\(rows[0].displayTitle)” to the Trash."
                                                        : "Moved \(trashed) documents to the Trash.")
             }
+        }
+    }
+
+    /// Puts deleted documents back: the file comes out of the Trash and the row
+    /// it always had is revived, rather than the file being re-indexed as
+    /// something new.
+    func restore(_ rows: [DocumentRow]) {
+        Task {
+            var restored = 0
+            var gone: [String] = []
+            for (lib, rows) in grouped(rows) {
+                for row in rows {
+                    guard let trashed = try? await lib.store.trashedFile(row.doc) else {
+                        gone.append(row.filename)
+                        continue
+                    }
+                    let destination = URL(fileURLWithPath: row.path)
+                    do {
+                        try FileManager.default.createDirectory(
+                            at: destination.deletingLastPathComponent(),
+                            withIntermediateDirectories: true)
+                        let target = Naming.uniqueURL(in: destination.deletingLastPathComponent(),
+                                                      filename: destination.lastPathComponent)
+                        try FileManager.default.moveItem(at: URL(fileURLWithPath: trashed), to: target)
+                        try? await lib.store.restore(row.doc, at: target.path)
+                        try? await lib.store.logProcessing(
+                            docID: row.doc, action: "moved", detail: "Restored from the Trash",
+                            confidence: nil, rule: nil, from: trashed, to: target.path, approved: true)
+                        restored += 1
+                    } catch {
+                        gone.append(row.filename)
+                    }
+                }
+            }
+            refreshAll()
+            if !gone.isEmpty {
+                errorMessage = gone.count == 1
+                    ? "“\(gone[0])” is no longer in the Trash, so there is nothing to put back."
+                    : "\(gone.count) of these files are no longer in the Trash."
+            }
+            if restored > 0 {
+                notify(restored == 1 ? "Put “\(rows.first?.displayTitle ?? "the document")” back."
+                                     : "Put \(restored) documents back.")
+            }
+        }
+    }
+
+    /// Forgets a deleted document for good. The file stays in the Trash —
+    /// emptying that is the Finder's business, not Doctopus's.
+    func forget(_ rows: [DocumentRow]) {
+        Task {
+            for (lib, rows) in grouped(rows) {
+                for row in rows { try? await lib.store.deleteDocument(row.doc) }
+            }
+            refreshAll()
+            notify(rows.count == 1 ? "Removed “\(rows[0].displayTitle)” from the library."
+                                   : "Removed \(rows.count) documents from the library.")
         }
     }
 
