@@ -120,7 +120,7 @@ struct SidebarView: View {
     @ViewBuilder
     private func tagRows(_ library: Library) -> some View {
         ForEach(library.tags) { tag in
-            TagRow(tag: tag)
+            TagRow(tag: tag, siblings: library.tags)
         }
         Button {
             guard let name = TextPrompt.ask(title: "New Tag",
@@ -205,11 +205,20 @@ private struct LibraryHeader: View {
 private struct TagRow: View {
     @Environment(AppModel.self) private var model
     let tag: Tag
+    /// Every tag in the same library, for the "Move Under" menu.
+    var siblings: [Tag] = []
     @State private var targeted = false
 
     var body: some View {
         Label {
             HStack {
+                // Nesting is drawn by indentation rather than by disclosure
+                // triangles: a tag tree is shallow, and hiding a child behind a
+                // twisty makes it harder to drop onto, which is what these rows
+                // are mostly for.
+                if tag.depth > 0 {
+                    Spacer().frame(width: CGFloat(tag.depth) * 11)
+                }
                 Text(tag.name)
                 Spacer()
                 if tag.mirrors {
@@ -232,6 +241,18 @@ private struct TagRow: View {
         } isTargeted: { targeted = $0 }
     }
 
+    /// Every tag this one could sit under: not itself, and not anything already
+    /// below it, which would make a loop out of the tree.
+    private var candidateParents: [Tag] {
+        var banned: Set<Int64> = [tag.tagID]
+        // `siblings` is in drawing order, parents before children, so one pass
+        // is enough to find the whole subtree.
+        for other in siblings where other.parentID.map({ banned.contains($0) }) == true {
+            banned.insert(other.tagID)
+        }
+        return siblings.filter { !banned.contains($0.tagID) }
+    }
+
     @ViewBuilder
     private var menu: some View {
         Button("Rename…") {
@@ -252,6 +273,20 @@ private struct TagRow: View {
         Toggle("Mirror to Disk as Aliases", isOn: Binding(
             get: { tag.mirrors },
             set: { model.setTagMirroring(tag, enabled: $0) }))
+        // Nesting: assigning a child assigns its parents too, so filtering by
+        // the parent finds everything underneath it.
+        Menu("Move Under") {
+            Button("Nothing — Top Level") { model.setTagParent(tag, to: nil) }
+                .disabled(tag.parentID == nil)
+            Divider()
+            ForEach(candidateParents) { other in
+                Button(String(repeating: "    ", count: other.depth) + other.name) {
+                    model.setTagParent(tag, to: other)
+                }
+                .disabled(other.tagID == tag.parentID)
+            }
+        }
+        .disabled(candidateParents.isEmpty && tag.parentID == nil)
         Divider()
         Button("Delete Tag", role: .destructive) { model.deleteTag(tag) }
     }

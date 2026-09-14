@@ -204,10 +204,21 @@ struct Tag: Identifiable, Hashable, Sendable {
     var mirrors: Bool
     var folder: String?
     var count: Int = 0
+    /// The tag this one sits under, if any. Assigning a child attaches every
+    /// ancestor too, so "Finances" finds what is filed under
+    /// "Finances / Invoices" without anyone tagging both.
+    var parentID: Int64?
+    /// How deep this tag sits, with a root at zero. Filled in by `tags()`,
+    /// which knows the whole shape.
+    var depth: Int = 0
     /// Which library this tag belongs to. Stamped by `AppModel`.
     var library: LibraryID = ""
 
     var id: TagRef { TagRef(library: library, tag: tagID) }
+
+    /// Tags nest, but not without limit. Paperless settled on five and nobody
+    /// has ever asked for a sixth.
+    static let maxDepth = 5
 }
 
 /// A tag the model proposed for a document but that has not been accepted

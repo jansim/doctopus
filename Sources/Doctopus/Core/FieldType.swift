@@ -157,7 +157,7 @@ extension FieldType {
         return nil
     }
 
-    nonisolated(unsafe) static let dayFormatter: DateFormatter = {
+    static let dayFormatter: DateFormatter = {
         let f = DateFormatter()
         f.calendar = Calendar(identifier: .gregorian)
         f.locale = Locale(identifier: "en_US_POSIX")
@@ -201,7 +201,7 @@ enum DayDate {
 
     /// How a day is shown to a person: their format, but the stored day, not
     /// whatever day that instant falls on where they are.
-    nonisolated(unsafe) static let display: DateFormatter = {
+    static let display: DateFormatter = {
         let f = DateFormatter()
         f.timeZone = TimeZone(secondsFromGMT: 0)
         f.dateStyle = .medium

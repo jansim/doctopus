@@ -557,16 +557,130 @@ actor Store {
 
     // MARK: - Tags
 
+    /// Every tag, with how many live documents carry it, in the order the
+    /// sidebar draws them: each parent immediately followed by its children,
+    /// alphabetically within a level, and `depth` filled in so the view only
+    /// has to indent.
     func tags() throws -> [Tag] {
-        try db.map("""
-            SELECT t.id, t.name, t.color, t.mirrors, t.folder, COUNT(dt.doc_id)
+        let flat = try db.map("""
+            SELECT t.id, t.name, t.color, t.mirrors, t.folder, COUNT(dt.doc_id), t.parent_id
             FROM tags t
             LEFT JOIN document_tags dt ON dt.tag_id = t.id
             LEFT JOIN documents d ON d.id = dt.doc_id AND d.missing=0 AND d.deleted_at IS NULL
             GROUP BY t.id ORDER BY t.name COLLATE NOCASE
             """) {
             Tag(tagID: $0.int(0), name: $0.string(1), color: $0.int(2),
-                mirrors: $0.bool(3), folder: $0.stringOrNil(4), count: Int($0.int(5)))
+                mirrors: $0.bool(3), folder: $0.stringOrNil(4), count: Int($0.int(5)),
+                parentID: $0.intOrNil(6))
+        }
+        return Store.nested(flat)
+    }
+
+    /// Flattens a tag list into drawing order, stamping each one's depth. A tag
+    /// whose parent is missing — or which is part of a cycle some older build
+    /// wrote — is treated as a root rather than being dropped.
+    nonisolated static func nested(_ tags: [Tag]) -> [Tag] {
+        var children: [Int64: [Tag]] = [:]
+        var roots: [Tag] = []
+        let known = Set(tags.map(\.tagID))
+        for tag in tags {
+            if let parent = tag.parentID, parent != tag.tagID, known.contains(parent) {
+                children[parent, default: []].append(tag)
+            } else {
+                roots.append(tag)
+            }
+        }
+        var out: [Tag] = []
+        var placed = Set<Int64>()
+        func walk(_ tag: Tag, depth: Int) {
+            guard placed.insert(tag.tagID).inserted else { return }
+            var stamped = tag
+            stamped.depth = depth
+            out.append(stamped)
+            for child in children[tag.tagID] ?? [] { walk(child, depth: depth + 1) }
+        }
+        for root in roots { walk(root, depth: 0) }
+        // Anything left is in a cycle; show it rather than losing it.
+        for tag in tags where !placed.contains(tag.tagID) { walk(tag, depth: 0) }
+        return out
+    }
+
+    /// The tags above this one, nearest parent first.
+    func ancestors(of tagID: Int64) throws -> [Int64] {
+        var out: [Int64] = []
+        var current = tagID
+        var guardrail = 0
+        while guardrail < Tag.maxDepth + 1 {
+            guardrail += 1
+            guard let parent = try db.first("SELECT parent_id FROM tags WHERE id=?", [.int(current)],
+                                            { $0.intOrNil(0) }) ?? nil else { break }
+            guard !out.contains(parent), parent != tagID else { break }
+            out.append(parent)
+            current = parent
+        }
+        return out
+    }
+
+    /// Moves a tag under another, or to the top level with `nil`.
+    ///
+    /// Refuses a tag as its own parent, a descendant as its parent, and a move
+    /// that would push the tree past its depth cap. Re-runs ancestor assignment
+    /// over every document that already carries the tag, so the documents catch
+    /// up with the new shape rather than being right only for what is tagged
+    /// next.
+    @discardableResult
+    func setTagParent(_ tagID: Int64, to parentID: Int64?) throws -> Bool {
+        guard tagID != parentID else { return false }
+        if let parentID {
+            // A descendant as the parent would make a cycle out of the tree.
+            if try ancestors(of: parentID).contains(tagID) { return false }
+            let above = try ancestors(of: parentID).count + 1
+            let below = try depthBelow(tagID)
+            guard above + below < Tag.maxDepth else { return false }
+        }
+        try db.run("UPDATE tags SET parent_id=? WHERE id=?", [.int(parentID), .int(tagID)])
+        try reapplyAncestors(of: tagID)
+        return true
+    }
+
+    /// How many levels of tags sit under this one.
+    private func depthBelow(_ tagID: Int64) throws -> Int {
+        let children = try db.map("SELECT id FROM tags WHERE parent_id=?", [.int(tagID)]) { $0.int(0) }
+        guard !children.isEmpty else { return 0 }
+        var deepest = 0
+        for child in children where child != tagID {
+            deepest = try max(deepest, depthBelow(child) + 1)
+        }
+        return deepest
+    }
+
+    /// Gives every document carrying `tagID` — or anything under it — the
+    /// ancestors it should now have.
+    func reapplyAncestors(of tagID: Int64) throws {
+        var subtree = [tagID]
+        var frontier = [tagID]
+        var depth = 0
+        while !frontier.isEmpty, depth <= Tag.maxDepth {
+            depth += 1
+            var next: [Int64] = []
+            for id in frontier {
+                next += try db.map("SELECT id FROM tags WHERE parent_id=?", [.int(id)]) { $0.int(0) }
+            }
+            next.removeAll { subtree.contains($0) }
+            subtree += next
+            frontier = next
+        }
+        for id in subtree {
+            let above = try ancestors(of: id)
+            guard !above.isEmpty else { continue }
+            let docs = try documentIDs(withTag: id)
+            for doc in docs {
+                for parent in above {
+                    try db.run("INSERT OR IGNORE INTO document_tags(doc_id, tag_id, auto) VALUES(?,?,1)",
+                               [.int(doc), .int(parent)])
+                }
+            }
+            try refreshSearchIndex(docs)
         }
     }
 
@@ -580,10 +694,17 @@ actor Store {
         return try db.run("INSERT INTO tags(name, color) VALUES(?,?)", [.text(clean), .int(color)])
     }
 
+    /// Assigning a tag assigns everything it sits under too. That is what makes
+    /// "Finances" find what is filed as "Finances / Invoices" — the ancestors
+    /// are marked automatic, since nobody chose them by hand.
     func assign(tag tagID: Int64, to docID: Int64, auto: Bool = false) throws {
         guard tagID > 0 else { return }
         try db.run("INSERT OR IGNORE INTO document_tags(doc_id, tag_id, auto) VALUES(?,?,?)",
                    [.int(docID), .int(tagID), .bool(auto)])
+        for parent in try ancestors(of: tagID) {
+            try db.run("INSERT OR IGNORE INTO document_tags(doc_id, tag_id, auto) VALUES(?,?,1)",
+                       [.int(docID), .int(parent)])
+        }
         try refreshSearchIndex(docID)
     }
 
@@ -605,11 +726,12 @@ actor Store {
 
     func tags(for docID: Int64) throws -> [Tag] {
         try db.map("""
-            SELECT t.id, t.name, t.color, t.mirrors, t.folder FROM tags t
+            SELECT t.id, t.name, t.color, t.mirrors, t.folder, t.parent_id FROM tags t
             JOIN document_tags dt ON dt.tag_id=t.id WHERE dt.doc_id=?
             ORDER BY t.name COLLATE NOCASE
             """, [.int(docID)]) {
-            Tag(tagID: $0.int(0), name: $0.string(1), color: $0.int(2), mirrors: $0.bool(3), folder: $0.stringOrNil(4))
+            Tag(tagID: $0.int(0), name: $0.string(1), color: $0.int(2), mirrors: $0.bool(3),
+                folder: $0.stringOrNil(4), parentID: $0.intOrNil(5))
         }
     }
 

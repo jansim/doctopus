@@ -1149,6 +1149,25 @@ final class AppModel {
         }
     }
 
+    /// Moves a tag under another, or back to the top level. Refused when it
+    /// would make a loop or push the tree past its depth cap — the store is the
+    /// one that knows, so the answer comes back from there.
+    func setTagParent(_ tag: Tag, to parent: Tag?) {
+        guard let lib = library(tag.library) else { return }
+        if let parent, parent.library != tag.library {
+            errorMessage = "Tags can only be nested inside their own library."
+            return
+        }
+        Task {
+            let moved = (try? await lib.store.setTagParent(tag.tagID, to: parent?.tagID)) ?? false
+            if !moved, parent != nil {
+                errorMessage = "“\(tag.name)” cannot go under “\(parent?.name ?? "")”: "
+                    + "a tag cannot sit inside itself, and tags nest at most \(Tag.maxDepth) deep."
+            }
+            refreshAll()
+        }
+    }
+
     /// New tags go to the library the sidebar selection belongs to.
     func createTag(named name: String, in lib: Library? = nil) {
         guard let lib = lib ?? activeLibrary else { return }
@@ -1243,7 +1262,7 @@ final class AppModel {
     func addNote(_ body: String, to ref: DocumentRef) {
         guard let lib = library(ref.library), body.nilIfBlank != nil else { return }
         Task {
-            try? await lib.store.addNote(body, to: ref.doc)
+            _ = try? await lib.store.addNote(body, to: ref.doc)
             reloadDetail()
         }
     }

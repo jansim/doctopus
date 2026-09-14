@@ -2,7 +2,7 @@ import Foundation
 
 /// Versioned schema. Migrations are append-only: bump `current` and add a case.
 enum Schema {
-    static let current = 13
+    static let current = 14
 
     static func migrate(_ db: Database) throws {
         let version = try db.first("PRAGMA user_version") { Int($0.int(0)) } ?? 0
@@ -19,6 +19,7 @@ enum Schema {
         if version < 11 { try v11(db) }
         if version < 12 { try v12(db) }
         if version < 13 { try v13(db) }
+        if version < 14 { try v14(db) }
         try db.exec("PRAGMA user_version=\(current)")
     }
 
@@ -32,6 +33,25 @@ enum Schema {
             [.text(table), .text(column)]) { $0.int(0) } ?? 0
         guard present == 0 else { return }
         try db.exec("ALTER TABLE \(table) ADD COLUMN \(column) \(declaration)")
+    }
+
+    /// Nested tags.
+    ///
+    /// One of the most-requested things in Paperless's history, and cheap here:
+    /// a parent, a depth cap, and every ancestor attached automatically when a
+    /// child is assigned — so filtering by "Finances" finds the invoices filed
+    /// under "Finances / Invoices" without anyone having to tag both.
+    ///
+    /// It composes with alias mirroring for free: a mirrored parent gives you a
+    /// `Finances/` folder with `Invoices/` and `Statements/` inside it.
+    ///
+    /// A deleted parent leaves its children as roots rather than taking them
+    /// with it — deleting "Finances" should not silently delete every invoice's
+    /// tag as well.
+    private static func v14(_ db: Database) throws {
+        try addColumn(db, table: "tags", column: "parent_id",
+                      declaration: "INTEGER REFERENCES tags(id) ON DELETE SET NULL")
+        try db.exec("CREATE INDEX IF NOT EXISTS idx_tags_parent ON tags(parent_id)")
     }
 
     /// Days, and the dates that were not chosen.

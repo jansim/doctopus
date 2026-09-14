@@ -530,6 +530,67 @@ enum SelfTest {
                        !enriched.isEmpty && enriched.allSatisfy { $0.metadataSource == "remote" && $0.row.summary != nil })
         }
 
+        print("\nNESTED TAGS")
+        // Assigning a child assigns everything it sits under, which is what
+        // makes filtering by the parent find what is filed under the child.
+        let finances = (try? await store.tagID(named: "Finances")) ?? 0
+        let invoices = (try? await store.tagID(named: "Finances Invoices")) ?? 0
+        let statements = (try? await store.tagID(named: "Finances Statements")) ?? 0
+        _ = try? await store.setTagParent(invoices, to: finances)
+        _ = try? await store.setTagParent(statements, to: finances)
+        if let subject = rows.first {
+            try? await store.assign(tag: invoices, to: subject.doc)
+            let carried = (try? await store.tags(for: subject.doc)) ?? []
+            print("  tagged with Invoices → \(carried.map(\.name).joined(separator: ", "))")
+            Check.that("assigning a child attaches its parent too",
+                       carried.contains { $0.tagID == finances })
+            let byParent = (try? await store.listDocuments(selection: .tag(TagRef(library: "", tag: finances)),
+                                                           query: SearchQuery(""), sort: .added,
+                                                           ascending: false)) ?? []
+            Check.that("…so filtering by the parent finds it",
+                       byParent.contains { $0.doc == subject.doc })
+        }
+        let shaped = (try? await store.tags()) ?? []
+        for tag in shaped where tag.name.hasPrefix("Finances") {
+            print("  \(String(repeating: "  ", count: tag.depth))\(tag.name) (\(tag.count))")
+        }
+        Check.that("children are drawn under their parent, one level in",
+                   shaped.first { $0.tagID == invoices }?.depth == 1
+                       && shaped.first { $0.tagID == finances }?.depth == 0)
+
+        // A tag cannot sit inside itself, directly or round a loop.
+        Check.that("a tag cannot be its own parent",
+                   (try? await store.setTagParent(finances, to: finances)) == false)
+        Check.that("a descendant cannot become the parent",
+                   (try? await store.setTagParent(finances, to: invoices)) == false)
+
+        // Re-parenting catches the documents up rather than being right only
+        // for whatever is tagged next.
+        let deep = (try? await store.tagID(named: "Household")) ?? 0
+        if let subject = rows.first {
+            _ = try? await store.setTagParent(finances, to: deep)
+            let after = (try? await store.tags(for: subject.doc)) ?? []
+            Check.that("re-parenting gives the documents the new ancestor",
+                       after.contains { $0.tagID == deep },
+                       after.map(\.name).joined(separator: ", "))
+            _ = try? await store.setTagParent(finances, to: nil)
+        }
+
+        // Five deep, and no further.
+        var chain: [Int64] = []
+        for level in 1...6 {
+            let id = (try? await store.tagID(named: "Level \(level)")) ?? 0
+            chain.append(id)
+            if level > 1 { _ = try? await store.setTagParent(id, to: chain[level - 2]) }
+        }
+        let levels = (try? await store.tags()) ?? []
+        let deepest = levels.filter { $0.name.hasPrefix("Level ") }.map(\.depth).max() ?? 0
+        print("  deepest nesting reached \(deepest + 1) level(s)")
+        Check.that("tags nest no deeper than the cap", deepest < Tag.maxDepth,
+                   "depth \(deepest)")
+        for id in chain.reversed() { try? await store.deleteTag(id) }
+        for id in [invoices, statements, finances, deep] { try? await store.deleteTag(id) }
+
         print("\nDATES")
         // The same numeric date, read two ways. Which one is right is the
         // library's business, not the Mac's — that is the whole setting.
@@ -553,12 +614,12 @@ enum SelfTest {
 
         // A document is never issued in the future.
         let nextYear = DayDate.calendar.date(byAdding: .year, value: 1, to: Date())!
-        let future = "Datum: \(DayDate.text(nextYear))"
+        let yetToCome = "Datum: \(DayDate.text(nextYear))"
         Check.that("a document is never issued in the future",
-                   DocumentAnalyzer.dateInText(future) == nil,
-                   DocumentAnalyzer.dateInText(future).map(DayDate.text) ?? "none")
+                   DocumentAnalyzer.dateInText(yetToCome) == nil,
+                   DocumentAnalyzer.dateInText(yetToCome).map(DayDate.text) ?? "none")
         Check.that("…but a field holding a due date may still be",
-                   DocumentAnalyzer.anyDate(in: future).map(DayDate.text) == DayDate.text(nextYear))
+                   DocumentAnalyzer.anyDate(in: yetToCome).map(DayDate.text) == DayDate.text(nextYear))
 
         // A date in the ignore list never counts, however well labelled.
         let letterhead = "Formular Stand: 12/01/2019 · Rechnungsdatum: 14/02/2024"
