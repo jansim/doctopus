@@ -47,6 +47,7 @@ struct DoctopusApp: App {
                     ScanCoordinator.shared.onScan = { items, destination in
                         model.importScanned(items, into: destination)
                     }
+                    ScanCoordinator.shared.onScanFailed = { model.errorMessage = $0 }
                     await model.bootstrap()
                 }
         }
@@ -59,7 +60,7 @@ struct DoctopusApp: App {
     }
 }
 
-final class AppDelegate: NSObject, NSApplicationDelegate, NSServicesMenuRequestor {
+final class AppDelegate: NSObject, NSApplicationDelegate {
     var model: AppModel? { didSet { openPending() } }
     /// Libraries opened before there was a model to open them in. A library
     /// double-clicked in Finder while Doctopus is not running is handed over
@@ -98,22 +99,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSServicesMenuRequesto
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
 
-    // The app delegate sits at the end of the responder chain, which is where
-    // AppKit looks for somewhere to put a capture. Only the return type
-    // matters: the send type says what we could hand *out*, and we hand out
-    // nothing.
-    @objc func validRequestor(forSendType sendType: NSPasteboard.PasteboardType?,
-                              returnType: NSPasteboard.PasteboardType?) -> Any? {
-        guard let returnType, ScanCoordinator.accepts(returnType) else { return nil }
-        return self
-    }
-
-    func readSelection(from pasteboard: NSPasteboard) -> Bool {
-        MainActor.assumeIsolated { ScanCoordinator.shared.accept(pasteboard) }
-    }
-
-    func writeSelection(to pasteboard: NSPasteboard,
-                        types: [NSPasteboard.PasteboardType]) -> Bool { false }
+    // Captures themselves are delivered through SwiftUI, not a services
+    // requestor here — see ScanCoordinator.accept.
 
     // Quick Look asks the responder chain who owns the panel. SwiftUI views are
     // not in that chain, so the app delegate — which always is — claims it.
