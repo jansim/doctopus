@@ -3,9 +3,10 @@ import Foundation
 /// How a rule's pattern is read.
 ///
 /// The router used to work this out from the punctuation: anything containing
-/// `^$*+?[]()|\` became a regular expression. That made `Acme (UK) Ltd` a
-/// regex nobody asked for, and turned `Betrag: 100€ +` into a regex that fails
-/// to compile and silently falls back to word matching. The rule editor's
+/// `^$*+?[]()|\` became a regular expression. That made `Acme (UK) Ltd` a regex
+/// nobody asked for — a valid one, which is worse, because it matched something
+/// subtly different rather than failing — and made `inv(oice` a regex that does
+/// not compile and silently falls back to word matching. The rule editor's
 /// preview was honest about all of it, which is good design covering for a bad
 /// default. This is the default being fixed instead.
 enum MatchMode: Int64, CaseIterable, Sendable, Codable {
