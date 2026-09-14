@@ -229,7 +229,8 @@ extension Store {
             // A taxonomy value is a row, so the filter is on its id — which is
             // also why two spellings can no longer be two different filters.
             if let idColumn = Store.entityColumns[column] {
-                let comparison = exact ? "name = ?" : "name LIKE ?"
+                // Qualified, because `fields` has a `name` column of its own.
+                let comparison = exact ? "e.name = ?" : "e.name LIKE ?"
                 wheres.append("""
                     m.\(idColumn) IN (SELECT e.id FROM entities e
                                       JOIN fields f ON f.id = e.field_id

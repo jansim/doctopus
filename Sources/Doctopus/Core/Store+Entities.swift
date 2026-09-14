@@ -100,13 +100,15 @@ extension Store {
         let existing = try db.first("SELECT id FROM entities WHERE field_id=? AND name=? AND id<>?",
                                     [.int(fieldID), .text(clean), .int(id)], { $0.int(0) })
         guard let target = existing else {
-            // One row, one name. This is the whole point of the change.
+            // One row, one name. This is the whole point of the change: the
+            // documents are not touched at all, they already point here.
+            let affected = try documentIDs(withEntity: id, column: idColumn)
             try db.run("UPDATE entities SET name=? WHERE id=?", [.text(clean), .int(id)])
-            try refreshSearchIndex(try documentIDs(withEntity: id, column: idColumn))
-            return 1
+            try refreshSearchIndex(affected)
+            return affected.count
         }
         let affected = try documentIDs(withEntity: id, column: idColumn)
-            + (try documentIDs(withEntity: target, column: idColumn))
+            + documentIDs(withEntity: target, column: idColumn)
         try db.transaction {
             try db.run("UPDATE metadata SET \(idColumn)=? WHERE \(idColumn)=?",
                        [.int(target), .int(id)])

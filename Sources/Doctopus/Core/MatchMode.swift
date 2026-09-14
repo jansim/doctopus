@@ -50,10 +50,22 @@ enum MatchMode: Int64, CaseIterable, Sendable, Codable {
         return (try? NSRegularExpression(pattern: p, options: [])) != nil ? .regex : .anyWord
     }
 
-    /// How close two strings have to be, as a percentage, for `fuzzy` to call
-    /// it a match. Paperless uses rapidfuzz's `partial_ratio >= 90`; the same
-    /// number, computed the same way, over an edit distance.
+    /// How close two strings have to be, as a fraction, for `fuzzy` to call it
+    /// a match. Paperless uses rapidfuzz's `partial_ratio >= 90`.
     static let fuzzyThreshold = 0.9
+
+    /// …and how many edits are forgiven outright, which is what a ratio alone
+    /// gets wrong on short words: one misread letter in an eight-letter word is
+    /// 87.5% similar, so a flat 90% rejects `Rechnunq` for `Rechnung` — exactly
+    /// the case this mode exists for. Anything under five letters is too short
+    /// to guess at.
+    static func fuzzyEdits(forLength n: Int) -> Int {
+        switch n {
+        case ..<5: return 0
+        case ..<10: return 1
+        default: return 2
+        }
+    }
 }
 
 /// The matching itself, kept out of `Router` so the rule editor's preview and
@@ -82,9 +94,7 @@ enum PatternMatcher {
             return re.firstMatch(in: subject,
                                  range: NSRange(location: 0, length: (subject as NSString).length)) != nil
         case .fuzzy:
-            return words(in: p, insensitive: insensitive).contains {
-                partialRatio(of: $0, in: hay) >= MatchMode.fuzzyThreshold
-            }
+            return words(in: p, insensitive: insensitive).contains { isNear($0, in: hay) }
         }
     }
 
@@ -109,25 +119,32 @@ enum PatternMatcher {
         return try? NSRegularExpression(pattern: parts.joined(separator: #"\s+"#), options: options)
     }
 
-    /// How well `needle` matches the best window of `hay` of its own length,
-    /// as a fraction. This is rapidfuzz's `partial_ratio` in miniature: slide
-    /// the needle along, take the best edit-distance similarity.
+    /// Whether any word of `hay` is close enough to `needle` — either within
+    /// the forgiven number of edits, or similar enough by ratio, whichever is
+    /// kinder. The two together are what makes short words work as well as
+    /// long ones.
     ///
-    /// Only worth running against the words of a document, not its whole text,
-    /// so the haystack is split first — an edit distance over half a megabyte
-    /// of OCR would be its own kind of mistake.
-    static func partialRatio(of needle: String, in hay: String) -> Double {
-        guard !needle.isEmpty else { return 0 }
-        if hay.contains(needle) { return 1 }
-        var best = 0.0
+    /// Only ever run against the *words* of a document, never its whole text:
+    /// an edit distance over half a megabyte of OCR would be its own kind of
+    /// mistake.
+    static func isNear(_ needle: String, in hay: String) -> Bool {
+        guard !needle.isEmpty else { return false }
+        if hay.contains(needle) { return true }
+        let allowance = MatchMode.fuzzyEdits(forLength: needle.count)
+        guard allowance > 0 else { return false }
+        let target = Array(needle)
         for token in hay.split(whereSeparator: { !$0.isLetter && !$0.isNumber }) {
             // Only compare against words of a plausible length; "Rechnung" is
-            // never a typo for "of".
-            guard abs(token.count - needle.count) <= max(2, needle.count / 4) else { continue }
-            best = max(best, similarity(needle, String(token)))
-            if best >= 1 { break }
+            // never a misreading of "of".
+            guard abs(token.count - needle.count) <= allowance else { continue }
+            let edits = distance(target, Array(token))
+            if edits <= allowance { return true }
+            let longest = max(needle.count, token.count)
+            if longest > 0, 1 - Double(edits) / Double(longest) >= MatchMode.fuzzyThreshold {
+                return true
+            }
         }
-        return best
+        return false
     }
 
     /// 1 minus the normalised Levenshtein distance.
@@ -138,7 +155,7 @@ enum PatternMatcher {
     }
 
     /// Levenshtein, two rows at a time.
-    private static func distance(_ a: [Character], _ b: [Character]) -> Int {
+    static func distance(_ a: [Character], _ b: [Character]) -> Int {
         if a.isEmpty { return b.count }
         if b.isEmpty { return a.count }
         var previous = Array(0...b.count)

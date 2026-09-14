@@ -538,8 +538,8 @@ enum SelfTest {
         // could not do at all.
         if let corrField = ((try? await store.fields()) ?? []).first(where: { $0.key == "correspondent" }) {
             let live = (try? await store.entities(builtin: "correspondent")) ?? []
-            print("  correspondents          "
-                  + live.prefix(4).map { "\($0.name) (\($0.count))" }.joined(separator: ", "))
+            let listed: [String] = live.prefix(4).map { "\($0.name) (\($0.count))" }
+            print("  correspondents          " + listed.joined(separator: ", "))
             Check.that("every correspondent in use is a row", !live.isEmpty)
             Check.that("…and each one exists exactly once",
                        Set(live.map { $0.name.lowercased() }).count == live.count)
@@ -548,18 +548,20 @@ enum SelfTest {
             // so the fixture library is left exactly as the rest of the run
             // expects to find it.
             if rows.count >= 3 {
-                let spellingA = "Stadtwerke München GmbH"
-                let spellingB = "Stadtwerke München"
+                let spellingA = "Doctopus Werke GmbH"
+                let spellingB = "Doctopus Werke"
                 try? await store.setFieldValue(docID: rows[0].doc, field: corrField, value: spellingA)
                 try? await store.setFieldValue(docID: rows[1].doc, field: corrField, value: spellingA)
                 try? await store.setFieldValue(docID: rows[2].doc, field: corrField, value: spellingB)
                 try? await store.setValueIcon(field: corrField, value: spellingA, icon: "building.columns")
 
                 let renamed = (try? await store.renameFieldValue(field: corrField, from: spellingA,
-                                                                 to: "Stadtwerke")) ?? 0
+                                                                 to: "Doctopus Werke AG")) ?? 0
                 var after = (try? await store.entities(builtin: "correspondent")) ?? []
-                let moved = after.first { $0.name == "Stadtwerke" }
-                print("  \(spellingA) → Stadtwerke   \(moved?.count ?? 0) document(s), \(renamed) row(s)")
+                let moved = after.first { $0.name == "Doctopus Werke AG" }
+                let movedCount: Int = moved?.count ?? 0
+                print("  " + spellingA + " → Doctopus Werke AG   "
+                      + "\(movedCount) document(s), \(renamed) row(s)")
                 Check.that("renaming a correspondent takes every document with it",
                            moved?.count == 2, "\(moved?.count ?? -1)")
                 Check.that("…and its icon comes along rather than being orphaned",
@@ -567,33 +569,34 @@ enum SelfTest {
                 Check.that("…leaving no trace of the old spelling",
                            !after.contains { $0.name == spellingA })
                 let filtered = (try? await store.listDocuments(
-                    selection: .field("correspondent", "Stadtwerke"), query: SearchQuery(""),
+                    selection: .field("correspondent", "Doctopus Werke AG"), query: SearchQuery(""),
                     sort: .added, ascending: false)) ?? []
                 Check.that("…and the sidebar filter follows it", filtered.count == 2,
                            "\(filtered.count) documents")
 
                 // The merge the string columns could never do.
-                _ = try? await store.renameFieldValue(field: corrField, from: spellingB, to: "Stadtwerke")
+                _ = try? await store.renameFieldValue(field: corrField, from: spellingB, to: "Doctopus Werke AG")
                 after = (try? await store.entities(builtin: "correspondent")) ?? []
-                let survivor = after.first { $0.name == "Stadtwerke" }
-                print("  \(spellingB) merged in       \(survivor?.count ?? 0) document(s)")
+                let survivor = after.first { $0.name == "Doctopus Werke AG" }
+                let survivorCount: Int = survivor?.count ?? 0
+                print("  " + spellingB + " merged in       \(survivorCount) document(s)")
                 Check.that("two spellings merge into one correspondent",
                            survivor?.count == 3 && !after.contains { $0.name == spellingB },
                            "\(survivor?.count ?? -1) of 3")
 
                 // And it is findable as one thing, under its one name.
                 let searched = (try? await store.listDocuments(
-                    selection: .all, query: SearchQuery("Stadtwerke"), sort: .relevance,
+                    selection: .all, query: SearchQuery("Doctopus Werke AG"), sort: .relevance,
                     ascending: false)) ?? []
                 Check.that("…searchable under the surviving name", searched.count >= 3,
                            "\(searched.count) hits")
 
                 // Put the fixture back the way the rest of the run found it.
-                for (index, row) in rows.prefix(3).enumerated() {
+                for row in rows.prefix(3) {
                     try? await store.setFieldValue(docID: row.doc, field: corrField,
-                                                   value: [rows[0], rows[1], rows[2]][index].correspondent)
+                                                   value: row.correspondent)
                 }
-                try? await store.deleteFieldValue(field: corrField, value: "Stadtwerke")
+                try? await store.deleteFieldValue(field: corrField, value: "Doctopus Werke AG")
             }
 
             // A correspondent that identifies itself, which is what having a
@@ -629,9 +632,15 @@ enum SelfTest {
                   insensitive: Bool = true) -> Bool {
             PatternMatcher.matches(pattern, mode: mode, insensitive: insensitive, in: subject)
         }
-        Check.that("“Acme (UK) Ltd” is a name, not a regular expression",
-                   hits("Acme (UK) Ltd", .anyWord, "Invoice from Acme (UK) Ltd")
-                       && MatchMode.inferred(from: "Acme (UK) Ltd") == .anyWord)
+        Check.that("“Acme (UK) Ltd” is a name when the rule says it is one",
+                   hits("Acme (UK) Ltd", .anyWord, "Invoice from Acme (UK) Ltd"))
+        // …which is what a *new* rule gets. Migration deliberately does not:
+        // the old router compiled that pattern as a regex, and whatever a rule
+        // meant yesterday is what it goes on meaning.
+        Check.that("a new rule defaults to reading its pattern as words",
+                   Rule(id: 0, name: "", pattern: "Acme (UK) Ltd", field: "text",
+                        destination: "", tagNames: nil, weight: 0.9, enabled: true,
+                        priority: 0).mode == .anyWord)
         Check.that("any word still matches at the start of a word, not inside a compound",
                    hits("rechnung", .anyWord, "Rechnungsnummer 42")
                        && !hits("rechnung", .anyWord, "Gehaltsabrechnung"))
@@ -652,13 +661,13 @@ enum SelfTest {
         Check.that("fuzzy survives a misread letter",
                    hits("rechnung", .fuzzy, "Rechnunq Nr. 42")
                        && !hits("rechnung", .fuzzy, "Kontoauszug"))
-        print("  Acme (UK) Ltd → \(MatchMode.inferred(from: "Acme (UK) Ltd").shortLabel), "
-              + "^inv-\\d+ → \(MatchMode.inferred(from: "^inv-\\d+").shortLabel), "
-              + "Betrag: 100€ + → \(MatchMode.inferred(from: "Betrag: 100€ +").shortLabel)")
+        for pattern in ["Acme (UK) Ltd", "^inv-\\d+", "inv(oice"] {
+            print("  " + pattern.padded(20) + " → " + MatchMode.inferred(from: pattern).shortLabel)
+        }
         Check.that("a pattern that was read as a regex keeps being one when migrated",
                    MatchMode.inferred(from: "^inv-\\d+") == .regex)
         Check.that("…and one that never compiled is migrated as the words it was matching",
-                   MatchMode.inferred(from: "Betrag: 100€ +") == .anyWord)
+                   MatchMode.inferred(from: "inv(oice") == .anyWord)
 
         // A rule's mode survives the round trip through the database.
         if let id = try? await store.upsertRule(
@@ -774,9 +783,10 @@ enum SelfTest {
         let candidates = DocumentAnalyzer.rank(
             DocumentAnalyzer.datesInText(several, source: "ocr",
                                          options: DocumentAnalyzer.Options(dateOrder: .dmy)))
-        print("  candidates             "
-              + candidates.map { "\(DayDate.text($0.date))\($0.labelled ? "*" : "")" }
-                  .joined(separator: ", "))
+        let shownCandidates: [String] = candidates.map {
+            DayDate.text($0.date) + ($0.labelled ? "*" : "")
+        }
+        print("  candidates             " + shownCandidates.joined(separator: ", "))
         Check.that("every plausible date is kept, the labelled one first",
                    candidates.count > 1 && candidates.first?.labelled == true
                        && candidates.first.map { DayDate.text($0.date) } == "2024-02-14",
@@ -812,7 +822,8 @@ enum SelfTest {
         for (raw, expected) in amounts {
             let got = FieldType.number(from: raw)
             if got != expected { parsedRight = false }
-            print("  \(raw.padded(20)) → \(got.map { String($0) } ?? "—")")
+            let shown: String = got.map { "\($0)" } ?? "—"
+            print("  " + raw.padded(20) + " → " + shown)
         }
         Check.that("an amount is read as a number however it is written", parsedRight)
         Check.that("yes and Yes and true are one answer",
@@ -883,8 +894,8 @@ enum SelfTest {
             let listed = (try? await store.notes(for: subject.doc)) ?? []
             let found = (try? await store.listDocuments(selection: .all, query: SearchQuery(phrase),
                                                         sort: .relevance, ascending: false)) ?? []
-            print("  \(subject.filename.padded(38)) \(listed.count) note(s), "
-                  + "searchable: \(found.count) hit(s)")
+            print("  " + subject.filename.padded(38)
+                  + " \(listed.count) note(s), searchable: \(found.count) hit(s)")
             Check.that("a note is kept with the document", listed.contains { $0.id == noteID })
             Check.that("…and is searchable straight away", found.contains { $0.id == subject.id })
 
@@ -915,8 +926,8 @@ enum SelfTest {
             let inTrash = (try? await store.listDocuments(selection: .deleted, query: SearchQuery(""),
                                                           sort: .added, ascending: false)) ?? []
             let after = (try? await store.stats()) ?? Store.Stats()
-            print("  deleted \(victim.filename) → \(after.deleted) in Recently Deleted, "
-                  + "\(after.total) listed")
+            print("  deleted \(victim.filename): \(after.deleted) in Recently Deleted, "
+                  + "\(after.total) still listed")
             Check.that("a deleted document leaves every ordinary listing",
                        !listed.contains { $0.doc == victim.doc })
             Check.that("…and is exactly what Recently Deleted holds",
@@ -962,8 +973,8 @@ enum SelfTest {
             let queue = (try? await store.processingQueue(limit: 10_000)) ?? []
             let kept = (try? await store.history(for: subject.doc, limit: 10_000)) ?? []
             let total = (try? await store.eventCount()) ?? 0
-            print("  queue holds \(queue.count), history holds \(total) event(s) "
-                  + "(\(kept.count) for \(subject.filename))")
+            print("  queue holds \(queue.count), history holds \(total) event(s), "
+                  + "\(kept.count) of them for \(subject.filename)")
             Check.that("the queue stays bounded", queue.count <= Store.queueLength,
                        "\(queue.count) entries")
             Check.that("the history is not trimmed with it",
@@ -985,7 +996,7 @@ enum SelfTest {
             let term = correspondent.split(separator: " ").first.map(String.init) ?? correspondent
             let hits = (try? await store.listDocuments(selection: .all, query: SearchQuery(term),
                                                        sort: .relevance, ascending: false)) ?? []
-            print("  correspondent “\(term)”".padded(40) + "→ \(hits.count) hit(s)")
+            print(("  correspondent “" + term + "”").padded(40) + "→ \(hits.count) hit(s)")
             Check.that("a correspondent is searchable without a LIKE fallback",
                        hits.contains { $0.id == sample.id })
         }
@@ -994,7 +1005,7 @@ enum SelfTest {
             let term = stem.split(whereSeparator: { !$0.isLetter }).first.map(String.init) ?? stem
             let hits = (try? await store.listDocuments(selection: .all, query: SearchQuery(term),
                                                        sort: .relevance, ascending: false)) ?? []
-            print("  filename “\(term)”".padded(40) + "→ \(hits.count) hit(s)")
+            print(("  filename “" + term + "”").padded(40) + "→ \(hits.count) hit(s)")
             Check.that("a filename is searchable", hits.contains { $0.id == sample.id })
 
             // A tag assigned now has to be searchable straight away: the index
@@ -1036,8 +1047,9 @@ enum SelfTest {
         let metaURL = container.appendingPathComponent("meta.json")
         let stamped = (try? JSONSerialization.jsonObject(with: Data(contentsOf: metaURL)))
             as? [String: Any]
-        print("  meta.json               formatVersion=\(stamped?["formatVersion"] as? Int ?? -1) "
-              + "appVersion=\(stamped?["appVersion"] as? String ?? "—")")
+        let stampedVersion: Int = (stamped?["formatVersion"] as? Int) ?? -1
+        let stampedApp: String = (stamped?["appVersion"] as? String) ?? "—"
+        print("  meta.json               formatVersion=\(stampedVersion) appVersion=" + stampedApp)
         Check.that("the writing app stamps the library format it understands",
                    stamped?["formatVersion"] as? Int == Store.formatVersion)
 
@@ -1064,7 +1076,8 @@ enum SelfTest {
         if let sample = rows.first, let detail = try? await store.detail(sample.doc),
            let hash = detail.hash {
             let found = (try? await store.documents(matchingHash: hash)) ?? []
-            print("  \(sample.filename.padded(38)) \(hash.prefix(12))… → \(found.count) match(es)")
+            print("  " + sample.filename.padded(38) + " " + hash.prefix(12)
+                  + "… → \(found.count) match(es)")
             Check.that("a document is findable by the hash of its bytes",
                        found.contains(sample.doc))
             Check.that("a hash nothing carries matches nothing",
