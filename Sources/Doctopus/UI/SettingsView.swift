@@ -108,6 +108,7 @@ private struct GeneralSettings: View {
 private struct FieldSettings: View {
     @Environment(AppModel.self) private var model
     @State private var newName = ""
+    @State private var newType: FieldType = .string
 
     var body: some View {
         VStack(spacing: 0) {
@@ -134,9 +135,18 @@ private struct FieldSettings: View {
                     HStack {
                         TextField("Name", text: $newName)
                             .onSubmit(add)
+                        Picker("", selection: $newType) {
+                            ForEach(FieldType.allCases, id: \.self) { type in
+                                Text(type.label).tag(type)
+                            }
+                        }
+                        .labelsHidden()
+                        .frame(width: 150)
                         Button("Add", action: add)
                             .disabled(newName.nilIfBlank == nil)
                     }
+                    Text("A field's type is what makes it sortable: amounts compare as numbers rather than as text, so €90 comes before €1,200, and a Yes / No field stops being three spellings of the same answer.")
+                        .font(.caption).foregroundStyle(.secondary)
                     Text("Custom fields are yours to fill in — the extraction pipeline populates the built-in ones only. Fields are shared by every open library, so the list shows one column per field however many libraries fill it.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
@@ -147,8 +157,9 @@ private struct FieldSettings: View {
 
     private func add() {
         guard let name = newName.nilIfBlank else { return }
-        model.addCustomField(named: name)
+        model.addCustomField(named: name, type: newType)
         newName = ""
+        newType = .string
     }
 }
 
@@ -171,7 +182,25 @@ private struct FieldRow: View {
                     model.updateField(updated)
                 }
             if field.isBuiltin {
-                Text("built-in").font(.caption2).foregroundStyle(.tertiary)
+                // A built-in's type comes from the column behind it, so it is
+                // shown rather than offered.
+                Text(field.type == .string ? "built-in" : "built-in · \(field.type.label)")
+                    .font(.caption2).foregroundStyle(.tertiary)
+            } else {
+                Picker("", selection: Binding(
+                    get: { field.type },
+                    set: { new in
+                        var updated = field
+                        updated.type = new
+                        model.updateField(updated)
+                    })) {
+                    ForEach(FieldType.allCases, id: \.self) { type in
+                        Text(type.label).tag(type)
+                    }
+                }
+                .labelsHidden()
+                .frame(width: 140)
+                .help("What this field holds. Changing it re-reads every value it already has.")
             }
             Toggle("", isOn: binding(\.showInSidebar)).labelsHidden().frame(width: 52)
             Toggle("", isOn: binding(\.showInList)).labelsHidden().frame(width: 52)

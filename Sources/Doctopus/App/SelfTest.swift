@@ -530,6 +530,82 @@ enum SelfTest {
                        !enriched.isEmpty && enriched.allSatisfy { $0.metadataSource == "remote" && $0.row.summary != nil })
         }
 
+        print("\nTYPED FIELDS")
+        // Reading an amount as a number is the difference between €90 coming
+        // before €1,200 and coming after it — and both conventions for writing
+        // one have to land on the same value.
+        let amounts: [(String, Double?)] = [
+            ("€1.234,56", 1234.56), ("$1,234.56", 1234.56), ("1 234,56 EUR", 1234.56),
+            ("90", 90), ("€90", 90), ("-12.50", -12.5), ("not a number", nil),
+        ]
+        var parsedRight = true
+        for (raw, expected) in amounts {
+            let got = FieldType.number(from: raw)
+            if got != expected { parsedRight = false }
+            print("  \(raw.padded(20)) → \(got.map { String($0) } ?? "—")")
+        }
+        Check.that("an amount is read as a number however it is written", parsedRight)
+        Check.that("yes and Yes and true are one answer",
+                   FieldType.boolean(from: "yes") == true && FieldType.boolean(from: "Yes") == true
+                       && FieldType.boolean(from: "true") == true && FieldType.boolean(from: "No") == false)
+
+        if let id = try? await store.addCustomField(name: "Paid Amount", type: .monetary),
+           let money = ((try? await store.fields()) ?? []).first(where: { $0.fieldID == id }),
+           rows.count >= 3 {
+            let written = ["€1.234,56", "$90.00", "€12,00"]
+            for (index, row) in rows.prefix(3).enumerated() {
+                try? await store.setFieldValue(docID: row.doc, field: money, value: written[index])
+            }
+            let sorted = (try? await store.listDocuments(
+                selection: .all, query: SearchQuery(""), sort: .field(money.key),
+                ascending: true)) ?? []
+            let order = sorted.compactMap { $0.values[money.key] }
+            print("  sorted by amount      \(order.joined(separator: ", "))")
+            Check.that("amounts sort by value, not by spelling",
+                       Array(order.prefix(3)) == ["€12,00", "$90.00", "€1.234,56"],
+                       order.joined(separator: ", "))
+            Check.that("…and the currency is kept exactly as it was typed",
+                       order.contains("€1.234,56"))
+
+            // Changing the type re-reads what is already stored, so a field
+            // does not sort correctly only for whatever is typed next.
+            var asText = money
+            asText.type = .string
+            try? await store.updateField(asText)
+            var back = money
+            back.type = .monetary
+            try? await store.updateField(back)
+            let again = ((try? await store.listDocuments(
+                selection: .all, query: SearchQuery(""), sort: .field(money.key),
+                ascending: true)) ?? []).compactMap { $0.values[money.key] }
+            Check.that("changing a field's type re-reads the values it already holds",
+                       Array(again.prefix(3)) == ["€12,00", "$90.00", "€1.234,56"],
+                       again.prefix(3).joined(separator: ", "))
+            try? await store.deleteField(id)
+        }
+
+        if let id = try? await store.addCustomField(name: "Due", type: .date),
+           let due = ((try? await store.fields()) ?? []).first(where: { $0.fieldID == id }),
+           let subject = rows.first {
+            try? await store.setFieldValue(docID: subject.doc, field: due, value: "2026-03-04")
+            let stored = (try? await store.detail(subject.doc))?.row.values[due.key]
+            print("  date field            \(stored ?? "—")")
+            Check.that("a date field stores a day, in one spelling", stored == "2026-03-04")
+            try? await store.deleteField(id)
+        }
+
+        if let id = try? await store.addCustomField(name: "Settled", type: .boolean),
+           let flag = ((try? await store.fields()) ?? []).first(where: { $0.fieldID == id }),
+           let subject = rows.first {
+            try? await store.setFieldValue(docID: subject.doc, field: flag, value: "true")
+            let first = (try? await store.detail(subject.doc))?.row.values[flag.key]
+            try? await store.setFieldValue(docID: subject.doc, field: flag, value: "yes")
+            let second = (try? await store.detail(subject.doc))?.row.values[flag.key]
+            Check.that("a yes/no field has one spelling of yes",
+                       first == "Yes" && second == "Yes", "\(first ?? "—"), \(second ?? "—")")
+            try? await store.deleteField(id)
+        }
+
         print("\nNOTES")
         if let subject = rows.first {
             let phrase = "cancelled by phone \(UUID().uuidString.prefix(6).lowercased())"
@@ -582,11 +658,13 @@ enum SelfTest {
             Check.that("…but its row, and everything on it, is still there",
                        ((try? await store.tags(for: victim.doc)) ?? []).contains { $0.tagID == tagID })
 
-            // A file waiting in the Trash is never forgotten by the purge, even
-            // long past the grace period.
-            let purged = (try? await store.purgeMissing(olderThan: 0)) ?? -1
+            // A document deleted on purpose is never swept up by the purge that
+            // forgets files which simply vanished, however long ago it went.
+            _ = try? await store.purgeMissing(olderThan: 0)
+            let survived = (try? await store.listDocuments(selection: .deleted, query: SearchQuery(""),
+                                                           sort: .added, ascending: false)) ?? []
             Check.that("the purge leaves a document that was deleted on purpose alone",
-                       purged == 0, "\(purged) purged")
+                       survived.contains { $0.doc == victim.doc })
 
             try? await store.restore(victim.doc)
             let back = (try? await store.listDocuments(selection: .all, query: SearchQuery(""),
@@ -604,7 +682,7 @@ enum SelfTest {
         // Overflowing the queue has to leave the record of what happened
         // intact — that was the whole point of splitting the two.
         if let subject = rows.first {
-            let firstEvents = (try? await store.history(for: subject.doc)) ?? []
+            let firstEvents = (try? await store.history(for: subject.doc, limit: 10_000)) ?? []
             let oldest = firstEvents.last
             for n in 0...Store.queueLength {
                 try? await store.logProcessing(docID: subject.doc, action: "indexed",
@@ -612,7 +690,7 @@ enum SelfTest {
                                                from: nil, to: nil, approved: true)
             }
             let queue = (try? await store.processingQueue(limit: 10_000)) ?? []
-            let kept = (try? await store.history(for: subject.doc)) ?? []
+            let kept = (try? await store.history(for: subject.doc, limit: 10_000)) ?? []
             let total = (try? await store.eventCount()) ?? 0
             print("  queue holds \(queue.count), history holds \(total) event(s) "
                   + "(\(kept.count) for \(subject.filename))")

@@ -470,8 +470,9 @@ actor Store {
     func storeMetadata(_ p: MetadataPatch) throws {
         try db.run("""
             INSERT INTO metadata(doc_id, title, correspondent, doc_type, language, summary,
-                                 intent, doc_date, date_source, confidence, source, amount)
-            VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+                                 intent, doc_date, date_source, confidence, source, amount,
+                                 amount_value)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(doc_id) DO UPDATE SET
                 title=COALESCE(excluded.title, metadata.title),
                 correspondent=COALESCE(excluded.correspondent, metadata.correspondent),
@@ -483,10 +484,12 @@ actor Store {
                 date_source=COALESCE(excluded.date_source, metadata.date_source),
                 confidence=COALESCE(excluded.confidence, metadata.confidence),
                 source=COALESCE(excluded.source, metadata.source),
-                amount=COALESCE(excluded.amount, metadata.amount)
+                amount=COALESCE(excluded.amount, metadata.amount),
+                amount_value=COALESCE(excluded.amount_value, metadata.amount_value)
             """, [.int(p.docID), .text(p.title), .text(p.correspondent), .text(p.docType),
                   .text(p.language), .text(p.summary), .text(p.intent), .date(p.docDate),
-                  .text(p.dateSource), .double(p.confidence), .text(p.source), .text(p.amount)])
+                  .text(p.dateSource), .double(p.confidence), .text(p.source), .text(p.amount),
+                  .double(p.amount.flatMap { FieldType.number(from: $0) })])
         try refreshSearchIndex(p.docID)
     }
 
@@ -496,6 +499,11 @@ actor Store {
         guard allowed.contains(column) else { return }
         try db.run("INSERT OR IGNORE INTO metadata(doc_id) VALUES(?)", [.int(docID)])
         try db.run("UPDATE metadata SET \(column)=? WHERE doc_id=?", [.text(value), .int(docID)])
+        // The amount's text keeps the currency; its number is what sorts.
+        if column == "amount" {
+            try db.run("UPDATE metadata SET amount_value=? WHERE doc_id=?",
+                       [.double(value.flatMap { FieldType.number(from: $0) }), .int(docID)])
+        }
         try refreshSearchIndex(docID)
     }
 
@@ -620,11 +628,12 @@ actor Store {
             try db.run("UPDATE documents SET approved=0 WHERE id=?", [.int(docID)])
         }
         // Keep the view bounded. Ids are monotonic, so this is a range delete
-        // rather than a sort of the whole table on every insert.
+        // rather than a sort of the whole table on every insert. The offset is
+        // one short of the length because it names the oldest row to keep.
         try db.run("""
             DELETE FROM processing
             WHERE id < COALESCE((SELECT id FROM processing ORDER BY id DESC LIMIT 1 OFFSET ?), 0)
-            """, [.int(Store.queueLength)])
+            """, [.int(Store.queueLength - 1)])
     }
 
     func processingQueue(limit: Int = 200) throws -> [ProcessingEntry] {

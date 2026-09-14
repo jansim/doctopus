@@ -1331,9 +1331,11 @@ final class AppModel {
     /// Fields are a vocabulary the open libraries share — the centre pane shows
     /// one column per key however many libraries fill it — so a new one is
     /// added to every library rather than to a chosen one.
-    func addCustomField(named name: String) {
+    func addCustomField(named name: String, type: FieldType = .string) {
         Task {
-            for lib in libraries { _ = try? await lib.store.addCustomField(name: name) }
+            for lib in libraries {
+                _ = try? await lib.store.addCustomField(name: name, type: type)
+            }
             refreshAll()
         }
     }

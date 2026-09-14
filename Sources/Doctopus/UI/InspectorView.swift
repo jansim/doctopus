@@ -121,11 +121,11 @@ private struct DetailInspector: View {
                 EditableRow("Title", value: row.title ?? "") {
                     model.editMetadata(row.id, column: "title", value: $0)
                 }
-                // Every configured field, in the order Settings puts them.
+                // Every configured field, in the order Settings puts them,
+                // edited the way its type deserves.
                 ForEach(model.fields) { field in
-                    EditableRow(field.name, value: row.values[field.key] ?? "") {
-                        model.setFieldValue(row.id, field: field, value: $0)
-                    }
+                    FieldValueRow(field: field, value: row.values[field.key] ?? "",
+                                  document: row.id)
                 }
                 InfoRow("Date", alignment: .center) {
                     HStack(spacing: 5) {
@@ -649,6 +649,84 @@ struct InfoRow<Value: View>: View {
 extension InfoRow where Value == Text {
     init(_ label: String, _ text: String) {
         self.init(label) { Text(text) }
+    }
+}
+
+/// One field, edited as what it holds. A Yes / No field is a checkbox, a date
+/// is a date picker, one-of is a menu — everything else is a text field, which
+/// is what every field used to be.
+private struct FieldValueRow: View {
+    @Environment(AppModel.self) private var model
+    let field: Field
+    let value: String
+    let document: DocumentRef
+
+    var body: some View {
+        switch field.type {
+        case .boolean:
+            InfoRow(field.name, alignment: .center) {
+                Toggle("", isOn: Binding(
+                    get: { FieldType.boolean(from: value) ?? false },
+                    set: { model.setFieldValue(document, field: field, value: $0 ? "Yes" : "No") }))
+                    .toggleStyle(.checkbox)
+                    .labelsHidden()
+            }
+        case .date:
+            InfoRow(field.name, alignment: .center) {
+                HStack(spacing: 5) {
+                    DatePicker("", selection: Binding(
+                        get: { FieldType.day(from: value) ?? Date() },
+                        set: { model.setFieldValue(document, field: field,
+                                                   value: FieldType.dayFormatter.string(from: $0)) }),
+                        displayedComponents: .date)
+                        .labelsHidden()
+                        .datePickerStyle(.compact)
+                    if !value.isEmpty {
+                        Button {
+                            model.setFieldValue(document, field: field, value: nil)
+                        } label: {
+                            Image(systemName: "xmark.circle.fill").font(.caption2)
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.tertiary)
+                        .help("Clear this date")
+                    }
+                }
+            }
+        case .select where !field.options.isEmpty:
+            InfoRow(field.name, alignment: .center) {
+                Picker("", selection: Binding(
+                    get: { value },
+                    set: { model.setFieldValue(document, field: field, value: $0.nilIfBlank) })) {
+                    Text("—").tag("")
+                    ForEach(field.options, id: \.self) { option in
+                        Text(option).tag(option)
+                    }
+                }
+                .labelsHidden()
+            }
+        case .url where !value.isEmpty:
+            InfoRow(field.name, alignment: .center) {
+                HStack(spacing: 5) {
+                    if let url = URL(string: value), url.scheme != nil {
+                        Link(value, destination: url).lineLimit(1)
+                    } else {
+                        Text(value).lineLimit(1)
+                    }
+                    Button {
+                        model.setFieldValue(document, field: field, value: nil)
+                    } label: {
+                        Image(systemName: "xmark.circle.fill").font(.caption2)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.tertiary)
+                }
+            }
+        default:
+            EditableRow(field.name, value: value) {
+                model.setFieldValue(document, field: field, value: $0)
+            }
+        }
     }
 }
 

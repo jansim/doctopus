@@ -2,7 +2,7 @@ import Foundation
 
 /// Versioned schema. Migrations are append-only: bump `current` and add a case.
 enum Schema {
-    static let current = 11
+    static let current = 12
 
     static func migrate(_ db: Database) throws {
         let version = try db.first("PRAGMA user_version") { Int($0.int(0)) } ?? 0
@@ -17,6 +17,7 @@ enum Schema {
         if version < 9 { try v9(db) }
         if version < 10 { try v10(db) }
         if version < 11 { try v11(db) }
+        if version < 12 { try v12(db) }
         try db.exec("PRAGMA user_version=\(current)")
     }
 
@@ -30,6 +31,41 @@ enum Schema {
             [.text(table), .text(column)]) { $0.int(0) } ?? 0
         guard present == 0 else { return }
         try db.exec("ALTER TABLE \(table) ADD COLUMN \(column) \(declaration)")
+    }
+
+    /// Typed fields.
+    ///
+    /// Every field value was `TEXT`, including amounts and dates. So amounts
+    /// sorted lexicographically ("€90" after "€1,200"), a date field could not
+    /// be compared at all, and a "paid?" field was a string that said "yes" or
+    /// "Yes" depending on who typed it.
+    ///
+    /// The fix is Paperless's, and it is unglamorous: a declared type on the
+    /// field, and a typed column per shape alongside the text. The text stays —
+    /// it is what gets displayed, and for `monetary` it is the only place the
+    /// currency lives — while the typed column is what sorting and comparison
+    /// actually use.
+    private static func v12(_ db: Database) throws {
+        try addColumn(db, table: "fields", column: "data_type",
+                      declaration: "TEXT NOT NULL DEFAULT 'string'")
+        try addColumn(db, table: "fields", column: "extra_data", declaration: "TEXT")
+        try addColumn(db, table: "field_values", column: "value_num", declaration: "REAL")
+        try addColumn(db, table: "field_values", column: "value_date", declaration: "REAL")
+        try addColumn(db, table: "field_values", column: "value_bool", declaration: "INTEGER")
+        try db.exec("""
+        CREATE INDEX IF NOT EXISTS idx_field_values_num  ON field_values(field_id, value_num);
+        CREATE INDEX IF NOT EXISTS idx_field_values_date ON field_values(field_id, value_date);
+        """)
+
+        // The built-in amount is the same problem in a dedicated column: the
+        // string keeps the currency, the number is what sorts and sums.
+        try addColumn(db, table: "metadata", column: "amount_value", declaration: "REAL")
+        try db.exec("CREATE INDEX IF NOT EXISTS idx_metadata_amount ON metadata(amount_value)")
+
+        // The built-in fields declare what they have always held.
+        try db.exec("""
+        UPDATE fields SET data_type='monetary' WHERE builtin_column='amount';
+        """)
     }
 
     /// Notes: the escape hatch for everything the schema does not model.

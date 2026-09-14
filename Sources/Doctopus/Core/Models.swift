@@ -164,8 +164,21 @@ struct Field: Identifiable, Hashable, Sendable {
     var showInList: Bool
     var position: Int64
     var enabled: Bool
+    /// What this field holds. Decides which typed column of `field_values`
+    /// carries the comparable form, and how the inspector offers to edit it.
+    var type: FieldType = .string
+    /// Type-specific configuration, as JSON — the options of a `select`, so far.
+    var extraData: String?
     /// Which library this field belongs to. Stamped by `AppModel`.
     var library: LibraryID = ""
+
+    /// The choices a `select` field offers, in order.
+    var options: [String] {
+        guard type == .select, let extraData, let data = extraData.data(using: .utf8),
+              let decoded = try? JSONDecoder().decode(FieldOptions.self, from: data)
+        else { return [] }
+        return decoded.options
+    }
 
     /// Field keys are unique within a library, and the merged list `AppModel`
     /// hands the views is deduplicated by key — a "Correspondent" column shows
@@ -173,6 +186,11 @@ struct Field: Identifiable, Hashable, Sendable {
     var id: String { key }
 
     var isBuiltin: Bool { builtinColumn != nil }
+}
+
+/// The `extra_data` JSON of a `select` field.
+struct FieldOptions: Codable, Sendable, Hashable {
+    var options: [String] = []
 }
 
 struct Tag: Identifiable, Hashable, Sendable {

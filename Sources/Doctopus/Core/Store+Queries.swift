@@ -117,12 +117,27 @@ extension Store {
             // bm25() is more negative the better the match.
             order = "h.r ASC, d.created_at DESC"
         } else if case .field(let key) = sort, let f = allFields.first(where: { $0.key == key }) {
-            // Built-ins are columns; everything else is one row in the EAV table.
-            let expr = f.builtinColumn.map { "m.\($0)" }
-                ?? "(SELECT value FROM field_values WHERE doc_id = d.id AND field_id = \(f.id))"
+            // A typed field sorts by its number, day or flag; only text sorts
+            // by how it is spelled. That is the difference between €90 coming
+            // before €1,200 and coming after it.
+            let expr: String
+            let collate: String
+            if let column = f.builtinColumn {
+                // The amount keeps its currency in the text and its value in a
+                // column of its own.
+                expr = column == "amount" ? "m.amount_value" : "m.\(column)"
+                collate = column == "amount" ? "" : " COLLATE NOCASE"
+            } else if let typed = f.type.storageColumn {
+                expr = "(SELECT \(typed) FROM field_values WHERE doc_id = d.id AND field_id = \(f.fieldID))"
+                collate = ""
+            } else {
+                expr = "(SELECT value FROM field_values WHERE doc_id = d.id AND field_id = \(f.fieldID))"
+                collate = " COLLATE NOCASE"
+            }
             // Blank values sort last whichever way the column points, so an
             // unfilled field never heads the list.
-            order = "(\(expr) IS NULL OR \(expr) = ''), \(expr) COLLATE NOCASE \(ascending ? "ASC" : "DESC")"
+            let blank = collate.isEmpty ? "\(expr) IS NULL" : "\(expr) IS NULL OR \(expr) = ''"
+            order = "(\(blank)), \(expr)\(collate) \(ascending ? "ASC" : "DESC")"
         } else {
             let column = sort.column ?? SortField.added.column!
             order = "\(sort == .relevance ? SortField.added.column! : column) \(ascending ? "ASC" : "DESC")"
