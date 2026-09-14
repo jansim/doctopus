@@ -92,7 +92,4 @@ struct SearchQuery: Sendable, Equatable {
         }
         return parts.isEmpty ? nil : parts.joined(separator: " AND ")
     }
-
-    /// Fallback LIKE patterns for matching filenames/titles that never hit OCR.
-    var likePatterns: [String] { terms.map { "%\($0)%" } }
 }

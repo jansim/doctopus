@@ -88,12 +88,14 @@ extension Store {
         }
         guard let clean else {
             try db.run("DELETE FROM field_values WHERE doc_id=? AND field_id=?", [.int(docID), .int(field.fieldID)])
+            try refreshSearchIndex(docID)
             return
         }
         try db.run("""
             INSERT INTO field_values(doc_id, field_id, value) VALUES(?,?,?)
             ON CONFLICT(doc_id, field_id) DO UPDATE SET value=excluded.value
             """, [.int(docID), .int(field.fieldID), .text(clean)])
+        try refreshSearchIndex(docID)
     }
 
     /// Custom-field values for a batch of rows, in one query.
@@ -148,11 +150,18 @@ extension Store {
         if let column = field.builtinColumn {
             let allowed = ["correspondent", "doc_type", "language", "amount", "intent"]
             guard allowed.contains(column) else { return 0 }
+            let affected = try db.map("SELECT doc_id FROM metadata WHERE \(column)=? COLLATE NOCASE",
+                                      [.text(old)]) { $0.int(0) }
             try db.run("UPDATE metadata SET \(column)=? WHERE \(column)=? COLLATE NOCASE",
                        [.text(clean), .text(old)])
-            return Int(db.changes)
+            let changed = Int(db.changes)
+            try refreshSearchIndex(affected)
+            return changed
         }
-        return try db.transaction {
+        let affected = try db.map(
+            "SELECT doc_id FROM field_values WHERE field_id=? AND value=? COLLATE NOCASE",
+            [.int(field.fieldID), .text(old)]) { $0.int(0) }
+        let renamed = try db.transaction { () -> Int in
             // Documents that already carry the target value would violate the
             // (doc_id, field_id) primary key, so drop the losing row first.
             try db.run("""
@@ -163,6 +172,8 @@ extension Store {
                        [.text(clean), .int(field.fieldID), .text(old)])
             return Int(db.changes)
         }
+        try refreshSearchIndex(affected)
+        return renamed
     }
 
     func deleteFieldValue(field: Field, value: String) throws {
@@ -170,10 +181,17 @@ extension Store {
         if let column = field.builtinColumn {
             let allowed = ["correspondent", "doc_type", "language", "amount", "intent"]
             guard allowed.contains(column) else { return }
+            let affected = try db.map("SELECT doc_id FROM metadata WHERE \(column)=? COLLATE NOCASE",
+                                      [.text(value)]) { $0.int(0) }
             try db.run("UPDATE metadata SET \(column)=NULL WHERE \(column)=? COLLATE NOCASE", [.text(value)])
+            try refreshSearchIndex(affected)
         } else {
+            let affected = try db.map(
+                "SELECT doc_id FROM field_values WHERE field_id=? AND value=? COLLATE NOCASE",
+                [.int(field.fieldID), .text(value)]) { $0.int(0) }
             try db.run("DELETE FROM field_values WHERE field_id=? AND value=? COLLATE NOCASE",
                        [.int(field.fieldID), .text(value)])
+            try refreshSearchIndex(affected)
         }
     }
 
@@ -187,18 +205,22 @@ extension Store {
         guard !clean.isEmpty else { return id }
         let existing = try db.first("SELECT id FROM tags WHERE name=? COLLATE NOCASE AND id<>?",
                                     [.text(clean), .int(id)], { $0.int(0) })
+        let affected = try documentIDs(withTag: id)
         guard let target = existing else {
             try db.run("UPDATE tags SET name=? WHERE id=?", [.text(clean), .int(id)])
+            try refreshSearchIndex(affected)
             return id
         }
         guard mergeIntoExisting else { return id }
-        return try db.transaction {
+        let merged = try db.transaction { () -> Int64 in
             try db.run("UPDATE OR IGNORE document_tags SET tag_id=? WHERE tag_id=?", [.int(target), .int(id)])
             try db.run("DELETE FROM document_tags WHERE tag_id=?", [.int(id)])
             try db.run("UPDATE OR IGNORE aliases SET tag_id=? WHERE tag_id=?", [.int(target), .int(id)])
             try db.run("DELETE FROM tags WHERE id=?", [.int(id)])
             return target
         }
+        try refreshSearchIndex(affected)
+        return merged
     }
 
     func setTagColor(_ id: Int64, _ color: Int64) throws {

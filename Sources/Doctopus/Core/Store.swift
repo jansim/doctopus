@@ -161,10 +161,10 @@ actor Store {
         let ext = url.pathExtension.lowercased()
 
         let existing = try db.first(
-            "SELECT id, size, mtime, ocr_state FROM documents WHERE path=?", [.text(relative)]
-        ) { ($0.int(0), $0.int(1), $0.double(2), $0.int(3)) }
+            "SELECT id, size, mtime, ocr_state, filename FROM documents WHERE path=?", [.text(relative)]
+        ) { ($0.int(0), $0.int(1), $0.double(2), $0.int(3), $0.string(4)) }
 
-        if let (id, size, mtime, state) = existing {
+        if let (id, size, mtime, state, oldName) = existing {
             let changed = size != f.size || abs(mtime - f.mtime.timeIntervalSince1970) > 1
             try db.run("""
                 UPDATE documents SET size=?, mtime=?, missing=0, missing_since=NULL,
@@ -172,6 +172,9 @@ actor Store {
                 WHERE id=?
                 """, [.int(f.size), .double(f.mtime.timeIntervalSince1970),
                       .text(dir), .text(name), .text(ext), .int(id)])
+            // Only the filename is indexed here, so a scan that finds nothing
+            // new does not rewrite the search index for every document it sees.
+            if oldName != name { try refreshSearchIndex(id) }
             if changed {
                 try db.run("UPDATE documents SET hash=NULL, original_hash=NULL, ocr_state=0 WHERE id=?",
                            [.int(id)])
@@ -185,6 +188,7 @@ actor Store {
             """, [.text(relative), .text(dir), .text(name), .text(ext),
                   .int(f.size), .double(f.mtime.timeIntervalSince1970),
                   .double(f.created.timeIntervalSince1970)])
+        try refreshSearchIndex(id)
         return (id, true, true)
     }
 
@@ -217,6 +221,7 @@ actor Store {
             WHERE id=?
             """, [.text(relPath(newPath)), .text(relPath(url.deletingLastPathComponent().path)),
                   .text(url.lastPathComponent), .int(id)])
+        try refreshSearchIndex(id)
         return id
     }
 
@@ -287,11 +292,7 @@ actor Store {
     func storeOCR(docID: Int64, text: String, confidence: Double, words: Int,
                   source: String, elapsedMS: Int, pageCount: Int?) throws {
         try db.transaction {
-            try db.run("DELETE FROM ocr_content WHERE doc_id=?", [.int(docID)])
-            if !text.isEmpty {
-                try db.run("INSERT INTO ocr_content(text, doc_id) VALUES(?,?)",
-                           [.text(text), .int(docID)])
-            }
+            try refreshSearchIndex(docID, body: text)
             try db.run("""
                 INSERT INTO ocr_stats(doc_id, confidence, words, source, engine_ms)
                 VALUES(?,?,?,?,?)
@@ -308,8 +309,60 @@ actor Store {
         try db.run("UPDATE documents SET ocr_state=? WHERE id=?", [.int(state.rawValue), .int(id)])
     }
 
+    /// The extracted text of one document. `doc_fts` is keyed by `rowid`, so
+    /// this is a single row lookup rather than a scan of the whole corpus.
     func ocrText(_ id: Int64) throws -> String {
-        try db.first("SELECT text FROM ocr_content WHERE doc_id=?", [.int(id)]) { $0.string(0) } ?? ""
+        try db.first("SELECT body FROM doc_fts WHERE rowid=?", [.int(id)]) { $0.string(0) } ?? ""
+    }
+
+    // MARK: - Search index
+
+    /// `bm25()` weights for `doc_fts`, in column order: title, correspondent,
+    /// doc_type, tags, fields, notes, filename, body. A title hit should
+    /// outrank a body hit by a wide margin — the body is the longest column
+    /// and would otherwise dominate purely by having more chances to match.
+    static let bm25Weights = "10.0, 8.0, 4.0, 4.0, 2.0, 2.0, 3.0, 1.0"
+
+    /// Rebuilds one document's row in `doc_fts` from whatever the index holds
+    /// about it now. Pass `body` when the extracted text is what changed;
+    /// otherwise the text already indexed is carried over, so a metadata or
+    /// tag edit never costs a re-extraction.
+    func refreshSearchIndex(_ docID: Int64, body: String? = nil) throws {
+        let text: String
+        if let body {
+            text = body
+        } else {
+            text = try db.first("SELECT body FROM doc_fts WHERE rowid=?", [.int(docID)],
+                                { $0.string(0) }) ?? ""
+        }
+        try db.run("DELETE FROM doc_fts WHERE rowid=?", [.int(docID)])
+        try db.run("""
+            INSERT INTO doc_fts(rowid, title, correspondent, doc_type, tags, fields, notes, filename, body)
+            SELECT d.id,
+                   COALESCE(m.title, ''), COALESCE(m.correspondent, ''), COALESCE(m.doc_type, ''),
+                   COALESCE((SELECT group_concat(t.name, ' ') FROM document_tags dt
+                              JOIN tags t ON t.id = dt.tag_id WHERE dt.doc_id = d.id), ''),
+                   COALESCE((SELECT group_concat(v.value, ' ') FROM field_values v
+                              WHERE v.doc_id = d.id), ''),
+                   '',
+                   d.filename,
+                   ?
+            FROM documents d LEFT JOIN metadata m ON m.doc_id = d.id
+            WHERE d.id = ?
+            """, [.text(text), .int(docID)])
+    }
+
+    func refreshSearchIndex(_ docIDs: [Int64]) throws {
+        guard !docIDs.isEmpty else { return }
+        try db.transaction {
+            for id in docIDs { try refreshSearchIndex(id) }
+        }
+    }
+
+    /// Every document that carries a tag, for refreshing the index after the
+    /// tag itself is renamed, merged or dropped.
+    func documentIDs(withTag tagID: Int64) throws -> [Int64] {
+        try db.map("SELECT doc_id FROM document_tags WHERE tag_id=?", [.int(tagID)]) { $0.int(0) }
     }
 
     // MARK: - Metadata
@@ -349,6 +402,7 @@ actor Store {
             """, [.int(p.docID), .text(p.title), .text(p.correspondent), .text(p.docType),
                   .text(p.language), .text(p.summary), .text(p.intent), .date(p.docDate),
                   .text(p.dateSource), .double(p.confidence), .text(p.source), .text(p.amount)])
+        try refreshSearchIndex(p.docID)
     }
 
     /// User edits overwrite unconditionally (including clearing a field).
@@ -357,6 +411,7 @@ actor Store {
         guard allowed.contains(column) else { return }
         try db.run("INSERT OR IGNORE INTO metadata(doc_id) VALUES(?)", [.int(docID)])
         try db.run("UPDATE metadata SET \(column)=? WHERE doc_id=?", [.text(value), .int(docID)])
+        try refreshSearchIndex(docID)
     }
 
     func setDocumentDate(_ docID: Int64, _ date: Date?) throws {
@@ -394,14 +449,18 @@ actor Store {
         guard tagID > 0 else { return }
         try db.run("INSERT OR IGNORE INTO document_tags(doc_id, tag_id, auto) VALUES(?,?,?)",
                    [.int(docID), .int(tagID), .bool(auto)])
+        try refreshSearchIndex(docID)
     }
 
     func unassign(tag tagID: Int64, from docID: Int64) throws {
         try db.run("DELETE FROM document_tags WHERE doc_id=? AND tag_id=?", [.int(docID), .int(tagID)])
+        try refreshSearchIndex(docID)
     }
 
     func deleteTag(_ id: Int64) throws {
+        let affected = try documentIDs(withTag: id)
         try db.run("DELETE FROM tags WHERE id=?", [.int(id)])
+        try refreshSearchIndex(affected)
     }
 
     func setTagMirroring(_ id: Int64, _ on: Bool, folder: String?) throws {
@@ -549,19 +608,19 @@ actor Store {
         var docType: String?
     }
 
-    /// The most recent documents, as rule samples. Text is read in one pass
-    /// over the FTS table rather than joined per row: `doc_id` is unindexed
-    /// there, so a join would scan it once for every document.
+    /// The most recent documents, as rule samples. `doc_fts` is keyed by
+    /// `rowid`, so each document's text is one indexed lookup — the corpus no
+    /// longer has to be loaded into memory to avoid a scan per row.
     func ruleSamples(limit: Int = 5000) throws -> [RuleSample] {
-        var texts: [Int64: String] = [:]
-        try db.query("SELECT doc_id, text FROM ocr_content") { texts[$0.int(0)] = $0.string(1) }
-        return try db.map("""
-            SELECT d.id, d.filename, m.correspondent, m.doc_type FROM documents d
+        try db.map("""
+            SELECT d.filename, m.correspondent, m.doc_type,
+                   (SELECT f.body FROM doc_fts f WHERE f.rowid = d.id)
+            FROM documents d
             LEFT JOIN metadata m ON m.doc_id = d.id
             WHERE d.missing=0 ORDER BY d.created_at DESC LIMIT ?
             """, [.int(Int64(limit))]) {
-            RuleSample(filename: $0.string(1), text: texts[$0.int(0)] ?? "",
-                       correspondent: $0.stringOrNil(2), docType: $0.stringOrNil(3))
+            RuleSample(filename: $0.string(0), text: $0.stringOrNil(3) ?? "",
+                       correspondent: $0.stringOrNil(1), docType: $0.stringOrNil(2))
         }
     }
 
@@ -574,6 +633,7 @@ actor Store {
             UPDATE documents SET path=?, directory=?, filename=?, ext=?, missing=0, missing_since=NULL WHERE id=?
             """, [.text(relPath(newPath)), .text(relPath(url.deletingLastPathComponent().path)),
                   .text(url.lastPathComponent), .text(url.pathExtension.lowercased()), .int(docID)])
+        try refreshSearchIndex(docID)
     }
 
     func setSizes(_ docID: Int64, size: Int64, originalSize: Int64?) throws {
@@ -581,8 +641,10 @@ actor Store {
                    [.int(size), .int(originalSize), .int(docID)])
     }
 
+    /// `doc_fts` is a virtual table and so carries no foreign key: its row has
+    /// to go by hand, or the text stays searchable after the document is gone.
     func deleteDocument(_ docID: Int64) throws {
-        try db.run("DELETE FROM ocr_content WHERE doc_id=?", [.int(docID)])
+        try db.run("DELETE FROM doc_fts WHERE rowid=?", [.int(docID)])
         try db.run("DELETE FROM documents WHERE id=?", [.int(docID)])
     }
 }

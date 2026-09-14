@@ -2,7 +2,7 @@ import Foundation
 
 /// Versioned schema. Migrations are append-only: bump `current` and add a case.
 enum Schema {
-    static let current = 7
+    static let current = 8
 
     static func migrate(_ db: Database) throws {
         let version = try db.first("PRAGMA user_version") { Int($0.int(0)) } ?? 0
@@ -13,6 +13,7 @@ enum Schema {
         if version < 5 { try v5(db) }
         if version < 6 { try v6(db) }
         if version < 7 { try v7(db) }
+        if version < 8 { try v8(db) }
         try db.exec("PRAGMA user_version=\(current)")
     }
 
@@ -26,6 +27,51 @@ enum Schema {
             [.text(table), .text(column)]) { $0.int(0) } ?? 0
         guard present == 0 else { return }
         try db.exec("ALTER TABLE \(table) ADD COLUMN \(column) \(declaration)")
+    }
+
+    /// The search index, rebuilt as a real one.
+    ///
+    /// `ocr_content` had three problems: its `doc_id` was `UNINDEXED`, so
+    /// fetching one document's text scanned the whole corpus; it held only the
+    /// OCR text, leaving title, correspondent, tags and filename to an
+    /// unindexable `LIKE '%…%'`; and its rows had no key a delete could find
+    /// cheaply. `doc_fts` fixes all three by keying on `rowid = documents.id`
+    /// and giving every searchable surface its own column, which also makes
+    /// `bm25()` weights — a title hit outranking a body hit — possible.
+    ///
+    /// `notes` is written blank for now; the notes themselves are a separate
+    /// change, and adding the column here saves rebuilding the index twice.
+    private static func v8(_ db: Database) throws {
+        let alreadyThere = try db.first(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='doc_fts'") { $0.int(0) } ?? 0
+        guard alreadyThere == 0 else { return }
+
+        try db.exec("""
+        CREATE VIRTUAL TABLE doc_fts USING fts5(
+            title, correspondent, doc_type, tags, fields, notes, filename, body,
+            tokenize = 'unicode61 remove_diacritics 2'
+        );
+        """)
+
+        let hasOld = try db.first(
+            "SELECT COUNT(*) FROM sqlite_master WHERE name='ocr_content'") { $0.int(0) } ?? 0
+        let body = hasOld > 0
+            ? "COALESCE((SELECT c.text FROM ocr_content c WHERE c.doc_id = d.id), '')"
+            : "''"
+        try db.exec("""
+        INSERT INTO doc_fts(rowid, title, correspondent, doc_type, tags, fields, notes, filename, body)
+        SELECT d.id,
+               COALESCE(m.title, ''), COALESCE(m.correspondent, ''), COALESCE(m.doc_type, ''),
+               COALESCE((SELECT group_concat(t.name, ' ') FROM document_tags dt
+                          JOIN tags t ON t.id = dt.tag_id WHERE dt.doc_id = d.id), ''),
+               COALESCE((SELECT group_concat(v.value, ' ') FROM field_values v
+                          WHERE v.doc_id = d.id), ''),
+               '',
+               d.filename,
+               \(body)
+        FROM documents d LEFT JOIN metadata m ON m.doc_id = d.id;
+        """)
+        if hasOld > 0 { try db.exec("DROP TABLE ocr_content") }
     }
 
     /// The hash of the bytes as they arrived, before any optimization rewrote

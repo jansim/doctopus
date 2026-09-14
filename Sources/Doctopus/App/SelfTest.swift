@@ -530,6 +530,61 @@ enum SelfTest {
                        !enriched.isEmpty && enriched.allSatisfy { $0.metadataSource == "remote" && $0.row.summary != nil })
         }
 
+        print("\nSEARCH INDEX")
+        // Everything a person can see is a column of `doc_fts`, so each of
+        // these is a ranked hit rather than an unindexed LIKE over the table.
+        if let sample = rows.first(where: { $0.correspondent?.nilIfBlank != nil }),
+           let correspondent = sample.correspondent?.nilIfBlank {
+            let term = correspondent.split(separator: " ").first.map(String.init) ?? correspondent
+            let hits = (try? await store.listDocuments(selection: .all, query: SearchQuery(term),
+                                                       sort: .relevance, ascending: false)) ?? []
+            print("  correspondent “\(term)”".padded(40) + "→ \(hits.count) hit(s)")
+            Check.that("a correspondent is searchable without a LIKE fallback",
+                       hits.contains { $0.id == sample.id })
+        }
+        if let sample = rows.first {
+            let stem = sample.url.deletingPathExtension().lastPathComponent
+            let term = stem.split(whereSeparator: { !$0.isLetter }).first.map(String.init) ?? stem
+            let hits = (try? await store.listDocuments(selection: .all, query: SearchQuery(term),
+                                                       sort: .relevance, ascending: false)) ?? []
+            print("  filename “\(term)”".padded(40) + "→ \(hits.count) hit(s)")
+            Check.that("a filename is searchable", hits.contains { $0.id == sample.id })
+
+            // A tag assigned now has to be searchable straight away: the index
+            // row is rebuilt on assignment, not on the next full pass.
+            let unique = "doctopusfts\(UUID().uuidString.prefix(6).lowercased())"
+            let tagID = (try? await store.tagID(named: unique)) ?? 0
+            try? await store.assign(tag: tagID, to: sample.doc)
+            let tagged = (try? await store.listDocuments(selection: .all, query: SearchQuery(unique),
+                                                         sort: .relevance, ascending: false)) ?? []
+            Check.that("a tag is searchable as soon as it is assigned",
+                       tagged.contains { $0.id == sample.id }, "\(tagged.count) hit(s)")
+            try? await store.unassign(tag: tagID, from: sample.doc)
+            let untagged = (try? await store.listDocuments(selection: .all, query: SearchQuery(unique),
+                                                           sort: .relevance, ascending: false)) ?? []
+            Check.that("…and stops being searchable when it is taken off", untagged.isEmpty,
+                       "\(untagged.count) hit(s)")
+            try? await store.deleteTag(tagID)
+
+            // The text of one document is a keyed lookup now, not a scan.
+            let text = (try? await store.ocrText(sample.doc)) ?? ""
+            Check.that("a document's text is still readable from the index", !text.isEmpty,
+                       "\(text.count) characters")
+        }
+        // A deleted document takes its searchable text with it: `doc_fts` is a
+        // virtual table, so no foreign key does this for us. Done last, on the
+        // index only — the file itself is never touched by `deleteDocument`.
+        if let victim = rows.last, let word = ((try? await store.ocrText(victim.doc)) ?? "")
+            .split(whereSeparator: { !$0.isLetter }).first.map(String.init) {
+            try? await store.deleteDocument(victim.doc)
+            let orphan = (try? await store.listDocuments(selection: .all, query: SearchQuery(word),
+                                                         sort: .relevance, ascending: false)) ?? []
+            Check.that("deleting a document removes it from the search index",
+                       !orphan.contains { $0.doc == victim.doc })
+            Check.that("…and the file it indexed is left on disk",
+                       FileManager.default.fileExists(atPath: victim.path))
+        }
+
         print("\nLIBRARY FORMAT")
         let metaURL = container.appendingPathComponent("meta.json")
         let stamped = (try? JSONSerialization.jsonObject(with: Data(contentsOf: metaURL)))

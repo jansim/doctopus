@@ -73,25 +73,22 @@ extension Store {
             }
         }
 
-        // Text search: FTS5 hit on OCR content, OR a LIKE on the human-facing fields.
+        // Text search. Every human-facing surface is a column of `doc_fts`, so
+        // one MATCH covers title, correspondent, type, tags, field values,
+        // filename and body — no `LIKE '%…%'` fallback, and no unranked
+        // results mixed into a ranked list.
         var joinFTS = ""
         var snippetCol = "NULL"
         if let expr = query.ftsExpression {
             joinFTS = """
-            LEFT JOIN (
-                SELECT doc_id, rank AS r, snippet(ocr_content, 0, '', '', '…', 14) AS snip
-                FROM ocr_content WHERE ocr_content MATCH ?
-            ) h ON h.doc_id = d.id
+            JOIN (
+                SELECT rowid AS doc, bm25(doc_fts, \(Store.bm25Weights)) AS r,
+                       snippet(doc_fts, 7, '', '', '…', 14) AS snip
+                FROM doc_fts WHERE doc_fts MATCH ?
+            ) h ON h.doc = d.id
             """
             snippetCol = "h.snip"
             args.insert(.text(expr), at: 0)  // the MATCH bind comes before the WHERE binds
-
-            var ors = ["h.doc_id IS NOT NULL"]
-            for p in query.likePatterns {
-                ors.append("(d.filename LIKE ? OR m.title LIKE ? OR m.correspondent LIKE ?)")
-                args.append(.text(p)); args.append(.text(p)); args.append(.text(p))
-            }
-            wheres.append("(" + ors.joined(separator: " OR ") + ")")
         }
 
         // Queue mode carries the latest pipeline event alongside each row, so
@@ -110,7 +107,8 @@ extension Store {
         if selection.isQueueMode {
             order = "p.at DESC"
         } else if sort == .relevance && !joinFTS.isEmpty {
-            order = "(h.r IS NULL), h.r ASC, d.created_at DESC"
+            // bm25() is more negative the better the match.
+            order = "h.r ASC, d.created_at DESC"
         } else if case .field(let key) = sort, let f = allFields.first(where: { $0.key == key }) {
             // Built-ins are columns; everything else is one row in the EAV table.
             let expr = f.builtinColumn.map { "m.\($0)" }
