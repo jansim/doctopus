@@ -272,12 +272,40 @@ duplicates in a tab on the document page.
 and Doctopus copies it to `Inbox/scan.pdf` and `Inbox/scan 2.pdf` and indexes both. The hash
 is computed later, in the pipeline, and is only used for relinking missing rows.
 
-Suggested: hash before copying (`FileScanner.hash` already streams), and on a hit either
-(a) skip with a toast naming the existing document, or (b) import anyway but link the two and
-flag them — Paperless deliberately defaults to importing and warning, with rejection behind a
-setting, because "same bytes" is not always "same document" (a re-sent invoice, a signed
-copy). Given Doctopus's "never surprise the user" stance, (b) with a `duplicate_of` column and
-a badge is the better default. Also add `is:duplicate` to the search tokens.
+Suggested: hash before copying (`FileScanner.hash` already streams) and, on a hit, skip the
+import with a toast naming the document it duplicates. Paperless imports anyway and warns,
+with rejection behind a setting, on the grounds that "same bytes" is not always "same
+document" — but that reasoning comes from a system where the second copy might carry
+different metadata. In Doctopus the file is already in the library, already indexed, and
+already findable; a second byte-identical copy on disk is just clutter the app created
+without being asked, which is exactly what it promises not to do.
+
+No schema change is needed for this. `documents.hash` is already indexed, so the existing
+copies of a file are a query rather than stored state — and the same query gives
+`is:duplicate` as a search token for finding the ones already in the library:
+
+```sql
+SELECT hash FROM documents WHERE missing=0 AND hash IS NOT NULL
+GROUP BY hash HAVING COUNT(*) > 1
+```
+
+Two details have to be right for that query to mean anything, and the second is the reason
+Paperless matches against `checksum` **and** `archive_checksum`:
+
+1. `documents.hash` is populated by the pipeline, so it is null between a file being indexed
+   and being processed. Hash the source file in `importFiles`, before the copy — the
+   duplicate decision needs the answer there anyway, and the pipeline's later hash of the
+   destination is the same read it already does.
+2. **Optimisation on import rewrites the file and re-hashes it** (`pipeline` calls
+   `setHash` again after `Optimizer.optimize`), so what is stored is the hash of the
+   *optimised* bytes. Import the same original a second time and it hashes to a value that
+   matches nothing — the check silently never fires for exactly the documents Doctopus
+   brought in itself. Keeping the pre-optimisation hash in a second column
+   (`original_hash`) and testing incoming files against both closes it. That is a scalar on
+   the document, not a link between documents.
+
+If only one of the two is worth doing, it is (2): without it the feature looks like it works
+and does not.
 
 ### 2.10 FTS schema
 
@@ -669,7 +697,7 @@ Breaking changes first, while the library format is still unreleased.
 **Phase 1 — schema, before 1.0 (breaking).**
 Entities for correspondent/type (§2.1) · nested tags (§2.2) · typed custom fields (§2.3) ·
 day-resolution dates + candidates (§2.4) · notes (§2.5) · soft delete (§2.7) ·
-`events` history (§2.8) · `duplicate_of` (§2.9) · FTS keyed by `rowid`, multi-column
+`events` history (§2.8) · `original_hash` (§2.9) · FTS keyed by `rowid`, multi-column
 (§2.10) · `match_mode` on rules (§3.1) · library format version in `meta.json` (§7).
 
 **Phase 2 — the things that make it feel finished.**
