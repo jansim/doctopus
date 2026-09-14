@@ -33,8 +33,17 @@ enum DocumentAnalyzer {
         /// the date order from. The *system* locale would mean the same library
         /// giving different answers on two Macs.
         var language: String?
+        /// Correspondents and document types that carry a pattern identifying
+        /// them. "Anything mentioning DE12 3456 is from this bank" is the
+        /// cheapest classification there is: no model, no network, and right
+        /// every time the pattern is.
+        var entityRules: [Entity] = []
 
         static let `default` = Options()
+
+        func rules(for fieldKey: String) -> [Entity] {
+            entityRules.filter { $0.fieldKey == fieldKey }
+        }
     }
 
     static func analyze(url: URL, text: String, fallbackDate: Date,
@@ -65,8 +74,10 @@ enum DocumentAnalyzer {
         }
         f.dates = candidates
 
-        f.docType = documentType(text)
-        f.correspondent = correspondent(text: text, known: knownCorrespondents)
+        f.docType = matchingEntity(in: text, rules: options.rules(for: "doc_type"))
+            ?? documentType(text)
+        f.correspondent = matchingEntity(in: text, rules: options.rules(for: "correspondent"))
+            ?? correspondent(text: text, known: knownCorrespondents)
             ?? embeddedAuthor(url)
         f.amount = amount(in: text)
         f.title = title(url: url, text: text, type: f.docType, correspondent: f.correspondent)
@@ -118,9 +129,14 @@ enum DocumentAnalyzer {
         let order = options.dateOrder.resolved(language: options.language)
 
         var found: [(range: NSRange, date: Date)] = []
+        // Every span a numeric pattern spoke for, whether or not it turned out
+        // to be a real date. `31/02/2024` is not a date, and the system
+        // detector rounding it to 2 March is not an improvement.
+        var claimed: [NSRange] = []
 
         if let numericDate {
             for m in numericDate.matches(in: head, range: full) {
+                claimed.append(m.range)
                 let parts = (1...3).map { Int(ns.substring(with: m.range(at: $0))) ?? 0 }
                 let widths = (1...3).map { m.range(at: $0).length }
                 if let date = assemble(parts, widths: widths, order: order) {
@@ -130,6 +146,7 @@ enum DocumentAnalyzer {
         }
         if let compactDate {
             for m in compactDate.matches(in: head, range: full) {
+                claimed.append(m.range)
                 let digits = ns.substring(with: m.range)
                 if let date = day(year: Int(digits.prefix(4)) ?? 0,
                                   month: Int(digits.dropFirst(4).prefix(2)) ?? 0,
@@ -139,13 +156,13 @@ enum DocumentAnalyzer {
             }
         }
         // The system detector is what reads "14 January 2026", which no simple
-        // pattern should try to. Numeric forms it also matches are dropped:
-        // those it reads by the system locale, and we have already read them by
-        // the library's.
+        // pattern should try to. Numeric forms are left to the reading above:
+        // the detector resolves those by the system locale, and it also turns
+        // an impossible one into a plausible one instead of rejecting it.
         if let detector {
             for m in detector.matches(in: head, range: full) {
                 guard let d = m.date else { continue }
-                if found.contains(where: { NSIntersectionRange($0.range, m.range).length > 0 }) { continue }
+                if claimed.contains(where: { NSIntersectionRange($0, m.range).length > 0 }) { continue }
                 found.append((m.range, DayDate.startOfDay(d)))
             }
         }
@@ -295,6 +312,25 @@ enum DocumentAnalyzer {
         return best?.0
     }
 
+    // MARK: - Values that identify themselves
+
+    /// The first value whose own pattern matches the document. A correspondent
+    /// carrying its IBAN, a document type carrying the form number it always
+    /// prints — these beat every heuristic below, because somebody wrote them
+    /// down on purpose.
+    static func matchingEntity(in text: String, rules: [Entity]) -> String? {
+        guard !text.isEmpty else { return nil }
+        let head = String(text.prefix(6000))
+        for entity in rules {
+            guard let pattern = entity.match?.nilIfBlank else { continue }
+            if PatternMatcher.matches(pattern, mode: entity.matchMode,
+                                      insensitive: entity.matchInsensitive, in: head) {
+                return entity.name
+            }
+        }
+        return nil
+    }
+
     // MARK: - Correspondent
 
     private static let noiseWords: Set<String> = [
@@ -308,7 +344,13 @@ enum DocumentAnalyzer {
         guard !text.isEmpty else { return nil }
         let head = String(text.prefix(2500))
         let lower = head.lowercased()
-        if let hit = known.first(where: { !$0.isEmpty && lower.contains($0.lowercased()) }) { return hit }
+        // A known name wins, but only on a word boundary and only if it is long
+        // enough to mean something: a correspondent called "AG" or "Post"
+        // matched as a plain substring fires on almost every document there is.
+        if let hit = known.first(where: { candidate in
+            let needle = candidate.lowercased()
+            return needle.count >= 4 && lower.startsWithWord(needle)
+        }) { return hit }
 
         for raw in head.split(separator: "\n").prefix(12) {
             let line = raw.trimmingCharacters(in: .whitespaces)

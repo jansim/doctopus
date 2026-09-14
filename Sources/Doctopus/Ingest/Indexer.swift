@@ -37,6 +37,7 @@ actor Indexer {
     func update(settings: AppSettings) async {
         self.settings = settings
         languageCache = nil
+        entityRuleCache = nil
         await intelligence.update(settings: settings)
     }
     func cancel() { cancelled = true }
@@ -317,13 +318,20 @@ actor Indexer {
     /// dominant language is a grouped scan, and asking per document would run
     /// it once for every file in a bulk import.
     private var languageCache: String??
+    /// The correspondents and types that identify themselves, loaded once a
+    /// pass for the same reason.
+    private var entityRuleCache: [Entity]?
     private func analyzerOptions() async -> DocumentAnalyzer.Options {
         if languageCache == nil {
             languageCache = .some((try? await store.dominantLanguage()) ?? nil)
         }
+        if entityRuleCache == nil {
+            entityRuleCache = (try? await store.matchingEntities()) ?? []
+        }
         return DocumentAnalyzer.Options(dateOrder: settings.dateOrder,
                                         ignoredDays: settings.ignoredDays,
-                                        language: languageCache ?? nil)
+                                        language: languageCache ?? nil,
+                                        entityRules: entityRuleCache ?? [])
     }
 
     private func summaryLine(_ t: ExtractedText, _ f: DocumentAnalyzer.Findings, _ i: DocumentInsight?) -> String {

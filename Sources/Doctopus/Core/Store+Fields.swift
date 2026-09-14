@@ -185,14 +185,26 @@ extension Store {
         let clean = new.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !clean.isEmpty, clean != old else { return 0 }
         // An icon belongs to the value, so it travels with a rename — and a
-        // merge keeps whichever icon the target already had.
-        try db.run("""
-            UPDATE OR IGNORE value_icons SET value=? WHERE field_id=? AND value=?
-            """, [.text(clean), .int(field.fieldID), .text(old)])
-        try db.run("DELETE FROM value_icons WHERE field_id=? AND value=?", [.int(field.fieldID), .text(old)])
+        // merge keeps whichever icon the target already had. For a taxonomy
+        // field the icon is already on the row and needs no help; this is for
+        // the fields whose values are still strings.
+        if Store.entityColumn(for: field.builtinColumn) == nil {
+            try db.run("""
+                UPDATE OR IGNORE value_icons SET value=? WHERE field_id=? AND value=?
+                """, [.text(clean), .int(field.fieldID), .text(old)])
+            try db.run("DELETE FROM value_icons WHERE field_id=? AND value=?",
+                       [.int(field.fieldID), .text(old)])
+        }
         if let column = field.builtinColumn {
             let allowed = ["correspondent", "doc_type", "language", "amount", "intent"]
             guard allowed.contains(column) else { return 0 }
+            // A taxonomy value is one row, so renaming it is one UPDATE — and
+            // renaming it onto another is a merge rather than two spellings
+            // that happen to have become the same string.
+            if Store.entityColumns[column] != nil {
+                guard let id = try existingEntityID(named: old, builtin: column) else { return 0 }
+                return try renameEntity(id, to: clean)
+            }
             let affected = try db.map("SELECT doc_id FROM metadata WHERE \(column)=? COLLATE NOCASE",
                                       [.text(old)]) { $0.int(0) }
             try db.run("UPDATE metadata SET \(column)=? WHERE \(column)=? COLLATE NOCASE",
@@ -227,6 +239,11 @@ extension Store {
         if let column = field.builtinColumn {
             let allowed = ["correspondent", "doc_type", "language", "amount", "intent"]
             guard allowed.contains(column) else { return }
+            if Store.entityColumns[column] != nil {
+                guard let id = try existingEntityID(named: value, builtin: column) else { return }
+                try deleteEntity(id, column: column)
+                return
+            }
             let affected = try db.map("SELECT doc_id FROM metadata WHERE \(column)=? COLLATE NOCASE",
                                       [.text(value)]) { $0.int(0) }
             try db.run("UPDATE metadata SET \(column)=NULL WHERE \(column)=? COLLATE NOCASE", [.text(value)])

@@ -165,6 +165,18 @@ struct SidebarView: View {
                 initial: facet.value) else { return }
             model.renameFieldValue(field, from: facet.value, to: new)
         }
+        // A taxonomy value can identify itself. This is how most
+        // classification gets done with no model involved at all.
+        if Store.entityColumn(for: field.builtinColumn) != nil {
+            Button("Identify by…") {
+                guard let pattern = TextPrompt.ask(
+                    title: "Identify “\(facet.value)”",
+                    message: "Any document whose text contains one of these comma-separated words is filed as “\(facet.value)”. Leave it empty to stop.",
+                    initial: facet.match ?? "",
+                    confirm: "Save", allowEmpty: true) else { return }
+                model.setEntityMatch(field, value: facet.value, pattern: pattern)
+            }
+        }
         Button("Clear from \(facet.count) Document\(facet.count == 1 ? "" : "s")", role: .destructive) {
             model.deleteFieldValue(field, value: facet.value)
         }
@@ -391,8 +403,10 @@ private struct FolderRow: View {
 /// context menu; for a one-field question this is the honest amount of code.
 enum TextPrompt {
     @MainActor
+    /// `allowEmpty` is for the prompts where clearing the field is a real
+    /// answer rather than a cancel — a pattern you want to stop using.
     static func ask(title: String, message: String, initial: String,
-                    confirm: String = "Rename") -> String? {
+                    confirm: String = "Rename", allowEmpty: Bool = false) -> String? {
         let alert = NSAlert()
         alert.messageText = title
         alert.informativeText = message
@@ -403,7 +417,7 @@ enum TextPrompt {
         alert.addButton(withTitle: "Cancel")
         alert.window.initialFirstResponder = field
         guard alert.runModal() == .alertFirstButtonReturn else { return nil }
-        return field.stringValue.nilIfBlank
+        return allowEmpty ? field.stringValue : field.stringValue.nilIfBlank
     }
 }
 

@@ -171,10 +171,12 @@ enum SelfTest {
         let samples = (try? await store.ruleSamples()) ?? []
         Check.that("every document is a rule sample", samples.count == stats.total,
                    "\(samples.count)/\(stats.total)")
-        Check.that("a pattern is read the way the router will read it",
+        Check.that("a pattern is read the way the rule says, not the way it is punctuated",
                    Router.kind(of: "invoice, rechnung") == .words(["invoice", "rechnung"])
-                       && Router.kind(of: "^inv.*") == .regex
-                       && { if case .invalidRegex = Router.kind(of: "inv(oice") { return true }; return false }())
+                       && Router.kind(of: "Acme (UK) Ltd") == .words(["acme (uk) ltd"])
+                       && Router.kind(of: "^inv.*", mode: .regex) == .regex
+                       && { if case .invalidRegex = Router.kind(of: "inv(oice", mode: .regex) { return true }
+                            return false }())
         if var rule = ((try? await store.rules()) ?? []).last,
            let payslip = rows.first(where: { $0.filename.lowercased().contains("gehalt") }) {
             let original = rule
@@ -528,6 +530,145 @@ enum SelfTest {
             }
             Check.that("what the API returned is stored as its own source",
                        !enriched.isEmpty && enriched.allSatisfy { $0.metadataSource == "remote" && $0.row.summary != nil })
+        }
+
+        print("\nENTITIES")
+        // Correspondents and types are rows now, so renaming one is one row and
+        // renaming it onto another is a merge — which two free-text columns
+        // could not do at all.
+        if let corrField = ((try? await store.fields()) ?? []).first(where: { $0.key == "correspondent" }) {
+            let live = (try? await store.entities(builtin: "correspondent")) ?? []
+            print("  correspondents          "
+                  + live.prefix(4).map { "\($0.name) (\($0.count))" }.joined(separator: ", "))
+            Check.that("every correspondent in use is a row", !live.isEmpty)
+            Check.that("…and each one exists exactly once",
+                       Set(live.map { $0.name.lowercased() }).count == live.count)
+
+            // Renaming and merging are done on values made up for the purpose,
+            // so the fixture library is left exactly as the rest of the run
+            // expects to find it.
+            if rows.count >= 3 {
+                let spellingA = "Stadtwerke München GmbH"
+                let spellingB = "Stadtwerke München"
+                try? await store.setFieldValue(docID: rows[0].doc, field: corrField, value: spellingA)
+                try? await store.setFieldValue(docID: rows[1].doc, field: corrField, value: spellingA)
+                try? await store.setFieldValue(docID: rows[2].doc, field: corrField, value: spellingB)
+                try? await store.setValueIcon(field: corrField, value: spellingA, icon: "building.columns")
+
+                let renamed = (try? await store.renameFieldValue(field: corrField, from: spellingA,
+                                                                 to: "Stadtwerke")) ?? 0
+                var after = (try? await store.entities(builtin: "correspondent")) ?? []
+                let moved = after.first { $0.name == "Stadtwerke" }
+                print("  \(spellingA) → Stadtwerke   \(moved?.count ?? 0) document(s), \(renamed) row(s)")
+                Check.that("renaming a correspondent takes every document with it",
+                           moved?.count == 2, "\(moved?.count ?? -1)")
+                Check.that("…and its icon comes along rather than being orphaned",
+                           moved?.icon == "building.columns")
+                Check.that("…leaving no trace of the old spelling",
+                           !after.contains { $0.name == spellingA })
+                let filtered = (try? await store.listDocuments(
+                    selection: .field("correspondent", "Stadtwerke"), query: SearchQuery(""),
+                    sort: .added, ascending: false)) ?? []
+                Check.that("…and the sidebar filter follows it", filtered.count == 2,
+                           "\(filtered.count) documents")
+
+                // The merge the string columns could never do.
+                _ = try? await store.renameFieldValue(field: corrField, from: spellingB, to: "Stadtwerke")
+                after = (try? await store.entities(builtin: "correspondent")) ?? []
+                let survivor = after.first { $0.name == "Stadtwerke" }
+                print("  \(spellingB) merged in       \(survivor?.count ?? 0) document(s)")
+                Check.that("two spellings merge into one correspondent",
+                           survivor?.count == 3 && !after.contains { $0.name == spellingB },
+                           "\(survivor?.count ?? -1) of 3")
+
+                // And it is findable as one thing, under its one name.
+                let searched = (try? await store.listDocuments(
+                    selection: .all, query: SearchQuery("Stadtwerke"), sort: .relevance,
+                    ascending: false)) ?? []
+                Check.that("…searchable under the surviving name", searched.count >= 3,
+                           "\(searched.count) hits")
+
+                // Put the fixture back the way the rest of the run found it.
+                for (index, row) in rows.prefix(3).enumerated() {
+                    try? await store.setFieldValue(docID: row.doc, field: corrField,
+                                                   value: [rows[0], rows[1], rows[2]][index].correspondent)
+                }
+                try? await store.deleteFieldValue(field: corrField, value: "Stadtwerke")
+            }
+
+            // A correspondent that identifies itself, which is what having a
+            // row it can carry a rule on is for.
+            if let subject = rows.first {
+                let made = (try? await store.entityID(named: "Selbsterkennung",
+                                                      builtin: "correspondent")) ?? nil
+                if let made {
+                    try? await store.setEntityMatch(made, pattern: "doctopus-iban-de12")
+                    let matching = (try? await store.matchingEntities()) ?? []
+                    let picked = DocumentAnalyzer.analyze(
+                        url: subject.url, text: "Kontoauszug für doctopus-iban-de12 im Januar",
+                        fallbackDate: Date(), knownCorrespondents: [],
+                        options: DocumentAnalyzer.Options(entityRules: matching)).correspondent
+                    print("  identified by its own pattern → \(picked ?? "nothing")")
+                    Check.that("a correspondent carrying a pattern identifies itself",
+                               picked == "Selbsterkennung")
+                    try? await store.deleteEntity(made, column: "correspondent")
+                }
+            }
+
+            // The "AG" problem: a short known name matched as a plain substring
+            // fires on very nearly every document there is.
+            Check.that("a known correspondent only matches on a word boundary",
+                       DocumentAnalyzer.correspondent(
+                           text: "Gehaltsabrechnung von Northwind\nSehr geehrte Damen",
+                           known: ["AG", "rech"]) != "AG")
+        }
+
+        print("\nMATCH MODES")
+        // What used to be guessed from the punctuation is now said out loud.
+        func hits(_ pattern: String, _ mode: MatchMode, _ subject: String,
+                  insensitive: Bool = true) -> Bool {
+            PatternMatcher.matches(pattern, mode: mode, insensitive: insensitive, in: subject)
+        }
+        Check.that("“Acme (UK) Ltd” is a name, not a regular expression",
+                   hits("Acme (UK) Ltd", .anyWord, "Invoice from Acme (UK) Ltd")
+                       && MatchMode.inferred(from: "Acme (UK) Ltd") == .anyWord)
+        Check.that("any word still matches at the start of a word, not inside a compound",
+                   hits("rechnung", .anyWord, "Rechnungsnummer 42")
+                       && !hits("rechnung", .anyWord, "Gehaltsabrechnung"))
+        Check.that("all words needs every one of them",
+                   hits("amount, due", .allWords, "the amount due is")
+                       && !hits("amount, missing", .allWords, "the amount due is"))
+        // The OCR line-wrap case, which is why the phrase mode exists at all.
+        Check.that("a phrase matches across the line break OCR put in it",
+                   hits("amount due", .exactPhrase, "Total\namount\n  due   today")
+                       && !hits("amount due", .exactPhrase, "amount is overdue"))
+        Check.that("a regex is one only when the rule says so",
+                   hits("^inv-\\d+", .regex, "inv-4821")
+                       && !hits("^inv-\\d+", .anyWord, "inv-4821"))
+        Check.that("case can be insisted on",
+                   hits("ACME", .anyWord, "acme corp")
+                       && !hits("ACME", .anyWord, "acme corp", insensitive: false))
+        // OCR noise: one substituted letter should not lose the match.
+        Check.that("fuzzy survives a misread letter",
+                   hits("rechnung", .fuzzy, "Rechnunq Nr. 42")
+                       && !hits("rechnung", .fuzzy, "Kontoauszug"))
+        print("  Acme (UK) Ltd → \(MatchMode.inferred(from: "Acme (UK) Ltd").shortLabel), "
+              + "^inv-\\d+ → \(MatchMode.inferred(from: "^inv-\\d+").shortLabel), "
+              + "Betrag: 100€ + → \(MatchMode.inferred(from: "Betrag: 100€ +").shortLabel)")
+        Check.that("a pattern that was read as a regex keeps being one when migrated",
+                   MatchMode.inferred(from: "^inv-\\d+") == .regex)
+        Check.that("…and one that never compiled is migrated as the words it was matching",
+                   MatchMode.inferred(from: "Betrag: 100€ +") == .anyWord)
+
+        // A rule's mode survives the round trip through the database.
+        if let id = try? await store.upsertRule(
+            Rule(id: 0, name: "Phrase Test", pattern: "amount due", field: "text",
+                 destination: "Filed/Phrase", tagNames: nil, weight: 0.9, enabled: false,
+                 priority: 1, mode: .exactPhrase, caseInsensitive: false)) {
+            let saved = ((try? await store.rules()) ?? []).first { $0.id == id }
+            Check.that("a rule remembers how it reads its pattern",
+                       saved?.mode == .exactPhrase && saved?.caseInsensitive == false)
+            try? await store.deleteRule(id)
         }
 
         print("\nNESTED TAGS")
@@ -1005,8 +1146,8 @@ enum SelfTest {
         for row in rows where row.ext == "pdf" {
             let text = (try? await store.ocrText(row.doc)) ?? ""
             let hit = existing.contains {
-                Router.matches($0.pattern, in: Router.subject(for: $0.field, text: text, filename: row.filename,
-                                                              correspondent: row.correspondent, docType: row.docType))
+                Router.matches($0, in: Router.subject(for: $0.field, text: text, filename: row.filename,
+                                                     correspondent: row.correspondent, docType: row.docType))
             }
             if !hit { neutral = row; break }
         }

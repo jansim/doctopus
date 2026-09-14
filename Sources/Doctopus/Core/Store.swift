@@ -423,7 +423,7 @@ actor Store {
         try db.run("""
             INSERT INTO doc_fts(rowid, title, correspondent, doc_type, tags, fields, notes, filename, body)
             SELECT d.id,
-                   COALESCE(m.title, ''), COALESCE(m.correspondent, ''), COALESCE(m.doc_type, ''),
+                   COALESCE(m.title, ''), COALESCE(ec.name, ''), COALESCE(et.name, ''),
                    COALESCE((SELECT group_concat(t.name, ' ') FROM document_tags dt
                               JOIN tags t ON t.id = dt.tag_id WHERE dt.doc_id = d.id), ''),
                    COALESCE((SELECT group_concat(v.value, ' ') FROM field_values v
@@ -432,7 +432,10 @@ actor Store {
                               WHERE n.doc_id = d.id), ''),
                    d.filename,
                    ?
-            FROM documents d LEFT JOIN metadata m ON m.doc_id = d.id
+            FROM documents d
+            LEFT JOIN metadata m ON m.doc_id = d.id
+            LEFT JOIN entities ec ON ec.id = m.correspondent_id
+            LEFT JOIN entities et ON et.id = m.doc_type_id
             WHERE d.id = ?
             """, [.text(text), .int(docID)])
     }
@@ -467,16 +470,20 @@ actor Store {
         var amount: String?
     }
 
+    /// The patch carries names; the index stores the entity they refer to,
+    /// making one if this is the first document to name it.
     func storeMetadata(_ p: MetadataPatch) throws {
+        let correspondentID = try entityID(named: p.correspondent, builtin: "correspondent")
+        let docTypeID = try entityID(named: p.docType, builtin: "doc_type")
         try db.run("""
-            INSERT INTO metadata(doc_id, title, correspondent, doc_type, language, summary,
+            INSERT INTO metadata(doc_id, title, correspondent_id, doc_type_id, language, summary,
                                  intent, doc_date, date_source, confidence, source, amount,
                                  amount_value)
             VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(doc_id) DO UPDATE SET
                 title=COALESCE(excluded.title, metadata.title),
-                correspondent=COALESCE(excluded.correspondent, metadata.correspondent),
-                doc_type=COALESCE(excluded.doc_type, metadata.doc_type),
+                correspondent_id=COALESCE(excluded.correspondent_id, metadata.correspondent_id),
+                doc_type_id=COALESCE(excluded.doc_type_id, metadata.doc_type_id),
                 language=COALESCE(excluded.language, metadata.language),
                 summary=COALESCE(excluded.summary, metadata.summary),
                 intent=COALESCE(excluded.intent, metadata.intent),
@@ -486,7 +493,7 @@ actor Store {
                 source=COALESCE(excluded.source, metadata.source),
                 amount=COALESCE(excluded.amount, metadata.amount),
                 amount_value=COALESCE(excluded.amount_value, metadata.amount_value)
-            """, [.int(p.docID), .text(p.title), .text(p.correspondent), .text(p.docType),
+            """, [.int(p.docID), .text(p.title), .int(correspondentID), .int(docTypeID),
                   .text(p.language), .text(p.summary), .text(p.intent),
                   .date(p.docDate.map { DayDate.startOfDay($0) }),
                   .text(p.dateSource), .double(p.confidence), .text(p.source), .text(p.amount),
@@ -499,6 +506,14 @@ actor Store {
         let allowed = ["title", "correspondent", "doc_type", "language", "summary", "intent", "amount"]
         guard allowed.contains(column) else { return }
         try db.run("INSERT OR IGNORE INTO metadata(doc_id) VALUES(?)", [.int(docID)])
+        // A taxonomy value is a row; typing a new name into the inspector makes
+        // one, exactly as picking an existing name reuses it.
+        if let idColumn = Store.entityColumns[column] {
+            let id = try entityID(named: value, builtin: column)
+            try db.run("UPDATE metadata SET \(idColumn)=? WHERE doc_id=?", [.int(id), .int(docID)])
+            try refreshSearchIndex(docID)
+            return
+        }
         try db.run("UPDATE metadata SET \(column)=? WHERE doc_id=?", [.text(value), .int(docID)])
         // The amount's text keeps the currency; its number is what sorts.
         if column == "amount" {
@@ -903,12 +918,15 @@ actor Store {
 
     func rules() throws -> [Rule] {
         try db.map("""
-            SELECT id, name, pattern, field, destination, tag_names, weight, enabled, priority
+            SELECT id, name, pattern, field, destination, tag_names, weight, enabled, priority,
+                   match_mode, match_insensitive
             FROM rules ORDER BY priority DESC, id
             """) {
             Rule(id: $0.int(0), name: $0.string(1), pattern: $0.string(2), field: $0.string(3),
                  destination: $0.string(4), tagNames: $0.stringOrNil(5), weight: $0.double(6),
-                 enabled: $0.bool(7), priority: $0.int(8))
+                 enabled: $0.bool(7), priority: $0.int(8),
+                 mode: MatchMode(rawValue: $0.int(9)) ?? .anyWord,
+                 caseInsensitive: $0.bool(10))
         }
     }
 
@@ -917,16 +935,20 @@ actor Store {
         if r.id > 0 {
             try db.run("""
                 UPDATE rules SET name=?, pattern=?, field=?, destination=?, tag_names=?,
-                                 weight=?, enabled=?, priority=? WHERE id=?
+                                 weight=?, enabled=?, priority=?, match_mode=?, match_insensitive=?
+                WHERE id=?
                 """, [.text(r.name), .text(r.pattern), .text(r.field), .text(r.destination),
-                      .text(r.tagNames), .double(r.weight), .bool(r.enabled), .int(r.priority), .int(r.id)])
+                      .text(r.tagNames), .double(r.weight), .bool(r.enabled), .int(r.priority),
+                      .int(r.mode.rawValue), .bool(r.caseInsensitive), .int(r.id)])
             return r.id
         }
         return try db.run("""
-            INSERT INTO rules(name, pattern, field, destination, tag_names, weight, enabled, priority)
-            VALUES(?,?,?,?,?,?,?,?)
+            INSERT INTO rules(name, pattern, field, destination, tag_names, weight, enabled, priority,
+                              match_mode, match_insensitive)
+            VALUES(?,?,?,?,?,?,?,?,?,?)
             """, [.text(r.name), .text(r.pattern), .text(r.field), .text(r.destination),
-                  .text(r.tagNames), .double(r.weight), .bool(r.enabled), .int(r.priority)])
+                  .text(r.tagNames), .double(r.weight), .bool(r.enabled), .int(r.priority),
+                  .int(r.mode.rawValue), .bool(r.caseInsensitive)])
     }
 
     func deleteRule(_ id: Int64) throws {
@@ -959,10 +981,12 @@ actor Store {
     /// longer has to be loaded into memory to avoid a scan per row.
     func ruleSamples(limit: Int = 5000) throws -> [RuleSample] {
         try db.map("""
-            SELECT d.filename, m.correspondent, m.doc_type,
+            SELECT d.filename, ec.name, et.name,
                    (SELECT f.body FROM doc_fts f WHERE f.rowid = d.id)
             FROM documents d
             LEFT JOIN metadata m ON m.doc_id = d.id
+            LEFT JOIN entities ec ON ec.id = m.correspondent_id
+            LEFT JOIN entities et ON et.id = m.doc_type_id
             WHERE d.missing=0 AND d.deleted_at IS NULL ORDER BY d.created_at DESC LIMIT ?
             """, [.int(Int64(limit))]) {
             RuleSample(filename: $0.string(0), text: $0.stringOrNil(3) ?? "",

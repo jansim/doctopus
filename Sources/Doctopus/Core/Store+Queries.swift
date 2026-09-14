@@ -123,10 +123,18 @@ extension Store {
             let expr: String
             let collate: String
             if let column = f.builtinColumn {
-                // The amount keeps its currency in the text and its value in a
-                // column of its own.
-                expr = column == "amount" ? "m.amount_value" : "m.\(column)"
-                collate = column == "amount" ? "" : " COLLATE NOCASE"
+                if column == "amount" {
+                    // The amount keeps its currency in the text and its value
+                    // in a column of its own.
+                    expr = "m.amount_value"
+                    collate = ""
+                } else if let idColumn = Store.entityColumns[column] {
+                    expr = "(SELECT name FROM entities WHERE id = m.\(idColumn))"
+                    collate = " COLLATE NOCASE"
+                } else {
+                    expr = "m.\(column)"
+                    collate = " COLLATE NOCASE"
+                }
             } else if let typed = f.type.storageColumn {
                 expr = "(SELECT \(typed) FROM field_values WHERE doc_id = d.id AND field_id = \(f.fieldID))"
                 collate = ""
@@ -146,10 +154,12 @@ extension Store {
         let sql = """
         SELECT d.id, d.path, d.directory, d.filename, d.ext, d.size, d.original_size,
                d.created_at, d.mtime, d.ocr_state, d.page_count, d.approved, d.missing,
-               m.title, m.correspondent, m.doc_type, m.language, m.doc_date, m.summary,
+               m.title, ec.name, et.name, m.language, m.doc_date, m.summary,
                \(snippetCol), \(queueColumns)
         FROM documents d
         LEFT JOIN metadata m ON m.doc_id = d.id
+        LEFT JOIN entities ec ON ec.id = m.correspondent_id
+        LEFT JOIN entities et ON et.id = m.doc_type_id
         \(joinFTS)
         \(joinQueue)
         WHERE \(wheres.joined(separator: " AND "))
@@ -216,6 +226,19 @@ extension Store {
         if let column = field.builtinColumn {
             let allowed = ["correspondent", "doc_type", "language", "amount", "intent"]
             guard allowed.contains(column) else { return }
+            // A taxonomy value is a row, so the filter is on its id — which is
+            // also why two spellings can no longer be two different filters.
+            if let idColumn = Store.entityColumns[column] {
+                let comparison = exact ? "name = ?" : "name LIKE ?"
+                wheres.append("""
+                    m.\(idColumn) IN (SELECT e.id FROM entities e
+                                      JOIN fields f ON f.id = e.field_id
+                                      WHERE f.builtin_column = ? AND \(comparison))
+                    """)
+                args.append(.text(column))
+                args.append(.text(exact ? value : "%\(value)%"))
+                return
+            }
             if exact {
                 wheres.append("m.\(column) = ?"); args.append(.text(value))
             } else {
@@ -233,11 +256,13 @@ extension Store {
         guard let base = try db.first("""
             SELECT d.id, d.path, d.directory, d.filename, d.ext, d.size, d.original_size,
                    d.created_at, d.mtime, d.ocr_state, d.page_count, d.approved, d.missing, d.hash,
-                   m.title, m.correspondent, m.doc_type, m.language, m.doc_date, m.summary,
+                   m.title, ec.name, et.name, m.language, m.doc_date, m.summary,
                    m.intent, m.date_source, m.confidence, m.source, m.amount,
                    s.confidence, s.words, s.source
             FROM documents d
             LEFT JOIN metadata m ON m.doc_id=d.id
+            LEFT JOIN entities ec ON ec.id = m.correspondent_id
+            LEFT JOIN entities et ON et.id = m.doc_type_id
             LEFT JOIN ocr_stats s ON s.doc_id=d.id
             WHERE d.id=?
             """, [.int(id)], { r -> DocumentDetail in
@@ -331,6 +356,13 @@ extension Store {
     func facets(column: String) throws -> [Facet] {
         let allowed = ["correspondent", "doc_type", "language"]
         guard allowed.contains(column) else { return [] }
+        // A taxonomy field's values are rows, so its facets come from there —
+        // icon included, which is how an icon now survives a rename.
+        if Store.entityColumns[column] != nil {
+            return try entities(builtin: column)
+                .filter { $0.count > 0 }
+                .map { Facet(value: $0.name, count: $0.count, icon: $0.icon, match: $0.match) }
+        }
         return try db.map("""
             SELECT m.\(column), COUNT(*) FROM metadata m
             JOIN documents d ON d.id=m.doc_id AND d.missing=0 AND d.deleted_at IS NULL

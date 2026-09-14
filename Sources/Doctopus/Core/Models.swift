@@ -191,6 +191,32 @@ struct Field: Identifiable, Hashable, Sendable {
     var isBuiltin: Bool { builtinColumn != nil }
 }
 
+/// One value of a taxonomy field — a correspondent, a document type — as a row
+/// rather than as a string repeated across every document that has it.
+///
+/// This is what makes renaming one thing instead of thousands, merging two
+/// spellings possible at all, an icon survive a rename, and a value able to
+/// identify itself: "anything mentioning DE12 3456 is from this bank" is how
+/// most classification gets done without a model anywhere near it.
+struct Entity: Identifiable, Hashable, Sendable {
+    var entityID: Int64
+    /// The field this is a value of, by key: `correspondent`, `doc_type`.
+    var fieldKey: String
+    var name: String
+    var icon: String?
+    var color: Int64 = 0
+    /// A pattern that identifies this value in a document's text, read the
+    /// same way a routing rule's pattern is.
+    var match: String?
+    var matchMode: MatchMode = .anyWord
+    var matchInsensitive: Bool = true
+    var count: Int = 0
+    /// Which library this belongs to. Stamped by `AppModel`.
+    var library: LibraryID = ""
+
+    var id: String { "\(library)#\(fieldKey)#\(entityID)" }
+}
+
 /// The `extra_data` JSON of a `select` field.
 struct FieldOptions: Codable, Sendable, Hashable {
     var options: [String] = []
@@ -236,6 +262,9 @@ struct Facet: Identifiable, Hashable, Sendable {
     /// Set when this particular value has been given its own icon; otherwise
     /// the field's icon stands in.
     var icon: String?
+    /// For a taxonomy value, the pattern that identifies it in a document's
+    /// text. Nil for everything else, which has nowhere to keep one.
+    var match: String?
 }
 
 struct ProcessingEntry: Identifiable, Hashable, Sendable {
@@ -325,6 +354,10 @@ struct Rule: Identifiable, Hashable, Sendable {
     var weight: Double
     var enabled: Bool
     var priority: Int64
+    /// How the pattern is read. Said out loud rather than guessed from whether
+    /// the pattern happens to contain a bracket.
+    var mode: MatchMode = .anyWord
+    var caseInsensitive: Bool = true
 }
 
 /// A node in the physical directory tree shown in the sidebar.

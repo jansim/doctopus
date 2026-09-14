@@ -1321,6 +1321,24 @@ final class AppModel {
         }
     }
 
+    /// Gives a correspondent or document type a pattern that identifies it, so
+    /// every document mentioning it is filed as it from now on — no model, no
+    /// network, and right every time the pattern is. An empty pattern stops it.
+    func setEntityMatch(_ field: Field, value: String, pattern: String) {
+        Task {
+            for (lib, owned) in librariesDefining(field) {
+                guard let column = owned.builtinColumn,
+                      let id = try? await lib.store.existingEntityID(named: value, builtin: column)
+                else { continue }
+                try? await lib.store.setEntityMatch(id, pattern: pattern.nilIfBlank)
+            }
+            refreshAll()
+            if pattern.nilIfBlank != nil {
+                notify("Documents mentioning that will be filed as “\(value)”.")
+            }
+        }
+    }
+
     func deleteFieldValue(_ field: Field, value: String) {
         Task {
             for (lib, field) in librariesDefining(field) {

@@ -2,7 +2,7 @@ import Foundation
 
 /// Versioned schema. Migrations are append-only: bump `current` and add a case.
 enum Schema {
-    static let current = 14
+    static let current = 16
 
     static func migrate(_ db: Database) throws {
         let version = try db.first("PRAGMA user_version") { Int($0.int(0)) } ?? 0
@@ -20,6 +20,8 @@ enum Schema {
         if version < 12 { try v12(db) }
         if version < 13 { try v13(db) }
         if version < 14 { try v14(db) }
+        if version < 15 { try v15(db) }
+        if version < 16 { try v16(db) }
         try db.exec("PRAGMA user_version=\(current)")
     }
 
@@ -33,6 +35,125 @@ enum Schema {
             [.text(table), .text(column)]) { $0.int(0) } ?? 0
         guard present == 0 else { return }
         try db.exec("ALTER TABLE \(table) ADD COLUMN \(column) \(declaration)")
+    }
+
+    /// Correspondents and document types become rows.
+    ///
+    /// They were free text in two `metadata` columns, which cost more than it
+    /// looks. Renaming "Stadtwerke München GmbH" to "Stadtwerke München" was a
+    /// string rewrite across every row that could not merge two spellings and
+    /// could not be undone. `value_icons` keyed an icon by a *string*, so
+    /// renaming the value orphaned its icon. A correspondent could not carry a
+    /// matching rule of its own ("anything mentioning DE12 3456 is from this
+    /// bank"), which is how Paperless gets most of its classification right
+    /// with no model at all. And the router's `{correspondent}` token expanded
+    /// whatever string the analyzer produced that day, so two spellings quietly
+    /// made two folders.
+    ///
+    /// Now there is one row per value, documents point at it, and the name
+    /// lives in exactly one place. Renaming is an `UPDATE` of that row; merging
+    /// is repointing the documents and deleting the loser. `value_icons` folds
+    /// into `entities.icon` for these two fields and stays as it was for the
+    /// rest.
+    ///
+    /// Storage paths deliberately do *not* become entities the way Paperless's
+    /// do: Doctopus's folders are real folders, derived from
+    /// `documents.directory`, which is both correct and cheaper.
+    private static func v16(_ db: Database) throws {
+        let already = try db.first(
+            "SELECT COUNT(*) FROM pragma_table_info('metadata') WHERE name='correspondent_id'") { $0.int(0) } ?? 0
+        guard already == 0 else { return }
+
+        try db.exec("""
+        CREATE TABLE IF NOT EXISTS entities (
+            id                INTEGER PRIMARY KEY,
+            field_id          INTEGER NOT NULL REFERENCES fields(id) ON DELETE CASCADE,
+            name              TEXT NOT NULL COLLATE NOCASE,
+            icon              TEXT,
+            color             INTEGER NOT NULL DEFAULT 0,
+            -- A value can identify itself, exactly as a rule does.
+            match             TEXT,
+            match_mode        INTEGER NOT NULL DEFAULT 0,
+            match_insensitive INTEGER NOT NULL DEFAULT 1,
+            UNIQUE (field_id, name)
+        );
+        CREATE INDEX IF NOT EXISTS idx_entities_field ON entities(field_id, name);
+        """)
+
+        // One row per spelling that is already in use.
+        for column in ["correspondent", "doc_type"] {
+            try db.exec("""
+            INSERT OR IGNORE INTO entities(field_id, name)
+            SELECT f.id, TRIM(m.\(column)) FROM metadata m, fields f
+            WHERE f.builtin_column = '\(column)'
+              AND m.\(column) IS NOT NULL AND TRIM(m.\(column)) <> '';
+            """)
+        }
+
+        try addColumn(db, table: "metadata", column: "correspondent_id",
+                      declaration: "INTEGER REFERENCES entities(id) ON DELETE SET NULL")
+        try addColumn(db, table: "metadata", column: "doc_type_id",
+                      declaration: "INTEGER REFERENCES entities(id) ON DELETE SET NULL")
+
+        for column in ["correspondent", "doc_type"] {
+            try db.exec("""
+            UPDATE metadata SET \(column)_id = (
+                SELECT e.id FROM entities e JOIN fields f ON f.id = e.field_id
+                WHERE f.builtin_column = '\(column)' AND e.name = TRIM(metadata.\(column))
+            ) WHERE \(column) IS NOT NULL AND TRIM(\(column)) <> '';
+            """)
+        }
+
+        // An icon belonged to a string; now it belongs to the row, where a
+        // rename can no longer orphan it.
+        try db.exec("""
+        UPDATE entities SET icon = (
+            SELECT vi.icon FROM value_icons vi
+            WHERE vi.field_id = entities.field_id AND vi.value = entities.name
+        ) WHERE icon IS NULL;
+        DELETE FROM value_icons WHERE field_id IN (
+            SELECT id FROM fields WHERE builtin_column IN ('correspondent', 'doc_type')
+        );
+        """)
+
+        // The old columns go, along with the indexes on them — keeping them
+        // would only let the two spellings drift apart again.
+        try db.exec("""
+        DROP INDEX IF EXISTS idx_metadata_corr;
+        DROP INDEX IF EXISTS idx_metadata_type;
+        ALTER TABLE metadata DROP COLUMN correspondent;
+        ALTER TABLE metadata DROP COLUMN doc_type;
+        CREATE INDEX IF NOT EXISTS idx_metadata_corr ON metadata(correspondent_id);
+        CREATE INDEX IF NOT EXISTS idx_metadata_type ON metadata(doc_type_id);
+        """)
+    }
+
+    /// How a rule reads its pattern, said out loud.
+    ///
+    /// The router used to guess from the punctuation: anything containing
+    /// `^$*+?[]()|\` became a regular expression. So `Acme (UK) Ltd` was
+    /// silently compiled as a regex, and `Betrag: 100€ +` was a regex that
+    /// failed to compile and fell back to word matching without saying so.
+    ///
+    /// Existing rules are migrated by running that inference one last time,
+    /// which is the only place it belongs: whatever a rule meant yesterday is
+    /// what it keeps meaning, and from now on it says so in a column.
+    private static func v15(_ db: Database) throws {
+        let already = try db.first(
+            "SELECT COUNT(*) FROM pragma_table_info('rules') WHERE name='match_mode'") { $0.int(0) } ?? 0
+        guard already == 0 else { return }
+        try addColumn(db, table: "rules", column: "match_mode",
+                      declaration: "INTEGER NOT NULL DEFAULT 0")
+        try addColumn(db, table: "rules", column: "match_insensitive",
+                      declaration: "INTEGER NOT NULL DEFAULT 1")
+
+        // A pattern with regex punctuation in it was being read as a regex, so
+        // that is what it stays.
+        let existing = try db.map("SELECT id, pattern FROM rules") { ($0.int(0), $0.string(1)) }
+        for (id, pattern) in existing {
+            let mode = MatchMode.inferred(from: pattern)
+            try db.run("UPDATE rules SET match_mode=? WHERE id=?", [.int(mode.rawValue), .int(id)])
+        }
     }
 
     /// Nested tags.
