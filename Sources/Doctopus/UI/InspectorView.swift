@@ -25,6 +25,7 @@ private struct DetailInspector: View {
     let detail: DocumentDetail
     @State private var showRawText = false
     @State private var showAllHistory = false
+    @State private var noteDraft = ""
     @State private var tagInput = ""
     @State private var finderTagInput = ""
 
@@ -40,6 +41,7 @@ private struct DetailInspector: View {
                 tagsSection
                 if !detail.tagSuggestions.isEmpty { tagSuggestionsSection }
                 finderTagsSection
+                notesSection
                 fileSection
                 if !detail.aliases.isEmpty { aliasSection }
                 if !detail.history.isEmpty { historySection }
@@ -379,6 +381,38 @@ private struct DetailInspector: View {
         }
     }
 
+    // MARK: - Notes
+
+    /// Everything the schema has nowhere to put: "cancelled by phone on the
+    /// 4th", "the original is in the red folder". Indexed with the document's
+    /// own text, so a note can be searched for like anything else.
+    private var notesSection: some View {
+        Section2("Notes") {
+            ForEach(detail.notes) { note in
+                NoteRow(note: note, document: row.id)
+            }
+            HStack(alignment: .top, spacing: 6) {
+                TextField("Add a note…", text: $noteDraft, axis: .vertical)
+                    .textFieldStyle(.roundedBorder)
+                    .lineLimit(1...4)
+                    .font(.callout)
+                    .onSubmit(addNote)
+                if noteDraft.nilIfBlank != nil {
+                    Button("Add", action: addNote)
+                        .buttonStyle(.borderless)
+                        .font(.caption)
+                }
+            }
+        }
+    }
+
+    private func addNote() {
+        let body = noteDraft
+        guard body.nilIfBlank != nil else { return }
+        noteDraft = ""
+        model.addNote(body, to: row.id)
+    }
+
     // MARK: - History
 
     /// Everything that has happened to this document, newest first. The queue
@@ -401,8 +435,8 @@ private struct DetailInspector: View {
                         }
                         if let move = event.move(relativeTo: model.library(row.library)?.root.path ?? "") {
                             Text(move).font(.caption2).foregroundStyle(.secondary)
-                        } else if let detail = event.detail?.nilIfBlank {
-                            Text(detail).font(.caption2).foregroundStyle(.secondary)
+                        } else if let note = event.detail?.nilIfBlank {
+                            Text(note).font(.caption2).foregroundStyle(.secondary)
                                 .lineLimit(2)
                         }
                     }
@@ -443,6 +477,64 @@ private struct DetailInspector: View {
                 }
             }
         }
+    }
+}
+
+/// One note, editable in place. Clearing the text deletes it, which is the
+/// least surprising way to get rid of something that is only a sentence.
+private struct NoteRow: View {
+    @Environment(AppModel.self) private var model
+    let note: Note
+    let document: DocumentRef
+
+    @State private var editing = false
+    @State private var draft = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            if editing {
+                TextField("Note", text: $draft, axis: .vertical)
+                    .textFieldStyle(.roundedBorder)
+                    .lineLimit(1...6)
+                    .font(.callout)
+                    .onSubmit(commit)
+                HStack(spacing: 8) {
+                    Button("Save", action: commit).font(.caption)
+                    Button("Cancel") { editing = false }.font(.caption)
+                    Spacer()
+                    Button("Delete", role: .destructive) {
+                        editing = false
+                        model.deleteNote(note.id, in: document)
+                    }
+                    .font(.caption)
+                }
+                .buttonStyle(.borderless)
+            } else {
+                Text(note.body)
+                    .font(.callout)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Text(note.createdAt.formatted(date: .abbreviated, time: .shortened)
+                     + (note.edited ? " · edited" : ""))
+                    .font(.caption2).foregroundStyle(.tertiary)
+            }
+        }
+        .padding(.vertical, 2)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            guard !editing else { return }
+            draft = note.body
+            editing = true
+        }
+        .contextMenu {
+            Button("Edit") { draft = note.body; editing = true }
+            Button("Delete", role: .destructive) { model.deleteNote(note.id, in: document) }
+        }
+    }
+
+    private func commit() {
+        editing = false
+        model.updateNote(note.id, body: draft, in: document)
     }
 }
 

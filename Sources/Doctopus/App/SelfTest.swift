@@ -530,6 +530,31 @@ enum SelfTest {
                        !enriched.isEmpty && enriched.allSatisfy { $0.metadataSource == "remote" && $0.row.summary != nil })
         }
 
+        print("\nNOTES")
+        if let subject = rows.first {
+            let phrase = "cancelled by phone \(UUID().uuidString.prefix(6).lowercased())"
+            let noteID = (try? await store.addNote(phrase, to: subject.doc)) ?? 0
+            let listed = (try? await store.notes(for: subject.doc)) ?? []
+            let found = (try? await store.listDocuments(selection: .all, query: SearchQuery(phrase),
+                                                        sort: .relevance, ascending: false)) ?? []
+            print("  \(subject.filename.padded(38)) \(listed.count) note(s), "
+                  + "searchable: \(found.count) hit(s)")
+            Check.that("a note is kept with the document", listed.contains { $0.id == noteID })
+            Check.that("…and is searchable straight away", found.contains { $0.id == subject.id })
+
+            try? await store.updateNote(noteID, body: "the original is in the red folder")
+            let edited = (try? await store.notes(for: subject.doc)) ?? []
+            Check.that("editing a note marks it edited",
+                       edited.first { $0.id == noteID }?.edited == true)
+            let stale = (try? await store.listDocuments(selection: .all, query: SearchQuery(phrase),
+                                                        sort: .relevance, ascending: false)) ?? []
+            Check.that("…and the old wording stops matching", stale.isEmpty, "\(stale.count) hit(s)")
+
+            try? await store.deleteNote(noteID)
+            Check.that("a note can be taken away again",
+                       ((try? await store.notes(for: subject.doc)) ?? []).isEmpty)
+        }
+
         print("\nRECENTLY DELETED")
         // A deleted document keeps its row, stays out of every listing but its
         // own, and comes back whole — with its tags, title and history — when
@@ -566,9 +591,10 @@ enum SelfTest {
             try? await store.restore(victim.doc)
             let back = (try? await store.listDocuments(selection: .all, query: SearchQuery(""),
                                                        sort: .added, ascending: false)) ?? []
+            let keptTags = (try? await store.tags(for: victim.doc)) ?? []
             Check.that("putting it back revives the row it always had",
                        back.contains { $0.doc == victim.doc }
-                           && ((try? await store.tags(for: victim.doc)) ?? []).contains { $0.tagID == tagID })
+                           && keptTags.contains { $0.tagID == tagID })
             try? await store.unassign(tag: tagID, from: victim.doc)
             try? await store.deleteTag(tagID)
         }

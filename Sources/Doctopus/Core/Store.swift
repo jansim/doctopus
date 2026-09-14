@@ -428,7 +428,8 @@ actor Store {
                               JOIN tags t ON t.id = dt.tag_id WHERE dt.doc_id = d.id), ''),
                    COALESCE((SELECT group_concat(v.value, ' ') FROM field_values v
                               WHERE v.doc_id = d.id), ''),
-                   '',
+                   COALESCE((SELECT group_concat(n.body, ' ') FROM notes n
+                              WHERE n.doc_id = d.id), ''),
                    d.filename,
                    ?
             FROM documents d LEFT JOIN metadata m ON m.doc_id = d.id
@@ -602,9 +603,8 @@ actor Store {
     /// is not trimmed; only this view is.
     static let queueLength = 500
 
-    @discardableResult
     func logProcessing(docID: Int64, action: String, detail: String?, confidence: Double?,
-                       rule: String?, from: String?, to: String?, approved: Bool) throws -> Int64 {
+                       rule: String?, from: String?, to: String?, approved: Bool) throws {
         let eventID = try db.run("""
             INSERT INTO events(doc_id, at, action, detail, confidence, rule, from_path, to_path)
             VALUES(?,?,?,?,?,?,?,?)
@@ -625,7 +625,6 @@ actor Store {
             DELETE FROM processing
             WHERE id < COALESCE((SELECT id FROM processing ORDER BY id DESC LIMIT 1 OFFSET ?), 0)
             """, [.int(Store.queueLength)])
-        return eventID
     }
 
     func processingQueue(limit: Int = 200) throws -> [ProcessingEntry] {
@@ -660,6 +659,53 @@ actor Store {
                          fromPath: $0.stringOrNil(6).map { absPath($0) },
                          toPath: $0.stringOrNil(7).map { absPath($0) })
         }
+    }
+
+    // MARK: - Notes
+
+    /// A document's notes, newest first. This is the escape hatch for what the
+    /// schema does not model — "cancelled by phone on the 4th", "the original
+    /// is in the red folder" — and it is indexed, so it is findable.
+    func notes(for docID: Int64) throws -> [Note] {
+        try db.map("""
+            SELECT id, body, created_at, updated_at FROM notes
+            WHERE doc_id=? ORDER BY created_at DESC, id DESC
+            """, [.int(docID)]) {
+            Note(id: $0.int(0), body: $0.string(1),
+                 createdAt: Date(timeIntervalSince1970: $0.double(2)),
+                 updatedAt: $0.date(3))
+        }
+    }
+
+    @discardableResult
+    func addNote(_ body: String, to docID: Int64) throws -> Int64 {
+        let clean = body.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clean.isEmpty else { return 0 }
+        let id = try db.run("INSERT INTO notes(doc_id, body, created_at) VALUES(?,?,?)",
+                            [.int(docID), .text(clean), .double(Date().timeIntervalSince1970)])
+        try refreshSearchIndex(docID)
+        return id
+    }
+
+    /// Editing a note to nothing deletes it — an empty note is not a note.
+    func updateNote(_ id: Int64, body: String) throws {
+        guard let docID = try db.first("SELECT doc_id FROM notes WHERE id=?", [.int(id)],
+                                       { $0.int(0) }) else { return }
+        let clean = body.trimmingCharacters(in: .whitespacesAndNewlines)
+        if clean.isEmpty {
+            try db.run("DELETE FROM notes WHERE id=?", [.int(id)])
+        } else {
+            try db.run("UPDATE notes SET body=?, updated_at=? WHERE id=?",
+                       [.text(clean), .double(Date().timeIntervalSince1970), .int(id)])
+        }
+        try refreshSearchIndex(docID)
+    }
+
+    func deleteNote(_ id: Int64) throws {
+        guard let docID = try db.first("SELECT doc_id FROM notes WHERE id=?", [.int(id)],
+                                       { $0.int(0) }) else { return }
+        try db.run("DELETE FROM notes WHERE id=?", [.int(id)])
+        try refreshSearchIndex(docID)
     }
 
     /// How many events the library has recorded in total — the number the

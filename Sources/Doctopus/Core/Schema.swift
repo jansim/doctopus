@@ -2,7 +2,7 @@ import Foundation
 
 /// Versioned schema. Migrations are append-only: bump `current` and add a case.
 enum Schema {
-    static let current = 10
+    static let current = 11
 
     static func migrate(_ db: Database) throws {
         let version = try db.first("PRAGMA user_version") { Int($0.int(0)) } ?? 0
@@ -16,6 +16,7 @@ enum Schema {
         if version < 8 { try v8(db) }
         if version < 9 { try v9(db) }
         if version < 10 { try v10(db) }
+        if version < 11 { try v11(db) }
         try db.exec("PRAGMA user_version=\(current)")
     }
 
@@ -29,6 +30,24 @@ enum Schema {
             [.text(table), .text(column)]) { $0.int(0) } ?? 0
         guard present == 0 else { return }
         try db.exec("ALTER TABLE \(table) ADD COLUMN \(column) \(declaration)")
+    }
+
+    /// Notes: the escape hatch for everything the schema does not model.
+    ///
+    /// "Cancelled by phone on the 4th", "the original is in the red folder" —
+    /// there was nowhere to put any of it. Indexed into `doc_fts` alongside the
+    /// document's own text, so a note is findable by searching for it.
+    private static func v11(_ db: Database) throws {
+        try db.exec("""
+        CREATE TABLE IF NOT EXISTS notes (
+            id         INTEGER PRIMARY KEY,
+            doc_id     INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+            body       TEXT NOT NULL,
+            created_at REAL NOT NULL,
+            updated_at REAL
+        );
+        CREATE INDEX IF NOT EXISTS idx_notes_doc ON notes(doc_id, created_at DESC);
+        """)
     }
 
     /// Soft delete.

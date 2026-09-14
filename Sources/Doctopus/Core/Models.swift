@@ -135,6 +135,8 @@ struct DocumentDetail: Sendable {
     var folderAliases: [String] = []
     /// Everything that has happened to this document, newest first.
     var history: [HistoryEvent] = []
+    /// What anyone has written about it, newest first.
+    var notes: [Note] = []
 }
 
 /// A folder the router thought a document could be filed in.
@@ -217,6 +219,17 @@ struct ProcessingEntry: Identifiable, Hashable, Sendable {
     var approved: Bool
     var filename: String
     var missing: Bool
+}
+
+/// Something a person wrote about a document that the schema has nowhere else
+/// to put. Indexed into the search table with the document's own text.
+struct Note: Identifiable, Hashable, Sendable {
+    var id: Int64
+    var body: String
+    var createdAt: Date
+    var updatedAt: Date?
+
+    var edited: Bool { updatedAt != nil }
 }
 
 /// One thing that happened to a document, straight from the append-only

@@ -1236,6 +1236,34 @@ final class AppModel {
         }
     }
 
+    // MARK: - Notes
+
+    /// A note is the escape hatch for what no field models — and it is indexed
+    /// with the document's text, so it is findable afterwards.
+    func addNote(_ body: String, to ref: DocumentRef) {
+        guard let lib = library(ref.library), body.nilIfBlank != nil else { return }
+        Task {
+            try? await lib.store.addNote(body, to: ref.doc)
+            reloadDetail()
+        }
+    }
+
+    func updateNote(_ id: Int64, body: String, in ref: DocumentRef) {
+        guard let lib = library(ref.library) else { return }
+        Task {
+            try? await lib.store.updateNote(id, body: body)
+            reloadDetail()
+        }
+    }
+
+    func deleteNote(_ id: Int64, in ref: DocumentRef) {
+        guard let lib = library(ref.library) else { return }
+        Task {
+            try? await lib.store.deleteNote(id)
+            reloadDetail()
+        }
+    }
+
     func setFieldValue(_ rows: [DocumentRow], field: Field, value: String?) {
         Task {
             for (lib, rows) in grouped(rows) {
