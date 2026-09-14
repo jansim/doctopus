@@ -40,10 +40,9 @@ Ranked by (value × confidence) ÷ cost.
 | 4 | **A local classifier trained on the library** (Paperless's `MATCH_AUTO`) | biggest accuracy win that needs no LLM and no network; the library *is* the training set | M |
 | 5 | **Explicit match modes on rules** instead of guessing regex from punctuation | `Acme (UK)` is currently silently compiled as a regex | S |
 | 6 | **Give the LLM the existing taxonomy as candidates** | otherwise every document invents new tag spellings; Paperless solved this with candidate ids + a reconciliation step | M |
-| 7 | **Sidecar / xattr metadata mirroring + export** | Doctopus says the file system is canonical, but every piece of understanding lives in one SQLite file inside one folder | M |
-| 8 | **Real dates: day resolution, no future dates, configurable D/M/Y order** | `doc_date REAL` + `NSDataDetector` gets 03/04/2026 wrong half the time and happily accepts a date in 2027 | S |
-| 9 | **Saved views / smart folders** | the single most-used organisational feature in Paperless that Doctopus has no equivalent of | M |
-| 10 | **An append-only history table** instead of a 500-row capped queue | the queue is deleted out from under the user; there is no undo and no audit | S |
+| 7 | **Real dates: day resolution, no future dates, configurable D/M/Y order** | `doc_date REAL` + `NSDataDetector` gets 03/04/2026 wrong half the time and happily accepts a date in 2027 | S |
+| 8 | **Saved views / smart folders** | the single most-used organisational feature in Paperless that Doctopus has no equivalent of | M |
+| 9 | **An append-only history table** instead of a 500-row capped queue | the queue is deleted out from under the user; there is no undo and no audit | S |
 
 ---
 
@@ -181,24 +180,7 @@ Suggested:
    `date_candidates(doc_id, date, source, rank)` table and let the review panel offer them
    as chips. This is the cheapest possible accuracy win on the review screen.
 
-### 2.5 Archive Serial Number
-
-`Document.archive_serial_number`: a unique, optional, monotonic integer that ties a digital
-document to its position in a physical binder. Paperless's entire "recommended workflow" is
-built on it — scan, file the paper in ASN order, never sort paper again. Barcodes can carry
-it (`ASN00123`).
-
-Doctopus targets exactly this user and has no equivalent. It is ~20 lines:
-
-```sql
-ALTER TABLE documents ADD COLUMN asn INTEGER;
-CREATE UNIQUE INDEX idx_documents_asn ON documents(asn) WHERE asn IS NOT NULL;
-```
-
-Plus "assign next free ASN" in the context menu, an `asn:` search token, and `{asn}` as a
-naming/routing token. Worth doing before 1.0 because it wants to be in the filename.
-
-### 2.6 Notes
+### 2.5 Notes
 
 Paperless has a `Note` model (text, created, document) indexed into full-text search. It is
 the escape hatch for everything the schema does not model — "cancelled by phone on the 4th",
@@ -208,7 +190,7 @@ Doctopus has nowhere to put that. A `notes(id, doc_id, body, created_at)` table 
 inspector section plus FTS indexing is small and high-value. (Paperless's `Note.user` is
 multi-user; drop it.)
 
-### 2.7 Saved views
+### 2.6 Saved views
 
 `SavedView` + `SavedViewFilterRule` is Paperless's most-used organisational feature after
 tags: a named, icon-bearing, pinned query with its own sort, display mode and column set. 51
@@ -235,7 +217,7 @@ Storing the *query string* rather than Paperless's 51-variant rule rows is the r
 here: the search language is already the UI, and it round-trips. It also gives the sidebar a
 natural "Smart Folders" section next to Tags and Correspondents, which is the macOS idiom.
 
-### 2.8 Trash, and undo
+### 2.7 Trash, and undo
 
 Paperless: `SoftDeleteModel` on `Document`, `Note`, `ShareLink`, `CustomFieldInstance`, with
 `deleted_at`, a shared `transaction_id` so a multi-document delete restores as a unit, a
@@ -257,7 +239,7 @@ Suggested:
   tiny and they are the only thing that makes a Finder move survive.
 - Never purge a row whose file is sitting in the Trash: check the Trash before purging.
 
-### 2.9 History instead of a capped queue
+### 2.8 History instead of a capped queue
 
 `processing` is trimmed to 500 rows on every insert and is explicitly "a recency view, not an
 audit log". That means: no undo for a move or a rename, no way to answer "why is this file
@@ -280,7 +262,7 @@ Doctopus should split the two concepts the same way:
 The `acknowledged` flag is worth copying too: it is how Paperless distinguishes "this
 failure is still shouting at me" from "I've seen it".
 
-### 2.10 Duplicate detection
+### 2.9 Duplicate detection
 
 `ConsumerPreflightPlugin.pre_check_duplicate` hashes every incoming file and matches against
 `checksum` **and** `archive_checksum`, including documents in the trash, and surfaces the
@@ -297,47 +279,7 @@ setting, because "same bytes" is not always "same document" (a re-sent invoice, 
 copy). Given Doctopus's "never surprise the user" stance, (b) with a `duplicate_of` column and
 a badge is the better default. Also add `is:duplicate` to the search tokens.
 
-### 2.11 Versions
-
-Paperless 3.x added document versions: `root_document` / `version_index` / `version_label`,
-with content resolution falling through to the latest version
-(`get_effective_content()`), and `merge_as_versions` in bulk edit.
-
-For Doctopus the natural mapping is "I rescanned this at higher quality" and "the signed copy
-arrived". Lower priority than everything above, but if the schema is changing anyway, a
-nullable `supersedes INTEGER REFERENCES documents(id)` costs nothing now and is painful to
-retrofit later.
-
-### 2.12 The index is a single point of failure
-
-This is the one place where Doctopus's stated philosophy and its implementation disagree.
-The README says the file system is canonical and the library is portable — but titles,
-summaries, tags, correspondents, dates and OCR text exist *only* in
-`library.doctopus/index.sqlite`. Delete that folder and the "canonical" layer is a pile of
-PDFs with scanner filenames.
-
-Paperless has the same exposure and answers it with `document_exporter` — a `manifest.json`
-of every object plus the files, optionally split into **per-document manifests** next to each
-file, and a matching importer. That per-document split is the interesting one for Doctopus.
-
-Three complementary options, cheapest first:
-
-1. **Finder-visible mirroring.** Write the title as the file's Finder comment
-   (`kMDItemFinderComment`) and the tags as Finder tags (Doctopus already reads Finder tags —
-   make the mirroring bidirectional and optional). Costs nothing, survives any index loss,
-   and makes Spotlight find Doctopus's metadata.
-2. **Extended attributes.** Store a compact JSON blob under a `io.doctopus.metadata` xattr on
-   each file. Travels with the file across a copy on APFS/HFS+, invisible in Finder, ignored
-   by everything else. Lost on a zip/upload round-trip, which is acceptable.
-3. **Sidecar export/import.** A `Library › Export Metadata…` that writes
-   `library.doctopus/export/<relative-path>.json` plus a manifest, and an import that
-   rebuilds the index from it. Also the migration path if the schema ever needs a
-   non-append-only change, and the answer to "how do I back this up".
-
-At minimum do (1) and (3). A document management app that can lose every document's title to
-one `rm -rf` of a hidden folder is one bad sync away from a bad review.
-
-### 2.13 FTS schema
+### 2.10 FTS schema
 
 Three concrete problems in the current `ocr_content` table:
 
@@ -535,7 +477,7 @@ new tags possible while collapsing spelling variants.
 
 For Doctopus the candidate set is cheap: the library's existing tag names ordered by usage,
 capped at ~10, optionally narrowed by `similarFolders`-style neighbours or the FTS
-more-like-this from §2.13. The schema additions are `matched_tags` + `tag_ids`, and the
+more-like-this from §2.10. The schema additions are `matched_tags` + `tag_ids`, and the
 accept-suggestion path already exists.
 
 Related smaller wins from the same file: per-field `max_length` on the schema arrays (the
@@ -568,7 +510,7 @@ already has all three values in hand.
 Paperless 3.x has a document-chat feature over an LLM index. Worth noting as a direction, not
 a recommendation: it needs an embedding store and a vector index, and for a single-user local
 app the value over good search is not yet obvious. The *retrieval* half, though, is exactly
-the more-like-this of §2.13, which pays for itself regardless.
+the more-like-this of §2.10, which pays for itself regardless.
 
 ---
 
@@ -589,7 +531,7 @@ descending order of how much users ask for it in Paperless:
    query syntax supports `AND`/`OR`/`NOT`/parentheses, so most of this is passing the
    expression through rather than rebuilding it; the structured tokens need their own
    negation handling in the `WHERE` builder.
-3. **Everything in one index**, per §2.13 — which also removes the current asymmetry where
+3. **Everything in one index**, per §2.10 — which also removes the current asymmetry where
    `ext:pdf` is exact but a bare word searches OCR text and does a `LIKE` on three columns.
 4. **Autocomplete.** Paperless keeps a dedicated `autocomplete_word` raw-tokenised field and
    walks the term dictionary by prefix. FTS5's `fts5vocab` table gives the same thing. For a
@@ -610,27 +552,7 @@ column) is needed before the first real library is loaded.
 
 ## 6. Ingestion and file handling
 
-### 6.1 Barcodes and ASN
-
-`BarcodePlugin` reads barcodes with zxing/pyzbar and uses them three ways: **separator**
-pages that split one scan into several documents, **ASN** barcodes (`ASN00123`) that assign
-the archive serial number, and **tag** barcodes. Splitting a 40-page ADF scan into 12
-documents by inserting printed separator sheets is the single biggest throughput feature for
-anyone scanning a backlog.
-
-macOS has this built in: Vision's `VNDetectBarcodesRequest` is already available in the same
-framework Doctopus uses for OCR, and it runs on the page images it is already rasterising.
-`PDFDocument` can do the splitting. This is a genuinely strong fit and probably the highest
-value-per-line item in this whole section.
-
-### 6.2 Double-sided collation
-
-`CollatePlugin`: drop odd pages in a watched subfolder, then even pages (reversed, as the ADF
-produces them), and it interleaves them into one document, with a 30-minute staging timeout.
-A well-known pain point for anyone with a single-sided sheet feeder. Cheap to implement,
-obvious where it belongs in Doctopus (the Inbox, or a "Collate" command in the queue).
-
-### 6.3 Keep the original
+### 6.1 Keep the original
 
 Paperless keeps `originals/` and `archive/` side by side, with separate checksums, and the
 archive version is the searchable PDF/A it generated. The original is never modified.
@@ -643,7 +565,7 @@ library container (`library.doctopus/originals/<hash>.pdf`) with a setting for h
 "Revert optimisation" exists. Related: record `original_checksum` so a sanity check can prove
 a file has not been altered since indexing.
 
-### 6.4 Pre- and post-consume hooks
+### 6.2 Pre- and post-consume hooks
 
 `PAPERLESS_PRE_CONSUME_SCRIPT` / `POST_CONSUME_SCRIPT` run an arbitrary executable with the
 document's metadata in the environment. It is how the community handles everything the core
@@ -653,14 +575,7 @@ The macOS-native form is better than a shell script: an **Apple Shortcuts action
 Document in Doctopus" as a trigger, "Import to Doctopus" as an action) plus an `NSUserActivity`
 / URL scheme. Same extensibility, no sandbox problems, and it is what a Mac user expects.
 
-### 6.5 PDF actions
-
-Paperless has merge, split, rotate, delete pages, edit (reorder), and remove password, all as
-bulk operations. Doctopus has optimise and rename. Merge and split at minimum are natural in
-a document manager and are straightforward with PDFKit — "these three scans are one
-document" is a weekly occurrence.
-
-### 6.6 Filename templates
+### 6.3 Filename templates
 
 Paperless's filename templating is Jinja2 (`templating/filepath.py`) with:
 
@@ -690,7 +605,7 @@ Doctopus's `Naming` is a straightforward token replacer. Worth adding:
   Doctopus's `move` and routing leave empty folders behind, and they then show up in
   `folderTree()` only until the next reconcile — inconsistent either way.
 
-### 6.7 Sanity check
+### 6.4 Sanity check
 
 `sanity_checker.py` walks the library and reports: files referenced by the DB that are
 missing, files on disk not in the DB, checksum mismatches (i.e. a file changed under the
@@ -714,12 +629,12 @@ Ordered roughly by how cheap they are to fix.
 |---|---|
 | `Store.storeMetadata` | every column is `COALESCE(excluded.x, metadata.x)`, so re-analysis can only *add* values, never correct one to empty. A better model re-run cannot clear a wrong correspondent; only `discardGeneratedInfo` can, and that clears everything. Suggest an explicit `overwrite` mode for a user-initiated re-analysis. |
 | `Store.logProcessing` | `DELETE FROM processing WHERE id NOT IN (… LIMIT 500)` runs on **every** insert — an O(n log n) sort of the whole table per document during a bulk import. Trim periodically, or use `at < (SELECT at FROM processing ORDER BY at DESC LIMIT 1 OFFSET 500)`. |
-| `Store.ruleSamples` | loads the entire OCR corpus into a `[Int64: String]` dictionary to avoid the unindexed FTS join. Fixed for free by the `rowid` change in §2.13. |
+| `Store.ruleSamples` | loads the entire OCR corpus into a `[Int64: String]` dictionary to avoid the unindexed FTS join. Fixed for free by the `rowid` change in §2.10. |
 | `documents.approved` | defaults to `1`, so a file that appears on disk is "approved" before anything has looked at it; only the queue marks it otherwise. Consider defaulting to `0` and letting the pipeline approve, which makes "never reviewed" a distinguishable state. |
 | `aliases` | no index on `doc_id`, so `aliases(for:)` and the folder-alias `EXISTS` subquery in `listDocuments` scan the table. `path` is `UNIQUE` and therefore indexed, but `a.path LIKE 'dir/%'` will not use that index unless the pattern is a `GLOB` or `case_sensitive_like` is on. Add `idx_aliases_doc ON aliases(doc_id)`, and use `GLOB` for the prefix test. |
 | `metadata` indexes | `idx_metadata_corr/type/lang` are on free-text columns that §2.1 would replace with ids; worth doing together. |
 | `Schema.migrate` | append-only migrations with no recorded app version and no backup before migrating. Paperless refuses to start when the DB is newer than the code (`versioning.py`). Copy that: store the writing app's version in `meta.json` and refuse to open a library from a future version rather than silently misreading it. |
-| `ocr_content` | an FTS5 virtual table cannot carry a foreign key, so it is the one child table `ON DELETE CASCADE` does not cover (`deleteDocument` deletes from it by hand). Any future delete path that forgets to leaves an orphaned full-text row that still matches searches. Keying the table by `rowid` (§2.13) makes the orphan check in §6.7 a one-line anti-join. |
+| `ocr_content` | an FTS5 virtual table cannot carry a foreign key, so it is the one child table `ON DELETE CASCADE` does not cover (`deleteDocument` deletes from it by hand). Any future delete path that forgets to leaves an orphaned full-text row that still matches searches. Keying the table by `rowid` (§2.10) makes the orphan check in §6.4 a one-line anti-join. |
 | `Naming.uniqueURL` | gives up after 1000 attempts and returns a colliding URL, which `moveItem` will then fail on. Return an optional or fall back to a UUID suffix. |
 | `DocumentAnalyzer.correspondent` | the "known correspondents win" heuristic does `lower.contains(known.lowercased())` over the first 2500 characters — a known correspondent named "AG" or "Post" will match almost everything. Require a word boundary (`startsWithWord` already exists) and a minimum length. |
 | `Router.qualityFactor` | the confidence arithmetic (`0.9 + 0.08 + 0.05`) is magic numbers in code; since the threshold is user-facing and tunable, these should be named constants with a comment on what a user turning the threshold to 0.9 is actually asking for. |
@@ -733,17 +648,17 @@ Ordered roughly by how cheap they are to fix.
   owning an opaque media directory. Doctopus's folders-plus-tags-plus-aliases is strictly
   more expressive for a file-system-first app. Keep it.
 - **An archive/original split as separate trees.** Paperless needs it because it generates
-  PDF/A. Doctopus's in-place optimisation is the right default; §6.3 only asks for a
+  PDF/A. Doctopus's in-place optimisation is the right default; §6.1 only asks for a
   revertible original, not a parallel tree.
 - **Owners, permissions, share links, groups, 2FA, password reset.** Single-user.
 - **E-mail consumption.** Possible later via Mail rules / Shortcuts, but a mail-fetch
   subsystem (IMAP, `MailRule`, `MailAccount`) is a large surface for a local app.
 - **Celery/Redis task queue and `PaperlessTask`'s full lifecycle.** Swift actors already give
-  Doctopus what it needs; only the *visibility* half (§2.9) is worth taking.
-- **Workflow e-mail and webhook actions.** Wrong shape for a desktop app; Shortcuts (§6.4)
+  Doctopus what it needs; only the *visibility* half (§2.8) is worth taking.
+- **Workflow e-mail and webhook actions.** Wrong shape for a desktop app; Shortcuts (§6.2)
   covers the same need natively.
 - **51 discrete `SavedViewFilterRule` types.** Doctopus's search string is a better
-  serialisation format (§2.7).
+  serialisation format (§2.6).
 
 ---
 
@@ -753,22 +668,20 @@ Breaking changes first, while the library format is still unreleased.
 
 **Phase 1 — schema, before 1.0 (breaking).**
 Entities for correspondent/type (§2.1) · nested tags (§2.2) · typed custom fields (§2.3) ·
-day-resolution dates + candidates (§2.4) · ASN (§2.5) · notes (§2.6) · soft delete (§2.8) ·
-`events` history (§2.9) · `duplicate_of` (§2.10) · nullable `supersedes` (§2.11) ·
-FTS keyed by `rowid`, multi-column (§2.13) · `match_mode` on rules (§3.1) ·
-library format version in `meta.json` (§7).
+day-resolution dates + candidates (§2.4) · notes (§2.5) · soft delete (§2.7) ·
+`events` history (§2.8) · `duplicate_of` (§2.9) · FTS keyed by `rowid`, multi-column
+(§2.10) · `match_mode` on rules (§3.1) · library format version in `meta.json` (§7).
 
 **Phase 2 — the things that make it feel finished.**
-Duplicate check on import (§2.10) · metadata assignment in rules + apply-to-existing (§3.2) ·
+Duplicate check on import (§2.9) · metadata assignment in rules + apply-to-existing (§3.2) ·
 tag union across matching rules (§3.3) · date and boolean search (§5) · paging (§5) ·
-saved views (§2.7) · `--check` / Verify (§6.7) · undo built on `events` (§2.9) ·
-filename-template safety (§6.6).
+saved views (§2.6) · `--check` / Verify (§6.4) · undo built on `events` (§2.8) ·
+filename-template safety (§6.3) · empty-directory pruning (§6.3).
 
 **Phase 3 — the differentiators.**
 Local classifier (§3.4) · taxonomy-constrained LLM suggestions (§4.1) · more-like-this and
-Similar Documents (§2.13) · barcode separation and ASN (§6.1) · double-sided collation (§6.2) ·
-Finder-comment/xattr mirroring and metadata export (§2.12) · Shortcuts actions (§6.4) ·
-PDF merge/split (§6.5) · autocomplete and global search (§5).
+Similar Documents (§2.10) · revertible optimisation (§6.1) · Shortcuts actions (§6.2) ·
+autocomplete and global search (§5).
 
 ---
 
@@ -785,8 +698,6 @@ Paperless-ngx files worth reading before implementing any of the above:
 | Date extraction | `src/documents/plugins/date_parsing/{base,regex_parser}.py` |
 | Search schema and date queries | `src/documents/search/_schema.py`, `src/documents/search/_dates.py` |
 | Duplicate and pre-flight checks | `src/documents/consumer.py` (`ConsumerPreflightPlugin`) |
-| Barcodes / collation | `src/documents/barcodes.py`, `src/documents/double_sided.py` |
 | Library verification | `src/documents/sanity_checker.py` |
 | Move-on-metadata-change | `src/documents/signals/handlers.py` (`update_filename_and_move_files`) |
 | LLM suggestion schema and prompts | `src/paperless_ai/base_model.py`, `src/paperless_ai/prompts/` |
-| Export/import | `src/documents/management/commands/document_exporter.py` |
