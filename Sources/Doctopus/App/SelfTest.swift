@@ -46,7 +46,13 @@ enum SelfTest {
         catch { print("✗ could not stage library: \(error)"); exit(1) }
 
         let container = root.appendingPathComponent("library.doctopus", isDirectory: true)
-        guard let store = try? Store(directory: container) else { print("✗ could not open store"); exit(1) }
+        let store: Store
+        do {
+            store = try Store(directory: container)
+        } catch {
+            print("✗ could not open store: \(error)")
+            exit(1)
+        }
         print("Library: \(container.lastPathComponent)")
         print("Root:   \(root.path)\n")
 
@@ -1070,6 +1076,11 @@ enum SelfTest {
                 Check.that("undo restores moved file to previous path",
                            undone != nil && FileManager.default.fileExists(atPath: origPath))
             }
+        }
+
+        if let sample = rows.first {
+            let similar = (try? await store.similarDocuments(for: sample.doc, limit: 3)) ?? []
+            Check.that("more-like-this finds similar documents without self", !similar.contains { $0.doc == sample.doc })
         }
 
         print("\nSEARCH INDEX")
