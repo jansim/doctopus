@@ -293,7 +293,8 @@ actor Indexer {
         // 4. Optional model enrichment, on-device or over the network.
         var insight: DocumentInsight?
         if settings.llmBackend != .off, !extracted.text.isEmpty {
-            insight = await intelligence.enrich(text: extracted.text, filename: name)
+            let topTags = (try? await store.tags())?.prefix(10).map(\.name) ?? []
+            insight = await intelligence.enrich(text: extracted.text, filename: name, candidateTags: topTags)
         }
 
         try? await store.storeMetadata(Store.MetadataPatch(
