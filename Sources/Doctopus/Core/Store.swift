@@ -919,14 +919,17 @@ actor Store {
     func rules() throws -> [Rule] {
         try db.map("""
             SELECT id, name, pattern, field, destination, tag_names, weight, enabled, priority,
-                   match_mode, match_insensitive
+                   match_mode, match_insensitive, set_correspondent, set_doc_type, set_fields
             FROM rules ORDER BY priority DESC, id
             """) {
             Rule(id: $0.int(0), name: $0.string(1), pattern: $0.string(2), field: $0.string(3),
                  destination: $0.string(4), tagNames: $0.stringOrNil(5), weight: $0.double(6),
                  enabled: $0.bool(7), priority: $0.int(8),
                  mode: MatchMode(rawValue: $0.int(9)) ?? .anyWord,
-                 caseInsensitive: $0.bool(10))
+                 caseInsensitive: $0.bool(10),
+                 setCorrespondent: $0.stringOrNil(11),
+                 setDocType: $0.stringOrNil(12),
+                 setFields: $0.stringOrNil(13))
         }
     }
 
@@ -935,20 +938,23 @@ actor Store {
         if r.id > 0 {
             try db.run("""
                 UPDATE rules SET name=?, pattern=?, field=?, destination=?, tag_names=?,
-                                 weight=?, enabled=?, priority=?, match_mode=?, match_insensitive=?
+                                 weight=?, enabled=?, priority=?, match_mode=?, match_insensitive=?,
+                                 set_correspondent=?, set_doc_type=?, set_fields=?
                 WHERE id=?
                 """, [.text(r.name), .text(r.pattern), .text(r.field), .text(r.destination),
                       .text(r.tagNames), .double(r.weight), .bool(r.enabled), .int(r.priority),
-                      .int(r.mode.rawValue), .bool(r.caseInsensitive), .int(r.id)])
+                      .int(r.mode.rawValue), .bool(r.caseInsensitive),
+                      .text(r.setCorrespondent), .text(r.setDocType), .text(r.setFields), .int(r.id)])
             return r.id
         }
         return try db.run("""
             INSERT INTO rules(name, pattern, field, destination, tag_names, weight, enabled, priority,
-                              match_mode, match_insensitive)
-            VALUES(?,?,?,?,?,?,?,?,?,?)
+                              match_mode, match_insensitive, set_correspondent, set_doc_type, set_fields)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
             """, [.text(r.name), .text(r.pattern), .text(r.field), .text(r.destination),
                   .text(r.tagNames), .double(r.weight), .bool(r.enabled), .int(r.priority),
-                  .int(r.mode.rawValue), .bool(r.caseInsensitive)])
+                  .int(r.mode.rawValue), .bool(r.caseInsensitive),
+                  .text(r.setCorrespondent), .text(r.setDocType), .text(r.setFields)])
     }
 
     func deleteRule(_ id: Int64) throws {
@@ -974,6 +980,93 @@ actor Store {
         var text: String
         var correspondent: String?
         var docType: String?
+    }
+
+    struct RuleApplyResult: Sendable {
+        var matched: Int = 0
+        var moved: Int = 0
+        var tagged: Int = 0
+        var metadataUpdated: Int = 0
+    }
+
+    /// Applies a rule to all matching documents currently in the library.
+    func applyRuleToExisting(ruleID: Int64) async throws -> RuleApplyResult {
+        let allRules = try rules()
+        guard let rule = allRules.first(where: { $0.id == ruleID }) else { return RuleApplyResult() }
+
+        let docs = try db.map("""
+            SELECT d.id, d.path, d.filename, d.created_at, m.doc_date, ec.name, et.name,
+                   (SELECT f.body FROM doc_fts f WHERE f.rowid = d.id)
+            FROM documents d
+            LEFT JOIN metadata m ON m.doc_id = d.id
+            LEFT JOIN entities ec ON ec.id = m.correspondent_id
+            LEFT JOIN entities et ON et.id = m.doc_type_id
+            WHERE d.missing=0 AND d.deleted_at IS NULL
+            """) {
+            (id: $0.int(0), path: absPath($0.string(1)), filename: $0.string(2),
+             created: Date(timeIntervalSince1970: $0.double(3)),
+             docDate: $0.date(4), correspondent: $0.stringOrNil(5),
+             docType: $0.stringOrNil(6), text: $0.stringOrNil(7) ?? "")
+        }
+
+        var result = RuleApplyResult()
+        let router = Router(rules: [rule], threshold: 0.0, derivedTemplate: "", root: root, deriveWhenNoRule: false)
+
+        for doc in docs {
+            let subject = Router.subject(for: rule.field, text: doc.text, filename: doc.filename,
+                                         correspondent: doc.correspondent, docType: doc.docType)
+            guard Router.matches(rule, in: subject) else { continue }
+            result.matched += 1
+
+            // 1. Assign tags
+            if let tagNames = rule.tagNames {
+                let tags = tagNames.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+                for tag in tags {
+                    let tid = try tagID(named: tag)
+                    try assign(tag: tid, to: doc.id, auto: true)
+                }
+                if !tags.isEmpty { result.tagged += 1 }
+            }
+
+            // 2. Assign metadata
+            var patch = Store.MetadataPatch(docID: doc.id)
+            var updatedMeta = false
+            if let corr = rule.setCorrespondent, !corr.isEmpty {
+                patch.correspondent = corr
+                updatedMeta = true
+            }
+            if let dtype = rule.setDocType, !dtype.isEmpty {
+                patch.docType = dtype
+                updatedMeta = true
+            }
+            if updatedMeta {
+                try storeMetadata(patch)
+                result.metadataUpdated += 1
+            }
+
+            // 3. Move if destination template specified
+            let destStr = rule.destination.trimmingCharacters(in: .whitespaces)
+            if !destStr.isEmpty {
+                let destURL = router.expand(destStr, correspondent: patch.correspondent ?? doc.correspondent,
+                                            docType: patch.docType ?? doc.docType, date: doc.docDate ?? doc.created)
+                if router.isInsideLibrary(destURL) {
+                    let currentDir = URL(fileURLWithPath: doc.path).deletingLastPathComponent()
+                    if currentDir.standardizedFileURL != destURL.standardizedFileURL {
+                        try? FileManager.default.createDirectory(at: destURL, withIntermediateDirectories: true)
+                        let target = Naming.uniqueURL(in: destURL, filename: doc.filename)
+                        if (try? FileManager.default.moveItem(at: URL(fileURLWithPath: doc.path), to: target)) != nil {
+                            try updatePath(doc.id, to: target.path)
+                            FileScanner.pruneEmptyDirectories(startingFrom: currentDir, upTo: root)
+                            try logProcessing(docID: doc.id, action: "routed", detail: "Applied rule “\(rule.name)”",
+                                              confidence: rule.weight, rule: rule.name,
+                                              from: doc.path, to: target.path, approved: true)
+                            result.moved += 1
+                        }
+                    }
+                }
+            }
+        }
+        return result
     }
 
     /// The most recent documents, as rule samples. `doc_fts` is keyed by

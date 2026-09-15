@@ -15,7 +15,7 @@ extension Store {
             : ["d.missing=0", "d.deleted_at IS NULL"]
 
         switch selection {
-        case .all, .deleted: break
+        case .all, .deleted, .savedView: break
         case .inbox:
             wheres.append("(d.directory = ? OR d.directory LIKE ?)")
             args.append(.text("Inbox")); args.append(.text("%/Inbox"))

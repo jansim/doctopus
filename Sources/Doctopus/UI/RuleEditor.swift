@@ -18,6 +18,8 @@ struct RuleEditor: View {
     @State private var samples: [Store.RuleSample]?
     @State private var matched: [String] = []
     @State private var matchCount = 0
+    @State private var applying = false
+    @State private var applyStatus: String?
 
     init(rule: Rule, library: Library, threshold: Double, onSave: @escaping (Rule) -> Void) {
         _draft = State(initialValue: rule)
@@ -94,10 +96,34 @@ struct RuleEditor: View {
                         get: { draft.tagNames ?? "" },
                         set: { draft.tagNames = $0.nilIfBlank }),
                               prompt: Text("invoice, finances"))
-                    Text("Relative to the library folder. Tags are comma-separated and assigned whenever the rule matches, even when the document is left where it landed.")
+                    TextField("Set Correspondent", text: Binding(
+                        get: { draft.setCorrespondent ?? "" },
+                        set: { draft.setCorrespondent = $0.nilIfBlank }),
+                              prompt: Text("Stadtwerke München"))
+                    TextField("Set Document Type", text: Binding(
+                        get: { draft.setDocType ?? "" },
+                        set: { draft.setDocType = $0.nilIfBlank }),
+                              prompt: Text("Invoice"))
+                    Text("Relative to the library folder. Tags and metadata are assigned whenever the rule matches.")
                         .font(.caption).foregroundStyle(.secondary)
                 } header: {
                     Text("Then")
+                }
+
+                if matchCount > 0 {
+                    Section {
+                        Button(applying ? "Applying…" : "Apply to \(matchCount) matching document\(matchCount == 1 ? "" : "s")…") {
+                            applyToMatching()
+                        }
+                        .disabled(applying || !canSave)
+                        if let applyStatus {
+                            Text(applyStatus)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    } header: {
+                        Text("Apply to Existing")
+                    }
                 }
 
                 Section {
@@ -146,6 +172,23 @@ struct RuleEditor: View {
 
     private var canSave: Bool {
         draft.pattern.nilIfBlank != nil && draft.destination.nilIfBlank != nil
+    }
+
+    private func applyToMatching() {
+        applying = true
+        applyStatus = nil
+        Task {
+            var rule = draft
+            rule.name = rule.name.nilIfBlank ?? "Untitled Rule"
+            rule.pattern = rule.pattern.trimmingCharacters(in: .whitespaces)
+            rule.destination = rule.destination.trimmingCharacters(in: .whitespaces)
+            if let savedID = try? await library.store.upsertRule(rule) {
+                draft.id = savedID
+                let res = (try? await library.store.applyRuleToExisting(ruleID: savedID)) ?? Store.RuleApplyResult()
+                applyStatus = "Applied to \(res.matched) document\(res.matched == 1 ? "" : "s") (\(res.moved) moved, \(res.tagged) tagged)."
+            }
+            applying = false
+        }
     }
 
     // MARK: - Pattern

@@ -210,6 +210,32 @@ enum SelfTest {
             print("  \(payslip.filename) → \(decision.destination?.path.replacingOccurrences(of: root.path + "/", with: "") ?? "(stays put)") [\(decision.rule)]")
             Check.that("routing follows the edited rule", decision.rule == "Edited"
                        && decision.destination?.path.contains("/Edited/") == true)
+
+            // Tag union across multiple matching rules
+            let ruleA = Rule(id: 0, name: "RuleA", pattern: "gehaltsabrechnung", field: "filename",
+                             destination: "A/{year}", tagNames: "tagA, commonTag", weight: 0.9, enabled: true, priority: 100)
+            let ruleB = Rule(id: 0, name: "RuleB", pattern: "februar", field: "filename",
+                             destination: "B/{year}", tagNames: "tagB, commonTag", weight: 0.8, enabled: true, priority: 90)
+            let unionDecision = Router(rules: [ruleA, ruleB], threshold: 0.5,
+                                       derivedTemplate: "", root: root, deriveWhenNoRule: false)
+                .evaluate(text: text, filename: payslip.filename, findings: findings, insight: nil,
+                          currentDirectory: payslip.url.deletingLastPathComponent())
+            Check.that("matching rules combine tags as a union",
+                       unionDecision.tags.contains("tagA") && unionDecision.tags.contains("tagB") && unionDecision.tags.count == 3)
+
+            // Metadata assignment via rule apply-to-existing
+            let assignRule = Rule(id: 0, name: "SetPayroll", pattern: "gehaltsabrechnung", field: "filename",
+                                  destination: "", tagNames: "payroll", weight: 0.9, enabled: true, priority: 100,
+                                  setCorrespondent: "Acme HR", setDocType: "Payslip")
+            let savedAssignID = (try? await store.upsertRule(assignRule)) ?? 0
+            let applyResult = (try? await store.applyRuleToExisting(ruleID: savedAssignID)) ?? Store.RuleApplyResult()
+            Check.that("rule can assign metadata and tags to existing documents",
+                       applyResult.matched > 0 && applyResult.tagged > 0)
+            try? await store.deleteRule(savedAssignID)
+            if let payrollTag = try? await store.tagID(named: "payroll") {
+                try? await store.deleteTag(payrollTag)
+            }
+
             _ = try? await store.upsertRule(original)
             try? await store.reorderRules(((try? await store.rules()) ?? [])
                 .sorted { $0.priority > $1.priority }.map(\.id))

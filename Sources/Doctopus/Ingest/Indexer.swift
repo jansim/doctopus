@@ -359,6 +359,13 @@ actor Indexer {
         // alternatives — and so an ambiguous document has its choices waiting.
         try? await store.setPathSuggestions(decision.candidates, for: id)
 
+        if let corr = decision.setCorrespondent {
+            try? await store.storeMetadata(Store.MetadataPatch(docID: id, correspondent: corr, source: "rule"))
+        }
+        if let docType = decision.setDocType {
+            try? await store.storeMetadata(Store.MetadataPatch(docID: id, docType: docType, source: "rule"))
+        }
+
         for tag in decision.tags {
             if decision.tagsFromRule {
                 if let tagID = try? await store.tagID(named: tag) {
