@@ -382,6 +382,8 @@ actor Indexer {
             let target = Naming.uniqueURL(in: destination, filename: url.lastPathComponent)
             try FileManager.default.moveItem(at: url, to: target)
             try? await store.updatePath(id, to: target.path)
+            let oldDir = URL(fileURLWithPath: from).deletingLastPathComponent()
+            FileScanner.pruneEmptyDirectories(startingFrom: oldDir, upTo: store.root)
             url = target
             try? await store.logProcessing(docID: id, action: "routed", detail: decision.explanation,
                                            confidence: decision.confidence, rule: decision.rule,
@@ -660,6 +662,7 @@ actor Indexer {
             do {
                 try FileManager.default.moveItem(at: url, to: target)
                 try? await store.updatePath(id, to: target.path)
+                FileScanner.pruneEmptyDirectories(startingFrom: url.deletingLastPathComponent(), upTo: store.root)
                 try? await store.logProcessing(docID: id, action: "renamed", detail: newName,
                                                confidence: nil, rule: template,
                                                from: url.path, to: target.path, approved: true)
@@ -683,6 +686,7 @@ actor Indexer {
             do {
                 try FileManager.default.moveItem(at: url, to: target)
                 try? await store.updatePath(id, to: target.path)
+                FileScanner.pruneEmptyDirectories(startingFrom: url.deletingLastPathComponent(), upTo: store.root)
                 try? await store.logProcessing(docID: id, action: "moved", detail: destination.lastPathComponent,
                                                confidence: nil, rule: nil, from: path, to: target.path, approved: true)
                 await syncAliases(docID: id, target: target)

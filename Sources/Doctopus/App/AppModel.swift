@@ -973,6 +973,7 @@ final class AppModel {
                         // and history rather than as something brand new.
                         try? await lib.store.softDelete(row.doc,
                                                         trashPath: (landed as URL?)?.path)
+                        FileScanner.pruneEmptyDirectories(startingFrom: row.url.deletingLastPathComponent(), upTo: lib.store.root)
                         trashed += 1
                     } catch {
                         failed.append(row.filename)

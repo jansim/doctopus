@@ -153,6 +153,11 @@ enum SelfTest {
                                      ext: row.url.pathExtension)
             print("  \(row.filename.padded(38)) → \(Naming.render(Naming.defaultTemplate, ctx))")
         }
+        let fallbackCtx = Naming.Context(date: nil, correspondent: nil, title: "..", docType: nil,
+                                         language: nil, counter: nil, originalStem: ".hidden", ext: "pdf")
+        let renderedDefault = Naming.render("{correspondent|Unknown}_{title}", fallbackCtx)
+        Check.that("template conditional fallback renders default", renderedDefault.hasPrefix("Unknown"))
+        Check.that("path safety cleans invalid or hidden stems", !renderedDefault.hasPrefix(".") && !renderedDefault.contains(".."))
 
         print("\nROUTING (dry run against starter rules)")
         let router = Router(rules: (try? await store.rules()) ?? [], threshold: settings.routingThreshold,
