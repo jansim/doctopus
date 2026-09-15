@@ -805,6 +805,22 @@ final class AppModel {
         }
     }
 
+    func verifyLibrary() {
+        guard let lib = activeLibrary else { return }
+        Task {
+            do {
+                let report = try await LibraryVerifier.verify(store: lib.store)
+                if report.isClean {
+                    notify("Library “\(lib.displayName)” is healthy with 0 errors.", .success)
+                } else {
+                    notify("Library verification found \(report.errorsCount) error(s) and \(report.warningsCount) warning(s).", .warning)
+                }
+            } catch {
+                errorMessage = "Could not verify library: \(error.localizedDescription)"
+            }
+        }
+    }
+
     // MARK: - Smart Folders / Saved Views
 
     func saveCurrentSearchAsSmartFolder(name: String, icon: String = "line.3.horizontal.decrease.circle") {

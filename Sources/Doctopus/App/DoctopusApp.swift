@@ -12,6 +12,11 @@ enum Main {
             SelfTest.run(path: path)
             return
         }
+        if let i = CommandLine.arguments.firstIndex(of: "--check") {
+            let path = CommandLine.arguments.count > i + 1 ? CommandLine.arguments[i + 1] : "."
+            runCheck(path: path)
+            return
+        }
         if let i = CommandLine.arguments.firstIndex(of: "--new-library"),
            CommandLine.arguments.count > i + 1 {
             SelfTest.newLibrary(CommandLine.arguments[i + 1])
@@ -31,6 +36,34 @@ enum Main {
             return
         }
         DoctopusApp.main()
+    }
+
+    private static func runCheck(path: String) {
+        let url = URL(fileURLWithPath: path)
+        print("Verifying library at \(url.path)...")
+        let sema = DispatchSemaphore(value: 0)
+        Task {
+            do {
+                let report = try await LibraryVerifier.verify(library: url)
+                if report.isClean {
+                    print("✓ Library is healthy: 0 errors, 0 warnings.")
+                    exit(0)
+                } else {
+                    print("\nIssues found:")
+                    for issue in report.issues {
+                        let prefix = issue.severity == .error ? "✗ ERROR" : issue.severity == .warning ? "⚠ WARNING" : "ℹ INFO"
+                        print("  \(prefix): \(issue.title)")
+                        if let detail = issue.detail { print("    \(detail)") }
+                    }
+                    print("\nSummary: \(report.errorsCount) error(s), \(report.warningsCount) warning(s), \(report.infoCount) info.")
+                    exit(report.errorsCount > 0 ? 1 : 0)
+                }
+            } catch {
+                print("✗ Failed to verify library: \(error.localizedDescription)")
+                exit(1)
+            }
+        }
+        sema.wait()
     }
 }
 
@@ -140,6 +173,7 @@ struct DoctopusCommands: Commands {
         CommandGroup(after: .toolbar) {
             Button("Rescan All Folders") { model.reindex() }
                 .keyboardShortcut("r", modifiers: [.command])
+            Button("Verify Library…") { model.verifyLibrary() }
             Divider()
         }
 

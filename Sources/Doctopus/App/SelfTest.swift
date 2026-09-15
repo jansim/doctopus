@@ -1143,6 +1143,10 @@ enum SelfTest {
                    refused?.contains("format version") == true)
         try? FileManager.default.removeItem(at: future.deletingLastPathComponent())
 
+        print("\nSANITY CHECK / VERIFICATION")
+        let healthyReport = (try? await LibraryVerifier.verify(store: store)) ?? VerificationReport()
+        Check.that("verification of healthy library reports zero errors", healthyReport.errorsCount == 0)
+
         print("\nCONTENT HASHES")
         if let sample = rows.first, let detail = try? await store.detail(sample.doc),
            let hash = detail.hash {
