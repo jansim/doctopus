@@ -363,6 +363,7 @@ extension Store {
         d.tagSuggestions = try tagSuggestions(for: id)
         d.pathSuggestions = try pathSuggestions(for: id)
         d.similarFolders = try similarFolders(for: id)
+        d.similarDocuments = (try? similarDocuments(for: id)) ?? []
         d.folderAliases = try folderAliases(for: id)
         d.history = try history(for: id)
         d.notes = try notes(for: id)

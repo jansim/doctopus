@@ -100,6 +100,68 @@ extension Store {
         return Array(out.prefix(limit))
     }
 
+    // MARK: - Similar Documents (More-Like-This)
+
+    /// Finds documents similar in content to `docID` using high-frequency terms from the search index.
+    func similarDocuments(for docID: Int64, limit: Int = 5) throws -> [DocumentRow] {
+        let text = (try? ocrText(docID)) ?? ""
+        guard !text.isEmpty else { return [] }
+
+        // Extract distinctive words (>= 4 chars, excluding common stop words)
+        let stopWords: Set<String> = [
+            "with", "from", "that", "this", "have", "were", "what", "your", "page", "total", "date",
+            "und", "der", "die", "das", "mit", "von", "fuer", "für", "den", "dem", "des",
+            "eine", "einer", "einem", "einen", "nicht", "auch", "aber", "über", "uber", "oder", "durch"
+        ]
+        let words = text.lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { $0.count >= 4 && !stopWords.contains($0) }
+
+        var freq: [String: Int] = [:]
+        for w in words { freq[w, default: 0] += 1 }
+        let topTerms = freq.sorted { $0.value > $1.value }.prefix(8).map(\.key)
+        guard !topTerms.isEmpty else { return [] }
+
+        let matchExpr = topTerms.map { "\"\($0)\"*" }.joined(separator: " OR ")
+        let similarIDs = try db.map("""
+            SELECT rowid FROM doc_fts
+            WHERE doc_fts MATCH ? AND rowid <> ?
+            ORDER BY bm25(doc_fts, \(Store.bm25Weights)) ASC
+            LIMIT ?
+            """, [.text(matchExpr), .int(docID), .int(Int64(limit))]) { $0.int(0) }
+        guard !similarIDs.isEmpty else { return [] }
+
+        var rows: [DocumentRow] = []
+        for id in similarIDs {
+            if let row = try db.first("""
+                SELECT d.id, d.path, d.directory, d.filename, d.ext, d.size, d.original_size,
+                       d.created_at, d.mtime, d.ocr_state, d.page_count, d.approved, d.missing,
+                       m.title, ec.name, et.name, m.language, m.doc_date, m.summary
+                FROM documents d
+                LEFT JOIN metadata m ON m.doc_id = d.id
+                LEFT JOIN entities ec ON ec.id = m.correspondent_id
+                LEFT JOIN entities et ON et.id = m.doc_type_id
+                WHERE d.id=? AND d.missing=0 AND d.deleted_at IS NULL
+                """, [.int(id)], { r in
+                DocumentRow(
+                    doc: r.int(0), path: absPath(r.string(1)), directory: absPath(r.string(2)),
+                    filename: r.string(3), ext: r.string(4), size: r.int(5),
+                    originalSize: r.intOrNil(6),
+                    createdAt: Date(timeIntervalSince1970: r.double(7)),
+                    mtime: Date(timeIntervalSince1970: r.double(8)),
+                    ocrState: OCRState(rawValue: r.int(9)) ?? .pending,
+                    pageCount: r.intOrNil(10).map(Int.init), approved: r.bool(11),
+                    missing: r.bool(12),
+                    title: r.stringOrNil(13), correspondent: r.stringOrNil(14),
+                    docType: r.stringOrNil(15), language: r.stringOrNil(16),
+                    docDate: r.date(17), summary: r.stringOrNil(18))
+            }) {
+                rows.append(row)
+            }
+        }
+        return rows
+    }
+
     /// The folders a document has been filed in as an alias by hand — its
     /// secondary places. Tag aliases are the tag's business and are left out.
     func folderAliases(for docID: Int64) throws -> [String] {
