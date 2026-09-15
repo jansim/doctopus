@@ -69,6 +69,12 @@ struct RootView: View {
                                                     initial: "", confirm: "Create") else { return }
                     model.createTag(named: name)
                 }
+                Button("New Smart Folder…") {
+                    guard let name = TextPrompt.ask(title: "New Smart Folder",
+                                                    message: model.searchText.isEmpty ? "Enter search query to save:" : "Creates a smart folder matching “\(model.searchText)”.",
+                                                    initial: "", confirm: "Create") else { return }
+                    model.saveCurrentSearchAsSmartFolder(name: name)
+                }
                 Divider()
                 Button("Rescan All Folders") { model.reindex() }
             } label: {

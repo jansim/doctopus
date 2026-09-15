@@ -93,6 +93,8 @@ final class AppModel {
     // Sidebar data
     var folders: [FolderNode] = []
     var tags: [Tag] = []
+    /// Pinned smart folders / saved queries.
+    var savedViews: [SavedView] = []
     /// The Finder's own tags across the library. Distinct from `tags`, which
     /// are Doctopus's — the two systems are deliberately kept apart.
     var finderTags: [Facet] = []
@@ -485,6 +487,7 @@ final class AppModel {
             var folders: [FolderNode] = []
             var tags: [Tag] = []
             var fields: [Field] = []
+            var allSavedViews: [SavedView] = []
             var finderTags: [Facet] = []
             var facets: [String: [Facet]] = [:]
             var queue: [ProcessingEntry] = []
@@ -500,17 +503,20 @@ final class AppModel {
                 async let labels = (try? await store.finderTagLabels()) ?? [:]
                 async let q = (try? await store.processingQueue()) ?? []
                 async let s = (try? await store.stats()) ?? Store.Stats()
+                async let svList = (try? await store.savedViews()) ?? []
 
-                let (t, tg, fs, ftg, lbl, qq, ss) = await (tree, tagList, fieldList, finder, labels, q, s)
+                let (t, tg, fs, ftg, lbl, qq, ss, svs) = await (tree, tagList, fieldList, finder, labels, q, s, svList)
                 var facetMap: [String: [Facet]] = [:]
                 for field in fs { facetMap[field.key] = (try? await store.facets(field: field)) ?? [] }
 
                 let libID = lib.id
                 let stampedTags = tg.map { var x = $0; x.library = libID; return x }
                 let stampedFields = fs.map { var x = $0; x.library = libID; return x }
+                let stampedSavedViews = svs.map { var x = $0; x.library = libID; return x }
                 lib.folders = t
                 lib.tags = stampedTags
                 lib.fields = stampedFields
+                lib.savedViews = stampedSavedViews
                 lib.finderTags = ftg
                 lib.facets = facetMap
                 lib.queue = qq
@@ -519,6 +525,7 @@ final class AppModel {
                 folders += t
                 tags += stampedTags
                 fields += stampedFields
+                allSavedViews += stampedSavedViews
                 finderTags = Self.mergeFacets(finderTags, ftg)
                 for (k, v) in facetMap { facets[k] = Self.mergeFacets(facets[k] ?? [], v) }
                 queue += qq
@@ -532,6 +539,7 @@ final class AppModel {
             guard !Task.isCancelled else { return }
             self.folders = folders
             self.tags = tags
+            self.savedViews = allSavedViews
             self.finderTags = finderTags
             self.fields = Self.mergeFields(fields)
             self.facets = facets
@@ -784,6 +792,45 @@ final class AppModel {
         }
     }
     func cancelIndexing() { Task { for lib in libraries { await lib.indexer.cancel() } } }
+
+    // MARK: - Smart Folders / Saved Views
+
+    func saveCurrentSearchAsSmartFolder(name: String, icon: String = "line.3.horizontal.decrease.circle") {
+        guard let lib = activeLibrary else { return }
+        Task {
+            let sv = SavedView(id: 0, name: name, icon: icon, query: searchText,
+                               sortKey: sort.storageKey, ascending: sortAscending,
+                               viewMode: viewMode.rawValue, position: Int64(savedViews.count * 10))
+            _ = try? await lib.store.upsertSavedView(sv)
+            refreshAll()
+            notify("Saved smart folder “\(name)”.", .success)
+        }
+    }
+
+    func deleteSavedView(_ sv: SavedView) {
+        guard let lib = library(sv.library) ?? activeLibrary else { return }
+        Task {
+            try? await lib.store.deleteSavedView(sv.id)
+            if case .savedView(let id, _) = selection, id == sv.id {
+                selection = .all
+            }
+            refreshAll()
+            notify("Deleted smart folder “\(sv.name)”.", .info)
+        }
+    }
+
+    func selectSavedView(_ sv: SavedView) {
+        selection = .savedView(id: sv.id, query: sv.query)
+        searchText = sv.query
+        if let sk = sv.sortKey, let sortField = SortField(storageKey: sk) {
+            sort = sortField
+            sortAscending = sv.ascending
+        }
+        if let vm = sv.viewMode, let mode = ViewMode(rawValue: vm) {
+            viewMode = mode
+        }
+        reloadDocuments()
+    }
 
     // MARK: - Document actions
 

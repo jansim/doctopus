@@ -254,6 +254,22 @@ enum SelfTest {
                   + "values=\(count)")
         }
 
+        print("\nSAVED VIEWS (SMART FOLDERS)")
+        let sv = SavedView(id: 0, name: "Invoices 2026", icon: "doc.text",
+                           query: "type:Invoice date:2026", sortKey: "docDate", ascending: false,
+                           viewMode: "List", position: 0)
+        let savedVID = (try? await store.upsertSavedView(sv)) ?? 0
+        let svList = (try? await store.savedViews()) ?? []
+        Check.that("saved view is persisted", svList.contains { $0.id == savedVID && $0.name == "Invoices 2026" })
+        if let foundSV = svList.first(where: { $0.id == savedVID }) {
+            let hits = (try? await store.listDocuments(selection: .savedView(id: foundSV.id, query: foundSV.query),
+                                                       query: SearchQuery(foundSV.query), sort: .added, ascending: false)) ?? []
+            Check.that("saved view query returns matching documents", !hits.isEmpty)
+        }
+        try? await store.deleteSavedView(savedVID)
+        let svAfter = (try? await store.savedViews()) ?? []
+        Check.that("saved view can be deleted", !svAfter.contains { $0.id == savedVID })
+
         print("\nRENAME + MERGE")
         if let typeField = fields.first(where: { $0.key == "doc_type" }) {
             var n = (try? await store.renameFieldValue(field: typeField, from: "Invoice", to: "Bill")) ?? 0

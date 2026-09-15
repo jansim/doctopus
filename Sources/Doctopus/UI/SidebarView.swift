@@ -25,6 +25,27 @@ struct SidebarView: View {
                 }
             }
 
+            if !model.savedViews.isEmpty {
+                Section("Smart Folders") {
+                    ForEach(model.savedViews) { sv in
+                        Label {
+                            HStack {
+                                Text(sv.name).lineLimit(1)
+                                Spacer()
+                            }
+                        } icon: {
+                            Image(systemName: sv.icon)
+                        }
+                        .tag(Selection.savedView(id: sv.id, query: sv.query))
+                        .contextMenu {
+                            Button("Delete Smart Folder", role: .destructive) {
+                                model.deleteSavedView(sv)
+                            }
+                        }
+                    }
+                }
+            }
+
             // Folders and tags belong to one library each, so with more than
             // one open they are grouped under it. A single library needs no
             // such header — its name is the window's, and the plain Folders /
