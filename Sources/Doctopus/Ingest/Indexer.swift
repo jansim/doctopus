@@ -17,6 +17,7 @@ struct IndexProgress: Sendable, Equatable {
 actor Indexer {
     private let store: Store
     private let intelligence: Intelligence
+    private let classifier = DocumentClassifier()
     private var settings: AppSettings
     private var cancelled = false
     private var running = false
@@ -264,13 +265,30 @@ actor Indexer {
         // 3. Deterministic findings.
         let known = (try? await store.facets(column: "correspondent"))?.map(\.value) ?? []
         let created = (try? url.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? Date()
-        let findings = DocumentAnalyzer.analyze(url: url, text: extracted.text,
+        var findings = DocumentAnalyzer.analyze(url: url, text: extracted.text,
                                                 fallbackDate: created, knownCorrespondents: known,
                                                 options: await analyzerOptions())
         // Every date found is kept, not just the one that won. `03/04/2026` is
         // wrong half the time however carefully it is read, and the runner-up
         // as a chip in the review is a click rather than a retype.
         try? await store.setDateCandidates(findings.dates, for: id)
+
+        // 3b. Local classifier prediction over approved library documents.
+        if let trainData = try? await store.classifierTrainingData(), !trainData.docs.isEmpty {
+            await classifier.trainIfNeeded(docs: trainData.docs, fingerprint: trainData.fingerprint)
+            if findings.correspondent == nil,
+               let pred = await classifier.predictCorrespondent(text: extracted.text) {
+                findings.correspondent = pred.label
+            }
+            if findings.docType == nil,
+               let pred = await classifier.predictDocType(text: extracted.text) {
+                findings.docType = pred.label
+            }
+            let predTags = await classifier.predictTags(text: extracted.text)
+            for tag in predTags {
+                try? await store.suggestTag(tag.label, for: id, autoAcceptMatching: settings.autoAcceptMatchingTagSuggestions)
+            }
+        }
 
         // 4. Optional model enrichment, on-device or over the network.
         var insight: DocumentInsight?

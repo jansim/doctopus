@@ -1083,6 +1083,22 @@ enum SelfTest {
             Check.that("more-like-this finds similar documents without self", !similar.contains { $0.doc == sample.doc })
         }
 
+        print("\nLOCAL CLASSIFIER")
+        let classifier = DocumentClassifier(confidenceThreshold: 0.5)
+        let sampleDocs = [
+            DocumentClassifier.TrainingDoc(id: 1, text: "Rechnung Stadtwerke München Gas Strom Energie Abrechnung", correspondent: "Stadtwerke München", docType: "Invoice", tags: ["utilities", "bills"]),
+            DocumentClassifier.TrainingDoc(id: 2, text: "Stadtwerke München Jahresabrechnung Strom Erdgas", correspondent: "Stadtwerke München", docType: "Invoice", tags: ["utilities", "bills"]),
+            DocumentClassifier.TrainingDoc(id: 3, text: "Deutsche Bank Kontoauszug Finanzstatus Saldo Überweisung", correspondent: "Deutsche Bank AG", docType: "Bank Statement", tags: ["finance"]),
+            DocumentClassifier.TrainingDoc(id: 4, text: "Kontoauszug Deutsche Bank Girokonto Buchung", correspondent: "Deutsche Bank AG", docType: "Bank Statement", tags: ["finance"])
+        ]
+        await classifier.train(docs: sampleDocs)
+        let predCorr = await classifier.predictCorrespondent(text: "Stadtwerke München Abschlagszahlung Gas")
+        let predType = await classifier.predictDocType(text: "Deutsche Bank Auszug Buchungsbestätigung")
+        let predTags = await classifier.predictTags(text: "Rechnung Strom Energie")
+        Check.that("classifier predicts correspondent on matching vocabulary", predCorr?.label == "Stadtwerke München")
+        Check.that("classifier predicts doc_type on matching vocabulary", predType?.label == "Bank Statement")
+        Check.that("classifier predicts multi-label tags", predTags.contains { $0.label == "utilities" || $0.label == "bills" })
+
         print("\nSEARCH INDEX")
         // Everything a person can see is a column of `doc_fts`, so each of
         // these is a ranked hit rather than an unindexed LIKE over the table.
