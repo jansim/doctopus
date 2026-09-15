@@ -24,6 +24,8 @@ private struct DetailInspector: View {
     @Environment(AppModel.self) private var model
     let detail: DocumentDetail
     @State private var showRawText = false
+    @State private var showAllHistory = false
+    @State private var noteDraft = ""
     @State private var tagInput = ""
     @State private var finderTagInput = ""
 
@@ -39,8 +41,10 @@ private struct DetailInspector: View {
                 tagsSection
                 if !detail.tagSuggestions.isEmpty { tagSuggestionsSection }
                 finderTagsSection
+                notesSection
                 fileSection
                 if !detail.aliases.isEmpty { aliasSection }
+                if !detail.history.isEmpty { historySection }
                 textSection
             }
             .padding(14)
@@ -117,11 +121,11 @@ private struct DetailInspector: View {
                 EditableRow("Title", value: row.title ?? "") {
                     model.editMetadata(row.id, column: "title", value: $0)
                 }
-                // Every configured field, in the order Settings puts them.
+                // Every configured field, in the order Settings puts them,
+                // edited the way its type deserves.
                 ForEach(model.fields) { field in
-                    EditableRow(field.name, value: row.values[field.key] ?? "") {
-                        model.setFieldValue(row.id, field: field, value: $0)
-                    }
+                    FieldValueRow(field: field, value: row.values[field.key] ?? "",
+                                  document: row.id)
                 }
                 InfoRow("Date", alignment: .center) {
                     HStack(spacing: 5) {
@@ -131,6 +135,7 @@ private struct DetailInspector: View {
                             displayedComponents: .date)
                         .labelsHidden()
                         .datePickerStyle(.compact)
+                        .dayResolution()
                         if let source = detail.dateSource {
                             Text(dateSourceLabel(source))
                                 .font(.caption2)
@@ -377,6 +382,78 @@ private struct DetailInspector: View {
         }
     }
 
+    // MARK: - Notes
+
+    /// Everything the schema has nowhere to put: "cancelled by phone on the
+    /// 4th", "the original is in the red folder". Indexed with the document's
+    /// own text, so a note can be searched for like anything else.
+    private var notesSection: some View {
+        Section2("Notes") {
+            ForEach(detail.notes) { note in
+                NoteRow(note: note, document: row.id)
+            }
+            HStack(alignment: .top, spacing: 6) {
+                TextField("Add a note…", text: $noteDraft, axis: .vertical)
+                    .textFieldStyle(.roundedBorder)
+                    .lineLimit(1...4)
+                    .font(.callout)
+                    .onSubmit(addNote)
+                if noteDraft.nilIfBlank != nil {
+                    Button("Add", action: addNote)
+                        .buttonStyle(.borderless)
+                        .font(.caption)
+                }
+            }
+        }
+    }
+
+    private func addNote() {
+        let body = noteDraft
+        guard body.nilIfBlank != nil else { return }
+        noteDraft = ""
+        model.addNote(body, to: row.id)
+    }
+
+    // MARK: - History
+
+    /// Everything that has happened to this document, newest first. The queue
+    /// only keeps the most recent few hundred events library-wide; this comes
+    /// from `events`, which is never trimmed, so the answer to "why is this
+    /// file here" survives however many documents arrive after it.
+    private var historySection: some View {
+        Section2("History") {
+            ForEach(detail.history.prefix(showAllHistory ? detail.history.count : 6)) { event in
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Image(systemName: event.icon)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .frame(width: 14)
+                    VStack(alignment: .leading, spacing: 1) {
+                        HStack(spacing: 5) {
+                            Text(event.label).font(.caption).fontWeight(.medium)
+                            Text(event.at.formatted(date: .abbreviated, time: .shortened))
+                                .font(.caption2).foregroundStyle(.tertiary)
+                        }
+                        if let move = event.move(relativeTo: model.library(row.library)?.root.path ?? "") {
+                            Text(move).font(.caption2).foregroundStyle(.secondary)
+                        } else if let note = event.detail?.nilIfBlank {
+                            Text(note).font(.caption2).foregroundStyle(.secondary)
+                                .lineLimit(2)
+                        }
+                    }
+                    Spacer(minLength: 0)
+                }
+            }
+            if detail.history.count > 6 {
+                Button(showAllHistory ? "Show less"
+                                      : "Show all \(detail.history.count) events") {
+                    showAllHistory.toggle()
+                }
+                .buttonStyle(.link).font(.caption)
+            }
+        }
+    }
+
     // MARK: - Raw text
 
     private var textSection: some View {
@@ -401,6 +478,64 @@ private struct DetailInspector: View {
                 }
             }
         }
+    }
+}
+
+/// One note, editable in place. Clearing the text deletes it, which is the
+/// least surprising way to get rid of something that is only a sentence.
+private struct NoteRow: View {
+    @Environment(AppModel.self) private var model
+    let note: Note
+    let document: DocumentRef
+
+    @State private var editing = false
+    @State private var draft = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            if editing {
+                TextField("Note", text: $draft, axis: .vertical)
+                    .textFieldStyle(.roundedBorder)
+                    .lineLimit(1...6)
+                    .font(.callout)
+                    .onSubmit(commit)
+                HStack(spacing: 8) {
+                    Button("Save", action: commit).font(.caption)
+                    Button("Cancel") { editing = false }.font(.caption)
+                    Spacer()
+                    Button("Delete", role: .destructive) {
+                        editing = false
+                        model.deleteNote(note.id, in: document)
+                    }
+                    .font(.caption)
+                }
+                .buttonStyle(.borderless)
+            } else {
+                Text(note.body)
+                    .font(.callout)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Text(note.createdAt.formatted(date: .abbreviated, time: .shortened)
+                     + (note.edited ? " · edited" : ""))
+                    .font(.caption2).foregroundStyle(.tertiary)
+            }
+        }
+        .padding(.vertical, 2)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            guard !editing else { return }
+            draft = note.body
+            editing = true
+        }
+        .contextMenu {
+            Button("Edit") { draft = note.body; editing = true }
+            Button("Delete", role: .destructive) { model.deleteNote(note.id, in: document) }
+        }
+    }
+
+    private func commit() {
+        editing = false
+        model.updateNote(note.id, body: draft, in: document)
     }
 }
 
@@ -518,6 +653,85 @@ extension InfoRow where Value == Text {
     }
 }
 
+/// One field, edited as what it holds. A Yes / No field is a checkbox, a date
+/// is a date picker, one-of is a menu — everything else is a text field, which
+/// is what every field used to be.
+private struct FieldValueRow: View {
+    @Environment(AppModel.self) private var model
+    let field: Field
+    let value: String
+    let document: DocumentRef
+
+    var body: some View {
+        switch field.type {
+        case .boolean:
+            InfoRow(field.name, alignment: .center) {
+                Toggle("", isOn: Binding(
+                    get: { FieldType.boolean(from: value) ?? false },
+                    set: { model.setFieldValue(document, field: field, value: $0 ? "Yes" : "No") }))
+                    .toggleStyle(.checkbox)
+                    .labelsHidden()
+            }
+        case .date:
+            InfoRow(field.name, alignment: .center) {
+                HStack(spacing: 5) {
+                    DatePicker("", selection: Binding(
+                        get: { FieldType.day(from: value) ?? Date() },
+                        set: { model.setFieldValue(document, field: field,
+                                                   value: FieldType.dayFormatter.string(from: $0)) }),
+                        displayedComponents: .date)
+                        .labelsHidden()
+                        .datePickerStyle(.compact)
+                        .dayResolution()
+                    if !value.isEmpty {
+                        Button {
+                            model.setFieldValue(document, field: field, value: nil)
+                        } label: {
+                            Image(systemName: "xmark.circle.fill").font(.caption2)
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.tertiary)
+                        .help("Clear this date")
+                    }
+                }
+            }
+        case .select where !field.options.isEmpty:
+            InfoRow(field.name, alignment: .center) {
+                Picker("", selection: Binding(
+                    get: { value },
+                    set: { model.setFieldValue(document, field: field, value: $0.nilIfBlank) })) {
+                    Text("—").tag("")
+                    ForEach(field.options, id: \.self) { option in
+                        Text(option).tag(option)
+                    }
+                }
+                .labelsHidden()
+            }
+        case .url where !value.isEmpty:
+            InfoRow(field.name, alignment: .center) {
+                HStack(spacing: 5) {
+                    if let url = URL(string: value), url.scheme != nil {
+                        Link(value, destination: url).lineLimit(1)
+                    } else {
+                        Text(value).lineLimit(1)
+                    }
+                    Button {
+                        model.setFieldValue(document, field: field, value: nil)
+                    } label: {
+                        Image(systemName: "xmark.circle.fill").font(.caption2)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.tertiary)
+                }
+            }
+        default:
+            EditableRow(field.name, value: value) {
+                model.setFieldValue(document, field: field, value: $0)
+            }
+        }
+    }
+}
+
 /// Click-to-edit value that only writes back on commit. Empty reads as an
 /// em dash so a blank row still looks like a row.
 struct EditableRow: View {
@@ -539,6 +753,16 @@ struct EditableRow: View {
                 .textFieldStyle(.plain)
                 .onSubmit { if draft != committed { onCommit(draft) } }
         }
+    }
+}
+
+extension View {
+    /// Puts a date control on the same clock the days are stored on. Without
+    /// it, picking 4 March east of Greenwich hands back an instant that is
+    /// still 3 March in UTC, and the day is saved one off.
+    func dayResolution() -> some View {
+        environment(\.timeZone, TimeZone(secondsFromGMT: 0) ?? .gmt)
+            .environment(\.calendar, DayDate.calendar)
     }
 }
 

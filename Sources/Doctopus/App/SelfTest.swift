@@ -110,7 +110,7 @@ enum SelfTest {
             print("  \(row.filename)")
             print("    title:  \(row.title ?? "—")")
             print("    from:   \(row.correspondent ?? "—")   type: \(row.docType ?? "—")   lang: \(row.language ?? "—")")
-            print("    date:   \(row.docDate.map { $0.formatted(date: .abbreviated, time: .omitted) } ?? "—") (\(detail.dateSource ?? "—"))")
+            print("    date:   \(row.docDate.map(DayDate.text) ?? "—") (\(detail.dateSource ?? "—"))")
             print("    ocr:    \(detail.ocrWords ?? 0) words via \(detail.ocrSource ?? "—")"
                   + (detail.ocrConfidence.map { String(format: ", %.0f%% confidence", $0 * 100) } ?? ""))
             if let amount = detail.amount { print("    amount: \(amount)") }
@@ -171,10 +171,12 @@ enum SelfTest {
         let samples = (try? await store.ruleSamples()) ?? []
         Check.that("every document is a rule sample", samples.count == stats.total,
                    "\(samples.count)/\(stats.total)")
-        Check.that("a pattern is read the way the router will read it",
+        Check.that("a pattern is read the way the rule says, not the way it is punctuated",
                    Router.kind(of: "invoice, rechnung") == .words(["invoice", "rechnung"])
-                       && Router.kind(of: "^inv.*") == .regex
-                       && { if case .invalidRegex = Router.kind(of: "inv(oice") { return true }; return false }())
+                       && Router.kind(of: "Acme (UK) Ltd") == .words(["acme (uk) ltd"])
+                       && Router.kind(of: "^inv.*", mode: .regex) == .regex
+                       && { if case .invalidRegex = Router.kind(of: "inv(oice", mode: .regex) { return true }
+                            return false }())
         if var rule = ((try? await store.rules()) ?? []).last,
            let payslip = rows.first(where: { $0.filename.lowercased().contains("gehalt") }) {
             let original = rule
@@ -530,6 +532,558 @@ enum SelfTest {
                        !enriched.isEmpty && enriched.allSatisfy { $0.metadataSource == "remote" && $0.row.summary != nil })
         }
 
+        print("\nENTITIES")
+        // Correspondents and types are rows now, so renaming one is one row and
+        // renaming it onto another is a merge — which two free-text columns
+        // could not do at all.
+        if let corrField = ((try? await store.fields()) ?? []).first(where: { $0.key == "correspondent" }) {
+            let live = (try? await store.entities(builtin: "correspondent")) ?? []
+            let listed: [String] = live.prefix(4).map { "\($0.name) (\($0.count))" }
+            print("  correspondents          " + listed.joined(separator: ", "))
+            Check.that("every correspondent in use is a row", !live.isEmpty)
+            Check.that("…and each one exists exactly once",
+                       Set(live.map { $0.name.lowercased() }).count == live.count)
+
+            // Renaming and merging are done on values made up for the purpose,
+            // so the fixture library is left exactly as the rest of the run
+            // expects to find it.
+            if rows.count >= 3 {
+                let spellingA = "Doctopus Werke GmbH"
+                let spellingB = "Doctopus Werke"
+                try? await store.setFieldValue(docID: rows[0].doc, field: corrField, value: spellingA)
+                try? await store.setFieldValue(docID: rows[1].doc, field: corrField, value: spellingA)
+                try? await store.setFieldValue(docID: rows[2].doc, field: corrField, value: spellingB)
+                try? await store.setValueIcon(field: corrField, value: spellingA, icon: "building.columns")
+
+                let renamed = (try? await store.renameFieldValue(field: corrField, from: spellingA,
+                                                                 to: "Doctopus Werke AG")) ?? 0
+                var after = (try? await store.entities(builtin: "correspondent")) ?? []
+                let moved = after.first { $0.name == "Doctopus Werke AG" }
+                let movedCount: Int = moved?.count ?? 0
+                print("  " + spellingA + " → Doctopus Werke AG   "
+                      + "\(movedCount) document(s), \(renamed) row(s)")
+                Check.that("renaming a correspondent takes every document with it",
+                           moved?.count == 2, "\(moved?.count ?? -1)")
+                Check.that("…and its icon comes along rather than being orphaned",
+                           moved?.icon == "building.columns")
+                Check.that("…leaving no trace of the old spelling",
+                           !after.contains { $0.name == spellingA })
+                let filtered = (try? await store.listDocuments(
+                    selection: .field("correspondent", "Doctopus Werke AG"), query: SearchQuery(""),
+                    sort: .added, ascending: false)) ?? []
+                Check.that("…and the sidebar filter follows it", filtered.count == 2,
+                           "\(filtered.count) documents")
+
+                // The merge the string columns could never do.
+                _ = try? await store.renameFieldValue(field: corrField, from: spellingB, to: "Doctopus Werke AG")
+                after = (try? await store.entities(builtin: "correspondent")) ?? []
+                let survivor = after.first { $0.name == "Doctopus Werke AG" }
+                let survivorCount: Int = survivor?.count ?? 0
+                print("  " + spellingB + " merged in       \(survivorCount) document(s)")
+                Check.that("two spellings merge into one correspondent",
+                           survivor?.count == 3 && !after.contains { $0.name == spellingB },
+                           "\(survivor?.count ?? -1) of 3")
+
+                // And it is findable as one thing, under its one name.
+                let searched = (try? await store.listDocuments(
+                    selection: .all, query: SearchQuery("Doctopus Werke AG"), sort: .relevance,
+                    ascending: false)) ?? []
+                Check.that("…searchable under the surviving name", searched.count >= 3,
+                           "\(searched.count) hits")
+
+                // Put the fixture back the way the rest of the run found it.
+                for row in rows.prefix(3) {
+                    try? await store.setFieldValue(docID: row.doc, field: corrField,
+                                                   value: row.correspondent)
+                }
+                try? await store.deleteFieldValue(field: corrField, value: "Doctopus Werke AG")
+            }
+
+            // A correspondent that identifies itself, which is what having a
+            // row it can carry a rule on is for.
+            if let subject = rows.first {
+                let made = (try? await store.entityID(named: "Selbsterkennung",
+                                                      builtin: "correspondent")) ?? nil
+                if let made {
+                    try? await store.setEntityMatch(made, pattern: "doctopus-iban-de12")
+                    let matching = (try? await store.matchingEntities()) ?? []
+                    let picked = DocumentAnalyzer.analyze(
+                        url: subject.url, text: "Kontoauszug für doctopus-iban-de12 im Januar",
+                        fallbackDate: Date(), knownCorrespondents: [],
+                        options: DocumentAnalyzer.Options(entityRules: matching)).correspondent
+                    print("  identified by its own pattern → \(picked ?? "nothing")")
+                    Check.that("a correspondent carrying a pattern identifies itself",
+                               picked == "Selbsterkennung")
+                    try? await store.deleteEntity(made, column: "correspondent")
+                }
+            }
+
+            // The "AG" problem: a short known name matched as a plain substring
+            // fires on very nearly every document there is.
+            Check.that("a known correspondent only matches on a word boundary",
+                       DocumentAnalyzer.correspondent(
+                           text: "Gehaltsabrechnung von Northwind\nSehr geehrte Damen",
+                           known: ["AG", "rech"]) != "AG")
+        }
+
+        print("\nMATCH MODES")
+        // What used to be guessed from the punctuation is now said out loud.
+        func hits(_ pattern: String, _ mode: MatchMode, _ subject: String,
+                  insensitive: Bool = true) -> Bool {
+            PatternMatcher.matches(pattern, mode: mode, insensitive: insensitive, in: subject)
+        }
+        Check.that("“Acme (UK) Ltd” is a name when the rule says it is one",
+                   hits("Acme (UK) Ltd", .anyWord, "Invoice from Acme (UK) Ltd"))
+        // …which is what a *new* rule gets. Migration deliberately does not:
+        // the old router compiled that pattern as a regex, and whatever a rule
+        // meant yesterday is what it goes on meaning.
+        Check.that("a new rule defaults to reading its pattern as words",
+                   Rule(id: 0, name: "", pattern: "Acme (UK) Ltd", field: "text",
+                        destination: "", tagNames: nil, weight: 0.9, enabled: true,
+                        priority: 0).mode == .anyWord)
+        Check.that("any word still matches at the start of a word, not inside a compound",
+                   hits("rechnung", .anyWord, "Rechnungsnummer 42")
+                       && !hits("rechnung", .anyWord, "Gehaltsabrechnung"))
+        Check.that("all words needs every one of them",
+                   hits("amount, due", .allWords, "the amount due is")
+                       && !hits("amount, missing", .allWords, "the amount due is"))
+        // The OCR line-wrap case, which is why the phrase mode exists at all.
+        Check.that("a phrase matches across the line break OCR put in it",
+                   hits("amount due", .exactPhrase, "Total\namount\n  due   today")
+                       && !hits("amount due", .exactPhrase, "amount is overdue"))
+        Check.that("a regex is one only when the rule says so",
+                   hits("^inv-\\d+", .regex, "inv-4821")
+                       && !hits("^inv-\\d+", .anyWord, "inv-4821"))
+        Check.that("case can be insisted on",
+                   hits("ACME", .anyWord, "acme corp")
+                       && !hits("ACME", .anyWord, "acme corp", insensitive: false))
+        // OCR noise: one substituted letter should not lose the match.
+        Check.that("fuzzy survives a misread letter",
+                   hits("rechnung", .fuzzy, "Rechnunq Nr. 42")
+                       && !hits("rechnung", .fuzzy, "Kontoauszug"))
+        for pattern in ["Acme (UK) Ltd", "^inv-\\d+", "inv(oice"] {
+            print("  " + pattern.padded(20) + " → " + MatchMode.inferred(from: pattern).shortLabel)
+        }
+        Check.that("a pattern that was read as a regex keeps being one when migrated",
+                   MatchMode.inferred(from: "^inv-\\d+") == .regex)
+        Check.that("…and one that never compiled is migrated as the words it was matching",
+                   MatchMode.inferred(from: "inv(oice") == .anyWord)
+
+        // A rule's mode survives the round trip through the database.
+        if let id = try? await store.upsertRule(
+            Rule(id: 0, name: "Phrase Test", pattern: "amount due", field: "text",
+                 destination: "Filed/Phrase", tagNames: nil, weight: 0.9, enabled: false,
+                 priority: 1, mode: .exactPhrase, caseInsensitive: false)) {
+            let saved = ((try? await store.rules()) ?? []).first { $0.id == id }
+            Check.that("a rule remembers how it reads its pattern",
+                       saved?.mode == .exactPhrase && saved?.caseInsensitive == false)
+            try? await store.deleteRule(id)
+        }
+
+        print("\nNESTED TAGS")
+        // Assigning a child assigns everything it sits under, which is what
+        // makes filtering by the parent find what is filed under the child.
+        let finances = (try? await store.tagID(named: "Finances")) ?? 0
+        let invoices = (try? await store.tagID(named: "Finances Invoices")) ?? 0
+        let statements = (try? await store.tagID(named: "Finances Statements")) ?? 0
+        _ = try? await store.setTagParent(invoices, to: finances)
+        _ = try? await store.setTagParent(statements, to: finances)
+        if let subject = rows.first {
+            try? await store.assign(tag: invoices, to: subject.doc)
+            let carried = (try? await store.tags(for: subject.doc)) ?? []
+            print("  tagged with Invoices → \(carried.map(\.name).joined(separator: ", "))")
+            Check.that("assigning a child attaches its parent too",
+                       carried.contains { $0.tagID == finances })
+            let byParent = (try? await store.listDocuments(selection: .tag(TagRef(library: "", tag: finances)),
+                                                           query: SearchQuery(""), sort: .added,
+                                                           ascending: false)) ?? []
+            Check.that("…so filtering by the parent finds it",
+                       byParent.contains { $0.doc == subject.doc })
+        }
+        let shaped = (try? await store.tags()) ?? []
+        for tag in shaped where tag.name.hasPrefix("Finances") {
+            print("  \(String(repeating: "  ", count: tag.depth))\(tag.name) (\(tag.count))")
+        }
+        Check.that("children are drawn under their parent, one level in",
+                   shaped.first { $0.tagID == invoices }?.depth == 1
+                       && shaped.first { $0.tagID == finances }?.depth == 0)
+
+        // A tag cannot sit inside itself, directly or round a loop.
+        Check.that("a tag cannot be its own parent",
+                   (try? await store.setTagParent(finances, to: finances)) == false)
+        Check.that("a descendant cannot become the parent",
+                   (try? await store.setTagParent(finances, to: invoices)) == false)
+
+        // Re-parenting catches the documents up rather than being right only
+        // for whatever is tagged next.
+        let deep = (try? await store.tagID(named: "Household")) ?? 0
+        if let subject = rows.first {
+            _ = try? await store.setTagParent(finances, to: deep)
+            let after = (try? await store.tags(for: subject.doc)) ?? []
+            Check.that("re-parenting gives the documents the new ancestor",
+                       after.contains { $0.tagID == deep },
+                       after.map(\.name).joined(separator: ", "))
+            _ = try? await store.setTagParent(finances, to: nil)
+        }
+
+        // Five deep, and no further.
+        var chain: [Int64] = []
+        for level in 1...6 {
+            let id = (try? await store.tagID(named: "Level \(level)")) ?? 0
+            chain.append(id)
+            if level > 1 { _ = try? await store.setTagParent(id, to: chain[level - 2]) }
+        }
+        let levels = (try? await store.tags()) ?? []
+        let deepest = levels.filter { $0.name.hasPrefix("Level ") }.map(\.depth).max() ?? 0
+        print("  deepest nesting reached \(deepest + 1) level(s)")
+        Check.that("tags nest no deeper than the cap", deepest < Tag.maxDepth,
+                   "depth \(deepest)")
+        for id in chain.reversed() { try? await store.deleteTag(id) }
+        for id in [invoices, statements, finances, deep] { try? await store.deleteTag(id) }
+
+        print("\nDATES")
+        // The same numeric date, read two ways. Which one is right is the
+        // library's business, not the Mac's — that is the whole setting.
+        let ambiguous = "Rechnungsdatum: 03/04/2026"
+        let asDMY = DocumentAnalyzer.dateInText(ambiguous,
+            options: DocumentAnalyzer.Options(dateOrder: .dmy))
+        let asMDY = DocumentAnalyzer.dateInText(ambiguous,
+            options: DocumentAnalyzer.Options(dateOrder: .mdy))
+        print("  03/04/2026 as D/M/Y    \(asDMY.map(DayDate.text) ?? "—")")
+        print("  03/04/2026 as M/D/Y    \(asMDY.map(DayDate.text) ?? "—")")
+        Check.that("an ambiguous date is read the way the library says",
+                   asDMY.map(DayDate.text) == "2026-04-03" && asMDY.map(DayDate.text) == "2026-03-04")
+        Check.that("automatic takes the order from the language, not from this Mac",
+                   DateOrder.automatic.resolved(language: "en-US") == .mdy
+                       && DateOrder.automatic.resolved(language: "de") == .dmy
+                       && DateOrder.automatic.resolved(language: "ja") == .ymd)
+        Check.that("a number over twelve settles the order whatever it is set to",
+                   DocumentAnalyzer.dateInText("dated 25/12/2025",
+                       options: DocumentAnalyzer.Options(dateOrder: .mdy)).map(DayDate.text)
+                       == "2025-12-25")
+
+        // A document is never issued in the future.
+        let nextYear = DayDate.calendar.date(byAdding: .year, value: 1, to: Date())!
+        let yetToCome = "Datum: \(DayDate.text(nextYear))"
+        Check.that("a document is never issued in the future",
+                   DocumentAnalyzer.dateInText(yetToCome) == nil,
+                   DocumentAnalyzer.dateInText(yetToCome).map(DayDate.text) ?? "none")
+        Check.that("…but a field holding a due date may still be",
+                   DocumentAnalyzer.anyDate(in: yetToCome).map(DayDate.text) == DayDate.text(nextYear))
+
+        // A date in the ignore list never counts, however well labelled.
+        let letterhead = "Formular Stand: 12/01/2019 · Rechnungsdatum: 14/02/2024"
+        let ignoring = DocumentAnalyzer.Options(dateOrder: .dmy, ignoredDays: ["2019-01-12"])
+        Check.that("an ignored day is never taken as the document's date",
+                   DocumentAnalyzer.datesInText(letterhead, source: "ocr", options: ignoring)
+                       .allSatisfy { DayDate.text($0.date) != "2019-01-12" })
+
+        // Everything found is kept, labelled ones first.
+        let several = "Printed 01/02/2020. Rechnungsdatum: 14/02/2024. Paid 20/02/2024."
+        let candidates = DocumentAnalyzer.rank(
+            DocumentAnalyzer.datesInText(several, source: "ocr",
+                                         options: DocumentAnalyzer.Options(dateOrder: .dmy)))
+        let shownCandidates: [String] = candidates.map {
+            DayDate.text($0.date) + ($0.labelled ? "*" : "")
+        }
+        print("  candidates             " + shownCandidates.joined(separator: ", "))
+        Check.that("every plausible date is kept, the labelled one first",
+                   candidates.count > 1 && candidates.first?.labelled == true
+                       && candidates.first.map { DayDate.text($0.date) } == "2024-02-14",
+                   "\(candidates.count) candidates")
+        Check.that("a day the month does not have is a misread, not a date",
+                   DocumentAnalyzer.dateInText("31/02/2024",
+                       options: DocumentAnalyzer.Options(dateOrder: .dmy)) == nil)
+
+        // Every stored document date is a day, so two Macs read it the same.
+        let stored = ((try? await store.listDocuments(selection: .all, query: SearchQuery(""),
+                                                      sort: .added, ascending: false)) ?? [])
+            .compactMap(\.docDate)
+        Check.that("every stored date is the start of a day",
+                   stored.allSatisfy { $0 == DayDate.startOfDay($0) },
+                   "\(stored.count) dates")
+
+        if let subject = rows.first {
+            let kept = (try? await store.dateCandidates(for: subject.doc)) ?? []
+            print("  \(subject.filename.padded(38)) \(kept.count) candidate(s) kept")
+            Check.that("the dates a document offered are kept for the review",
+                       !kept.isEmpty || subject.docDate == nil)
+        }
+
+        print("\nTYPED FIELDS")
+        // Reading an amount as a number is the difference between €90 coming
+        // before €1,200 and coming after it — and both conventions for writing
+        // one have to land on the same value.
+        let amounts: [(String, Double?)] = [
+            ("€1.234,56", 1234.56), ("$1,234.56", 1234.56), ("1 234,56 EUR", 1234.56),
+            ("90", 90), ("€90", 90), ("-12.50", -12.5), ("not a number", nil),
+        ]
+        var parsedRight = true
+        for (raw, expected) in amounts {
+            let got = FieldType.number(from: raw)
+            if got != expected { parsedRight = false }
+            let shown: String = got.map { "\($0)" } ?? "—"
+            print("  " + raw.padded(20) + " → " + shown)
+        }
+        Check.that("an amount is read as a number however it is written", parsedRight)
+        Check.that("yes and Yes and true are one answer",
+                   FieldType.boolean(from: "yes") == true && FieldType.boolean(from: "Yes") == true
+                       && FieldType.boolean(from: "true") == true && FieldType.boolean(from: "No") == false)
+
+        if let id = try? await store.addCustomField(name: "Paid Amount", type: .monetary),
+           let money = ((try? await store.fields()) ?? []).first(where: { $0.fieldID == id }),
+           rows.count >= 3 {
+            let written = ["€1.234,56", "$90.00", "€12,00"]
+            for (index, row) in rows.prefix(3).enumerated() {
+                try? await store.setFieldValue(docID: row.doc, field: money, value: written[index])
+            }
+            let sorted = (try? await store.listDocuments(
+                selection: .all, query: SearchQuery(""), sort: .field(money.key),
+                ascending: true)) ?? []
+            let order = sorted.compactMap { $0.values[money.key] }
+            print("  sorted by amount      \(order.joined(separator: ", "))")
+            Check.that("amounts sort by value, not by spelling",
+                       Array(order.prefix(3)) == ["€12,00", "$90.00", "€1.234,56"],
+                       order.joined(separator: ", "))
+            Check.that("…and the currency is kept exactly as it was typed",
+                       order.contains("€1.234,56"))
+
+            // Changing the type re-reads what is already stored, so a field
+            // does not sort correctly only for whatever is typed next.
+            var asText = money
+            asText.type = .string
+            try? await store.updateField(asText)
+            var back = money
+            back.type = .monetary
+            try? await store.updateField(back)
+            let again = ((try? await store.listDocuments(
+                selection: .all, query: SearchQuery(""), sort: .field(money.key),
+                ascending: true)) ?? []).compactMap { $0.values[money.key] }
+            Check.that("changing a field's type re-reads the values it already holds",
+                       Array(again.prefix(3)) == ["€12,00", "$90.00", "€1.234,56"],
+                       again.prefix(3).joined(separator: ", "))
+            try? await store.deleteField(id)
+        }
+
+        if let id = try? await store.addCustomField(name: "Due", type: .date),
+           let due = ((try? await store.fields()) ?? []).first(where: { $0.fieldID == id }),
+           let subject = rows.first {
+            try? await store.setFieldValue(docID: subject.doc, field: due, value: "2026-03-04")
+            let stored = (try? await store.detail(subject.doc))?.row.values[due.key]
+            print("  date field            \(stored ?? "—")")
+            Check.that("a date field stores a day, in one spelling", stored == "2026-03-04")
+            try? await store.deleteField(id)
+        }
+
+        if let id = try? await store.addCustomField(name: "Settled", type: .boolean),
+           let flag = ((try? await store.fields()) ?? []).first(where: { $0.fieldID == id }),
+           let subject = rows.first {
+            try? await store.setFieldValue(docID: subject.doc, field: flag, value: "true")
+            let first = (try? await store.detail(subject.doc))?.row.values[flag.key]
+            try? await store.setFieldValue(docID: subject.doc, field: flag, value: "yes")
+            let second = (try? await store.detail(subject.doc))?.row.values[flag.key]
+            Check.that("a yes/no field has one spelling of yes",
+                       first == "Yes" && second == "Yes", "\(first ?? "—"), \(second ?? "—")")
+            try? await store.deleteField(id)
+        }
+
+        print("\nNOTES")
+        if let subject = rows.first {
+            let phrase = "cancelled by phone \(UUID().uuidString.prefix(6).lowercased())"
+            let noteID = (try? await store.addNote(phrase, to: subject.doc)) ?? 0
+            let listed = (try? await store.notes(for: subject.doc)) ?? []
+            let found = (try? await store.listDocuments(selection: .all, query: SearchQuery(phrase),
+                                                        sort: .relevance, ascending: false)) ?? []
+            print("  " + subject.filename.padded(38)
+                  + " \(listed.count) note(s), searchable: \(found.count) hit(s)")
+            Check.that("a note is kept with the document", listed.contains { $0.id == noteID })
+            Check.that("…and is searchable straight away", found.contains { $0.id == subject.id })
+
+            try? await store.updateNote(noteID, body: "the original is in the red folder")
+            let edited = (try? await store.notes(for: subject.doc)) ?? []
+            Check.that("editing a note marks it edited",
+                       edited.first { $0.id == noteID }?.edited == true)
+            let stale = (try? await store.listDocuments(selection: .all, query: SearchQuery(phrase),
+                                                        sort: .relevance, ascending: false)) ?? []
+            Check.that("…and the old wording stops matching", stale.isEmpty, "\(stale.count) hit(s)")
+
+            try? await store.deleteNote(noteID)
+            Check.that("a note can be taken away again",
+                       ((try? await store.notes(for: subject.doc)) ?? []).isEmpty)
+        }
+
+        print("\nRECENTLY DELETED")
+        // A deleted document keeps its row, stays out of every listing but its
+        // own, and comes back whole — with its tags, title and history — when
+        // the file is put back.
+        if let victim = rows.first(where: { $0.directory.hasSuffix("Personal") }) ?? rows.first {
+            let tagID = (try? await store.tagID(named: "doctopus-restore")) ?? 0
+            try? await store.assign(tag: tagID, to: victim.doc)
+            try? await store.softDelete(victim.doc, trashPath: nil)
+
+            let listed = (try? await store.listDocuments(selection: .all, query: SearchQuery(""),
+                                                         sort: .added, ascending: false)) ?? []
+            let inTrash = (try? await store.listDocuments(selection: .deleted, query: SearchQuery(""),
+                                                          sort: .added, ascending: false)) ?? []
+            let after = (try? await store.stats()) ?? Store.Stats()
+            print("  deleted \(victim.filename): \(after.deleted) in Recently Deleted, "
+                  + "\(after.total) still listed")
+            Check.that("a deleted document leaves every ordinary listing",
+                       !listed.contains { $0.doc == victim.doc })
+            Check.that("…and is exactly what Recently Deleted holds",
+                       inTrash.contains { $0.doc == victim.doc } && after.deleted == 1)
+            Check.that("…and stops being searchable",
+                       !((try? await store.listDocuments(
+                            selection: .all, query: SearchQuery(victim.filename),
+                            sort: .relevance, ascending: false)) ?? []).contains { $0.doc == victim.doc })
+            Check.that("…but its row, and everything on it, is still there",
+                       ((try? await store.tags(for: victim.doc)) ?? []).contains { $0.tagID == tagID })
+
+            // A document deleted on purpose is never swept up by the purge that
+            // forgets files which simply vanished, however long ago it went.
+            _ = try? await store.purgeMissing(olderThan: 0)
+            let survived = (try? await store.listDocuments(selection: .deleted, query: SearchQuery(""),
+                                                           sort: .added, ascending: false)) ?? []
+            Check.that("the purge leaves a document that was deleted on purpose alone",
+                       survived.contains { $0.doc == victim.doc })
+
+            try? await store.restore(victim.doc)
+            let back = (try? await store.listDocuments(selection: .all, query: SearchQuery(""),
+                                                       sort: .added, ascending: false)) ?? []
+            let keptTags = (try? await store.tags(for: victim.doc)) ?? []
+            Check.that("putting it back revives the row it always had",
+                       back.contains { $0.doc == victim.doc }
+                           && keptTags.contains { $0.tagID == tagID })
+            try? await store.unassign(tag: tagID, from: victim.doc)
+            try? await store.deleteTag(tagID)
+        }
+
+        print("\nHISTORY")
+        // The queue is a bounded recency view; the history behind it is not.
+        // Overflowing the queue has to leave the record of what happened
+        // intact — that was the whole point of splitting the two.
+        if let subject = rows.first {
+            let firstEvents = (try? await store.history(for: subject.doc, limit: 10_000)) ?? []
+            let oldest = firstEvents.last
+            for n in 0...Store.queueLength {
+                try? await store.logProcessing(docID: subject.doc, action: "indexed",
+                                               detail: "filler \(n)", confidence: nil, rule: nil,
+                                               from: nil, to: nil, approved: true)
+            }
+            let queue = (try? await store.processingQueue(limit: 10_000)) ?? []
+            let kept = (try? await store.history(for: subject.doc, limit: 10_000)) ?? []
+            let total = (try? await store.eventCount()) ?? 0
+            print("  queue holds \(queue.count), history holds \(total) event(s), "
+                  + "\(kept.count) of them for \(subject.filename)")
+            Check.that("the queue stays bounded", queue.count <= Store.queueLength,
+                       "\(queue.count) entries")
+            Check.that("the history is not trimmed with it",
+                       kept.count > queue.count, "\(kept.count) events kept")
+            Check.that("the first thing that happened to a document is still on record",
+                       oldest == nil || kept.contains { $0.id == oldest!.id })
+            let detailed = try? await store.detail(subject.doc)
+            Check.that("a document's history reaches the inspector",
+                       (detailed?.history.count ?? 0) > 0)
+            Check.that("history is newest first",
+                       zip(kept, kept.dropFirst()).allSatisfy { $0.at >= $1.at })
+        }
+
+        print("\nSEARCH INDEX")
+        // Everything a person can see is a column of `doc_fts`, so each of
+        // these is a ranked hit rather than an unindexed LIKE over the table.
+        if let sample = rows.first(where: { $0.correspondent?.nilIfBlank != nil }),
+           let correspondent = sample.correspondent?.nilIfBlank {
+            let term = correspondent.split(separator: " ").first.map(String.init) ?? correspondent
+            let hits = (try? await store.listDocuments(selection: .all, query: SearchQuery(term),
+                                                       sort: .relevance, ascending: false)) ?? []
+            print(("  correspondent “" + term + "”").padded(40) + "→ \(hits.count) hit(s)")
+            Check.that("a correspondent is searchable without a LIKE fallback",
+                       hits.contains { $0.id == sample.id })
+        }
+        if let sample = rows.first {
+            let stem = sample.url.deletingPathExtension().lastPathComponent
+            let term = stem.split(whereSeparator: { !$0.isLetter }).first.map(String.init) ?? stem
+            let hits = (try? await store.listDocuments(selection: .all, query: SearchQuery(term),
+                                                       sort: .relevance, ascending: false)) ?? []
+            print(("  filename “" + term + "”").padded(40) + "→ \(hits.count) hit(s)")
+            Check.that("a filename is searchable", hits.contains { $0.id == sample.id })
+
+            // A tag assigned now has to be searchable straight away: the index
+            // row is rebuilt on assignment, not on the next full pass.
+            let unique = "doctopusfts\(UUID().uuidString.prefix(6).lowercased())"
+            let tagID = (try? await store.tagID(named: unique)) ?? 0
+            try? await store.assign(tag: tagID, to: sample.doc)
+            let tagged = (try? await store.listDocuments(selection: .all, query: SearchQuery(unique),
+                                                         sort: .relevance, ascending: false)) ?? []
+            Check.that("a tag is searchable as soon as it is assigned",
+                       tagged.contains { $0.id == sample.id }, "\(tagged.count) hit(s)")
+            try? await store.unassign(tag: tagID, from: sample.doc)
+            let untagged = (try? await store.listDocuments(selection: .all, query: SearchQuery(unique),
+                                                           sort: .relevance, ascending: false)) ?? []
+            Check.that("…and stops being searchable when it is taken off", untagged.isEmpty,
+                       "\(untagged.count) hit(s)")
+            try? await store.deleteTag(tagID)
+
+            // The text of one document is a keyed lookup now, not a scan.
+            let text = (try? await store.ocrText(sample.doc)) ?? ""
+            Check.that("a document's text is still readable from the index", !text.isEmpty,
+                       "\(text.count) characters")
+        }
+        // A deleted document takes its searchable text with it: `doc_fts` is a
+        // virtual table, so no foreign key does this for us. Done last, on the
+        // index only — the file itself is never touched by `deleteDocument`.
+        if let victim = rows.last, let word = ((try? await store.ocrText(victim.doc)) ?? "")
+            .split(whereSeparator: { !$0.isLetter }).first.map(String.init) {
+            try? await store.deleteDocument(victim.doc)
+            let orphan = (try? await store.listDocuments(selection: .all, query: SearchQuery(word),
+                                                         sort: .relevance, ascending: false)) ?? []
+            Check.that("deleting a document removes it from the search index",
+                       !orphan.contains { $0.doc == victim.doc })
+            Check.that("…and the file it indexed is left on disk",
+                       FileManager.default.fileExists(atPath: victim.path))
+        }
+
+        print("\nLIBRARY FORMAT")
+        let metaURL = container.appendingPathComponent("meta.json")
+        let stamped = (try? JSONSerialization.jsonObject(with: Data(contentsOf: metaURL)))
+            as? [String: Any]
+        let stampedVersion: Int = (stamped?["formatVersion"] as? Int) ?? -1
+        let stampedApp: String = (stamped?["appVersion"] as? String) ?? "—"
+        print("  meta.json               formatVersion=\(stampedVersion) appVersion=" + stampedApp)
+        Check.that("the writing app stamps the library format it understands",
+                   stamped?["formatVersion"] as? Int == Store.formatVersion)
+
+        // A library from a future version is refused rather than misread.
+        let future = FileManager.default.temporaryDirectory
+            .appendingPathComponent("doctopus-future-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("library.doctopus", isDirectory: true)
+        try? FileManager.default.createDirectory(at: future, withIntermediateDirectories: true)
+        let ahead: [String: Any] = ["id": UUID().uuidString,
+                                    "formatVersion": Store.formatVersion + 1,
+                                    "appVersion": "99.0"]
+        try? JSONSerialization.data(withJSONObject: ahead)
+            .write(to: future.appendingPathComponent("meta.json"))
+        var refused: String?
+        do { _ = try Store(directory: future) }
+        catch let error as Store.OpenError { refused = error.description }
+        catch { refused = nil }
+        print("  a newer library         \(refused ?? "opened anyway")")
+        Check.that("a library from a newer Doctopus is refused, with a reason",
+                   refused?.contains("format version") == true)
+        try? FileManager.default.removeItem(at: future.deletingLastPathComponent())
+
+        print("\nCONTENT HASHES")
+        if let sample = rows.first, let detail = try? await store.detail(sample.doc),
+           let hash = detail.hash {
+            let found = (try? await store.documents(matchingHash: hash)) ?? []
+            print("  " + sample.filename.padded(38) + " " + hash.prefix(12)
+                  + "… → \(found.count) match(es)")
+            Check.that("a document is findable by the hash of its bytes",
+                       found.contains(sample.doc))
+            Check.that("a hash nothing carries matches nothing",
+                       ((try? await store.documents(matchingHash: "0")) ?? []).isEmpty)
+        }
+
         Check.finish("pipeline self-test")
     }
 
@@ -605,8 +1159,8 @@ enum SelfTest {
         for row in rows where row.ext == "pdf" {
             let text = (try? await store.ocrText(row.doc)) ?? ""
             let hit = existing.contains {
-                Router.matches($0.pattern, in: Router.subject(for: $0.field, text: text, filename: row.filename,
-                                                              correspondent: row.correspondent, docType: row.docType))
+                Router.matches($0, in: Router.subject(for: $0.field, text: text, filename: row.filename,
+                                                     correspondent: row.correspondent, docType: row.docType))
             }
             if !hit { neutral = row; break }
         }

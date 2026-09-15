@@ -80,6 +80,7 @@ struct DocumentListView: View {
         switch model.selection {
         case .needsReview: return "Everything the pipeline filed has been reviewed."
         case .queue: return "Imports, scans, moves and optimizations show up here as they happen."
+        case .deleted: return "Documents you move to the Trash wait here, so putting one back brings its tags and history with it."
         default: return "Documents added to this folder appear here as they are indexed. Right-click to scan one in from your iPhone."
         }
     }
@@ -221,7 +222,10 @@ private struct DocumentTableView: View {
             .defaultVisibility(model.libraries.count > 1 ? .visible : .hidden)
 
             TableColumn("Date", sortUsing: DocumentSort(field: .docDate)) { row in
-                Text((row.docDate ?? row.createdAt), format: .dateTime.year().month(.abbreviated).day())
+                // A document date is a stored day; showing it through the local
+                // calendar is how it slips to the day before.
+                Text(row.docDate.map(DayDate.display)
+                     ?? row.createdAt.formatted(.dateTime.year().month(.abbreviated).day()))
                     .monospacedDigit()
                     .foregroundStyle(row.docDate == nil ? .secondary : .primary)
             }
@@ -555,7 +559,12 @@ private struct DocumentMenu: View {
             Divider()
             Menu("Import") { BackgroundMenu() }
             Divider()
-            Button("Move to Trash", role: .destructive) { model.moveToTrash(rows) }
+            if model.selection == .deleted {
+                Button("Put Back") { model.restore(rows) }
+                Button("Remove from Library", role: .destructive) { model.forget(rows) }
+            } else {
+                Button("Move to Trash", role: .destructive) { model.moveToTrash(rows) }
+            }
         }
     }
 }

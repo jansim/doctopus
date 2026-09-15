@@ -133,6 +133,13 @@ struct DocumentDetail: Sendable {
     /// The subset of `aliases` someone filed by hand, as opposed to the ones a
     /// mirrored tag keeps — the document's secondary places.
     var folderAliases: [String] = []
+    /// Everything that has happened to this document, newest first.
+    var history: [HistoryEvent] = []
+    /// What anyone has written about it, newest first.
+    var notes: [Note] = []
+    /// Every date the extractor found, best first — including the ones it did
+    /// not pick, which is what makes correcting a date a click.
+    var dateCandidates: [DateCandidate] = []
 }
 
 /// A folder the router thought a document could be filed in.
@@ -160,8 +167,21 @@ struct Field: Identifiable, Hashable, Sendable {
     var showInList: Bool
     var position: Int64
     var enabled: Bool
+    /// What this field holds. Decides which typed column of `field_values`
+    /// carries the comparable form, and how the inspector offers to edit it.
+    var type: FieldType = .string
+    /// Type-specific configuration, as JSON — the options of a `select`, so far.
+    var extraData: String?
     /// Which library this field belongs to. Stamped by `AppModel`.
     var library: LibraryID = ""
+
+    /// The choices a `select` field offers, in order.
+    var options: [String] {
+        guard type == .select, let extraData, let data = extraData.data(using: .utf8),
+              let decoded = try? JSONDecoder().decode(FieldOptions.self, from: data)
+        else { return [] }
+        return decoded.options
+    }
 
     /// Field keys are unique within a library, and the merged list `AppModel`
     /// hands the views is deduplicated by key — a "Correspondent" column shows
@@ -169,6 +189,37 @@ struct Field: Identifiable, Hashable, Sendable {
     var id: String { key }
 
     var isBuiltin: Bool { builtinColumn != nil }
+}
+
+/// One value of a taxonomy field — a correspondent, a document type — as a row
+/// rather than as a string repeated across every document that has it.
+///
+/// This is what makes renaming one thing instead of thousands, merging two
+/// spellings possible at all, an icon survive a rename, and a value able to
+/// identify itself: "anything mentioning DE12 3456 is from this bank" is how
+/// most classification gets done without a model anywhere near it.
+struct Entity: Identifiable, Hashable, Sendable {
+    var entityID: Int64
+    /// The field this is a value of, by key: `correspondent`, `doc_type`.
+    var fieldKey: String
+    var name: String
+    var icon: String?
+    var color: Int64 = 0
+    /// A pattern that identifies this value in a document's text, read the
+    /// same way a routing rule's pattern is.
+    var match: String?
+    var matchMode: MatchMode = .anyWord
+    var matchInsensitive: Bool = true
+    var count: Int = 0
+    /// Which library this belongs to. Stamped by `AppModel`.
+    var library: LibraryID = ""
+
+    var id: String { "\(library)#\(fieldKey)#\(entityID)" }
+}
+
+/// The `extra_data` JSON of a `select` field.
+struct FieldOptions: Codable, Sendable, Hashable {
+    var options: [String] = []
 }
 
 struct Tag: Identifiable, Hashable, Sendable {
@@ -179,10 +230,21 @@ struct Tag: Identifiable, Hashable, Sendable {
     var mirrors: Bool
     var folder: String?
     var count: Int = 0
+    /// The tag this one sits under, if any. Assigning a child attaches every
+    /// ancestor too, so "Finances" finds what is filed under
+    /// "Finances / Invoices" without anyone tagging both.
+    var parentID: Int64?
+    /// How deep this tag sits, with a root at zero. Filled in by `tags()`,
+    /// which knows the whole shape.
+    var depth: Int = 0
     /// Which library this tag belongs to. Stamped by `AppModel`.
     var library: LibraryID = ""
 
     var id: TagRef { TagRef(library: library, tag: tagID) }
+
+    /// Tags nest, but not without limit. Paperless settled on five and nobody
+    /// has ever asked for a sixth.
+    static let maxDepth = 5
 }
 
 /// A tag the model proposed for a document but that has not been accepted
@@ -200,6 +262,9 @@ struct Facet: Identifiable, Hashable, Sendable {
     /// Set when this particular value has been given its own icon; otherwise
     /// the field's icon stands in.
     var icon: String?
+    /// For a taxonomy value, the pattern that identifies it in a document's
+    /// text. Nil for everything else, which has nowhere to keep one.
+    var match: String?
 }
 
 struct ProcessingEntry: Identifiable, Hashable, Sendable {
@@ -217,6 +282,68 @@ struct ProcessingEntry: Identifiable, Hashable, Sendable {
     var missing: Bool
 }
 
+/// Something a person wrote about a document that the schema has nowhere else
+/// to put. Indexed into the search table with the document's own text.
+struct Note: Identifiable, Hashable, Sendable {
+    var id: Int64
+    var body: String
+    var createdAt: Date
+    var updatedAt: Date?
+
+    var edited: Bool { updatedAt != nil }
+}
+
+/// One thing that happened to a document, straight from the append-only
+/// `events` table. The queue shows a bounded slice of the same data with an
+/// approval state attached; this is the whole record, and it is never trimmed.
+struct HistoryEvent: Identifiable, Hashable, Sendable {
+    var id: Int64
+    var at: Date
+    var action: String
+    var detail: String?
+    var confidence: Double?
+    var rule: String?
+    /// Absolute paths, when the event was a move or a rename.
+    var fromPath: String?
+    var toPath: String?
+
+    var icon: String {
+        switch action {
+        case "routed": return "arrow.triangle.branch"
+        case "optimized": return "arrow.down.circle"
+        case "renamed": return "character.cursor.ibeam"
+        case "moved": return "folder"
+        case "imported": return "tray.and.arrow.down"
+        case "analyzed": return "sparkles"
+        default: return "doc.text.magnifyingglass"
+        }
+    }
+
+    var label: String {
+        switch action {
+        case "routed": return "Filed"
+        case "optimized": return "Optimized"
+        case "renamed": return "Renamed"
+        case "moved": return "Moved"
+        case "imported": return "Imported"
+        case "analyzed": return "Analyzed"
+        case "indexed": return "Indexed"
+        default: return action.capitalized
+        }
+    }
+
+    /// "Inbox → Finances/Invoices/2026", when the event moved the file.
+    func move(relativeTo root: String) -> String? {
+        guard let fromPath, let toPath, fromPath != toPath else { return nil }
+        func trim(_ p: String) -> String {
+            let stripped = p.hasPrefix(root + "/") ? String(p.dropFirst(root.count + 1)) : p
+            return (stripped as NSString).deletingLastPathComponent.nilIfBlank ?? stripped
+        }
+        let from = trim(fromPath), to = trim(toPath)
+        return from == to ? nil : "\(from) → \(to)"
+    }
+}
+
 struct Rule: Identifiable, Hashable, Sendable {
     var id: Int64
     var name: String
@@ -227,6 +354,10 @@ struct Rule: Identifiable, Hashable, Sendable {
     var weight: Double
     var enabled: Bool
     var priority: Int64
+    /// How the pattern is read. Said out loud rather than guessed from whether
+    /// the pattern happens to contain a bracket.
+    var mode: MatchMode = .anyWord
+    var caseInsensitive: Bool = true
 }
 
 /// A node in the physical directory tree shown in the sidebar.
@@ -255,6 +386,9 @@ enum Selection: Hashable, Sendable {
     case field(String, String)
     case untagged
     case needsReview
+    /// Documents moved to the Trash: the row is kept so the file can be put
+    /// back with everything that was ever on it.
+    case deleted
 
     /// Both queue selections render the browser with its review affordances —
     /// Needs Review is simply the queue filtered to undecided entries.

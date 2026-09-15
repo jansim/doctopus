@@ -68,7 +68,7 @@ struct Router: Sendable {
         for rule in rules where rule.enabled {
             let subject = Self.subject(for: rule.field, text: text, filename: filename,
                                        correspondent: correspondent, docType: docType)
-            guard Self.matches(rule.pattern, in: subject) else { continue }
+            guard Self.matches(rule, in: subject) else { continue }
             let dest = expand(rule.destination, correspondent: correspondent,
                               docType: docType, date: findings.date)
             guard isInsideLibrary(dest) else { outside.append(rule.name); continue }
@@ -187,33 +187,51 @@ struct Router: Sendable {
             .map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
     }
 
-    /// What a rule's `field` points it at. Lowercased, since word matching is
-    /// case-insensitive; the rule editor's preview goes through here too, so
-    /// it can never disagree with the router about what a rule sees.
+    /// What a rule's `field` points it at, exactly as written. Case is the
+    /// matcher's business now that a rule can say it cares. The rule editor's
+    /// preview goes through here too, so it can never disagree with the router
+    /// about what a rule sees.
     static func subject(for field: String, text: String, filename: String,
                         correspondent: String?, docType: String?) -> String {
         switch field {
-        case "filename": return filename.lowercased()
-        case "correspondent": return (correspondent ?? "").lowercased()
-        case "type": return (docType ?? "").lowercased()
-        default: return text.lowercased() + "\n" + filename.lowercased()
+        case "filename": return filename
+        case "correspondent": return correspondent ?? ""
+        case "type": return docType ?? ""
+        default: return text + "\n" + filename
         }
     }
 
-    /// How a pattern will be read. The router decides this silently, so the
-    /// rule editor spells it out — a regex that does not compile falls back to
-    /// plain words, which is rarely what whoever typed it meant.
+    /// Whether a rule matches. One entry point for the router and the editor's
+    /// preview, so the count the editor shows is what routing will really do.
+    ///
+    /// "Any word" keeps the behaviour worth keeping: matching at the *start* of
+    /// a word catches "Rechnungsnummer" for the term "rechnung" without firing
+    /// on "Gehaltsabrechnung", where the term is buried inside an unrelated
+    /// compound. A `\b…\b` word boundary, which is what Paperless uses, misses
+    /// German compounds entirely.
+    static func matches(_ rule: Rule, in subject: String) -> Bool {
+        PatternMatcher.matches(rule.pattern, mode: rule.mode,
+                               insensitive: rule.caseInsensitive, in: subject)
+    }
+
+    /// What a pattern will do, for the editor to spell out.
     enum PatternKind: Equatable {
         case empty
         case words([String])
+        case phrase
         case regex
         case invalidRegex(String)
+        case fuzzy([String])
     }
 
-    static func kind(of pattern: String) -> PatternKind {
+    static func kind(of pattern: String, mode: MatchMode = .anyWord) -> PatternKind {
         let p = pattern.trimmingCharacters(in: .whitespaces)
         guard !p.isEmpty else { return .empty }
-        if p.rangeOfCharacter(from: CharacterSet(charactersIn: "^$*+?[]()|\\")) != nil {
+        switch mode {
+        case .anyWord, .allWords: return .words(PatternMatcher.words(in: p))
+        case .exactPhrase: return .phrase
+        case .fuzzy: return .fuzzy(PatternMatcher.words(in: p))
+        case .regex:
             do {
                 _ = try NSRegularExpression(pattern: p, options: [.caseInsensitive])
                 return .regex
@@ -221,29 +239,6 @@ struct Router: Sendable {
                 return .invalidRegex((error as NSError).localizedDescription)
             }
         }
-        return .words(words(in: p))
-    }
-
-    private static func words(in pattern: String) -> [String] {
-        pattern.split(separator: ",")
-            .map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
-            .filter { !$0.isEmpty }
-    }
-
-    /// Substring match, or a real regex when the pattern looks like one.
-    static func matches(_ pattern: String, in subject: String) -> Bool {
-        let p = pattern.trimmingCharacters(in: .whitespaces)
-        guard !p.isEmpty else { return false }
-        if p.rangeOfCharacter(from: CharacterSet(charactersIn: "^$*+?[]()|\\")) != nil,
-           let re = try? NSRegularExpression(pattern: p, options: [.caseInsensitive]) {
-            return re.firstMatch(in: subject, range: NSRange(location: 0, length: (subject as NSString).length)) != nil
-        }
-        // Bare words are OR-ed, so "acme, globex" behaves the way people expect.
-        // Matching is anchored to a word *start* rather than a plain substring:
-        // that still catches "Rechnungsnummer" for the term "rechnung", but no
-        // longer fires on "Gehaltsabrechnung", where the term is buried inside
-        // an unrelated compound.
-        return words(in: p).contains { subject.startsWithWord($0) }
     }
 
     /// Where `template` would file a document with these attributes. Public so

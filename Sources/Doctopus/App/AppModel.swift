@@ -345,7 +345,15 @@ final class AppModel {
         let bookmark = rootBookmark ?? (try? root.bookmarkData(
             includingResourceValuesForKeys: nil, relativeTo: nil))
 
-        guard let store = try? Store(directory: container) else {
+        let store: Store
+        do {
+            store = try Store(directory: container)
+        } catch let error as Store.OpenError {
+            // A library written by a newer Doctopus says so, rather than
+            // looking like a broken folder.
+            errorMessage = error.description
+            return
+        } catch {
             errorMessage = "Could not open a library at \(root.lastPathComponent)."
             return
         }
@@ -957,8 +965,14 @@ final class AppModel {
             for (lib, rows) in grouped(rows) {
                 for row in rows {
                     do {
-                        try FileManager.default.trashItem(at: row.url, resultingItemURL: nil)
-                        try? await lib.store.deleteDocument(row.doc)
+                        var landed: NSURL?
+                        try FileManager.default.trashItem(at: row.url, resultingItemURL: &landed)
+                        // The row stays, marked deleted and remembering where
+                        // in the Trash the file went. Rescuing the file a month
+                        // later brings the document back with its title, tags
+                        // and history rather than as something brand new.
+                        try? await lib.store.softDelete(row.doc,
+                                                        trashPath: (landed as URL?)?.path)
                         trashed += 1
                     } catch {
                         failed.append(row.filename)
@@ -973,6 +987,63 @@ final class AppModel {
                 notify(trashed == 1 && rows.count == 1 ? "Moved “\(rows[0].displayTitle)” to the Trash."
                                                        : "Moved \(trashed) documents to the Trash.")
             }
+        }
+    }
+
+    /// Puts deleted documents back: the file comes out of the Trash and the row
+    /// it always had is revived, rather than the file being re-indexed as
+    /// something new.
+    func restore(_ rows: [DocumentRow]) {
+        Task {
+            var restored = 0
+            var gone: [String] = []
+            for (lib, rows) in grouped(rows) {
+                for row in rows {
+                    guard let trashed = try? await lib.store.trashedFile(row.doc) else {
+                        gone.append(row.filename)
+                        continue
+                    }
+                    let destination = URL(fileURLWithPath: row.path)
+                    do {
+                        try FileManager.default.createDirectory(
+                            at: destination.deletingLastPathComponent(),
+                            withIntermediateDirectories: true)
+                        let target = Naming.uniqueURL(in: destination.deletingLastPathComponent(),
+                                                      filename: destination.lastPathComponent)
+                        try FileManager.default.moveItem(at: URL(fileURLWithPath: trashed), to: target)
+                        try? await lib.store.restore(row.doc, at: target.path)
+                        try? await lib.store.logProcessing(
+                            docID: row.doc, action: "moved", detail: "Restored from the Trash",
+                            confidence: nil, rule: nil, from: trashed, to: target.path, approved: true)
+                        restored += 1
+                    } catch {
+                        gone.append(row.filename)
+                    }
+                }
+            }
+            refreshAll()
+            if !gone.isEmpty {
+                errorMessage = gone.count == 1
+                    ? "“\(gone[0])” is no longer in the Trash, so there is nothing to put back."
+                    : "\(gone.count) of these files are no longer in the Trash."
+            }
+            if restored > 0 {
+                notify(restored == 1 ? "Put “\(rows.first?.displayTitle ?? "the document")” back."
+                                     : "Put \(restored) documents back.")
+            }
+        }
+    }
+
+    /// Forgets a deleted document for good. The file stays in the Trash —
+    /// emptying that is the Finder's business, not Doctopus's.
+    func forget(_ rows: [DocumentRow]) {
+        Task {
+            for (lib, rows) in grouped(rows) {
+                for row in rows { try? await lib.store.deleteDocument(row.doc) }
+            }
+            refreshAll()
+            notify(rows.count == 1 ? "Removed “\(rows[0].displayTitle)” from the library."
+                                   : "Removed \(rows.count) documents from the library.")
         }
     }
 
@@ -1078,6 +1149,25 @@ final class AppModel {
         }
     }
 
+    /// Moves a tag under another, or back to the top level. Refused when it
+    /// would make a loop or push the tree past its depth cap — the store is the
+    /// one that knows, so the answer comes back from there.
+    func setTagParent(_ tag: Tag, to parent: Tag?) {
+        guard let lib = library(tag.library) else { return }
+        if let parent, parent.library != tag.library {
+            errorMessage = "Tags can only be nested inside their own library."
+            return
+        }
+        Task {
+            let moved = (try? await lib.store.setTagParent(tag.tagID, to: parent?.tagID)) ?? false
+            if !moved, parent != nil {
+                errorMessage = "“\(tag.name)” cannot go under “\(parent?.name ?? "")”: "
+                    + "a tag cannot sit inside itself, and tags nest at most \(Tag.maxDepth) deep."
+            }
+            refreshAll()
+        }
+    }
+
     /// New tags go to the library the sidebar selection belongs to.
     func createTag(named name: String, in lib: Library? = nil) {
         guard let lib = lib ?? activeLibrary else { return }
@@ -1165,6 +1255,34 @@ final class AppModel {
         }
     }
 
+    // MARK: - Notes
+
+    /// A note is the escape hatch for what no field models — and it is indexed
+    /// with the document's text, so it is findable afterwards.
+    func addNote(_ body: String, to ref: DocumentRef) {
+        guard let lib = library(ref.library), body.nilIfBlank != nil else { return }
+        Task {
+            _ = try? await lib.store.addNote(body, to: ref.doc)
+            reloadDetail()
+        }
+    }
+
+    func updateNote(_ id: Int64, body: String, in ref: DocumentRef) {
+        guard let lib = library(ref.library) else { return }
+        Task {
+            try? await lib.store.updateNote(id, body: body)
+            reloadDetail()
+        }
+    }
+
+    func deleteNote(_ id: Int64, in ref: DocumentRef) {
+        guard let lib = library(ref.library) else { return }
+        Task {
+            try? await lib.store.deleteNote(id)
+            reloadDetail()
+        }
+    }
+
     func setFieldValue(_ rows: [DocumentRow], field: Field, value: String?) {
         Task {
             for (lib, rows) in grouped(rows) {
@@ -1203,6 +1321,24 @@ final class AppModel {
         }
     }
 
+    /// Gives a correspondent or document type a pattern that identifies it, so
+    /// every document mentioning it is filed as it from now on — no model, no
+    /// network, and right every time the pattern is. An empty pattern stops it.
+    func setEntityMatch(_ field: Field, value: String, pattern: String) {
+        Task {
+            for (lib, owned) in librariesDefining(field) {
+                guard let column = owned.builtinColumn,
+                      let id = try? await lib.store.existingEntityID(named: value, builtin: column)
+                else { continue }
+                try? await lib.store.setEntityMatch(id, pattern: pattern.nilIfBlank)
+            }
+            refreshAll()
+            if pattern.nilIfBlank != nil {
+                notify("Documents mentioning that will be filed as “\(value)”.")
+            }
+        }
+    }
+
     func deleteFieldValue(_ field: Field, value: String) {
         Task {
             for (lib, field) in librariesDefining(field) {
@@ -1232,9 +1368,11 @@ final class AppModel {
     /// Fields are a vocabulary the open libraries share — the centre pane shows
     /// one column per key however many libraries fill it — so a new one is
     /// added to every library rather than to a chosen one.
-    func addCustomField(named name: String) {
+    func addCustomField(named name: String, type: FieldType = .string) {
         Task {
-            for lib in libraries { _ = try? await lib.store.addCustomField(name: name) }
+            for lib in libraries {
+                _ = try? await lib.store.addCustomField(name: name, type: type)
+            }
             refreshAll()
         }
     }

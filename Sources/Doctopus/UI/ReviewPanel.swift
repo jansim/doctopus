@@ -129,8 +129,10 @@ private struct GeneratedInfoEditor: View {
                                 displayedComponents: .date)
                             .labelsHidden()
                             .datePickerStyle(.compact)
+                            .dayResolution()
                         }
                     }
+                    if detail.dateCandidates.count > 1 { dateChoices }
                     if let summary = row.summary {
                         Text(summary)
                             .font(.caption).foregroundStyle(.secondary)
@@ -154,6 +156,37 @@ private struct GeneratedInfoEditor: View {
     private var hasGenerated: Bool {
         detail.metadataSource != nil || !detail.tagSuggestions.isEmpty || !detail.pathSuggestions.isEmpty
             || row.title != nil || row.correspondent != nil || row.docType != nil
+    }
+
+    /// The other dates the extractor found. `03/04/2026` is read wrong often
+    /// enough that the second-best guess sitting right there, one click away,
+    /// is the cheapest correction on this screen.
+    private var dateChoices: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("ALSO FOUND")
+                .font(.caption2.weight(.semibold)).foregroundStyle(.secondary).kerning(0.5)
+            FlowLayout(spacing: 5) {
+                ForEach(detail.dateCandidates) { candidate in
+                    let chosen = row.docDate == candidate.date
+                    Button {
+                        model.setDocumentDate(row.id, candidate.date)
+                    } label: {
+                        HStack(spacing: 4) {
+                            Text(DayDate.display(candidate.date)).font(.caption)
+                            Text(candidate.cue ?? candidate.sourceLabel)
+                                .font(.caption2).foregroundStyle(.tertiary)
+                        }
+                        .padding(.horizontal, 7).padding(.vertical, 3)
+                        .background(chosen ? Color.accentColor.opacity(0.18) : Color.secondary.opacity(0.10),
+                                    in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .help(candidate.labelled
+                          ? "Labelled “\(candidate.cue ?? "")” \(candidate.sourceLabel)"
+                          : "Found \(candidate.sourceLabel)")
+                }
+            }
+        }
     }
 
     private var tags: some View {

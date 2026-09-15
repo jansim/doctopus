@@ -18,6 +18,11 @@ struct SidebarView: View {
                     model.queue.filter { !$0.approved }.count)
                 row(.untagged, "Untagged", "tag.slash", nil)
                 row(.queue, "Recent Processing", "clock.arrow.circlepath", model.queue.count)
+                // Only worth a row when there is something in it: an empty
+                // Trash is not a place anyone needs to visit.
+                if model.stats.deleted > 0 {
+                    row(.deleted, "Recently Deleted", "trash", model.stats.deleted)
+                }
             }
 
             // Folders and tags belong to one library each, so with more than
@@ -115,7 +120,7 @@ struct SidebarView: View {
     @ViewBuilder
     private func tagRows(_ library: Library) -> some View {
         ForEach(library.tags) { tag in
-            TagRow(tag: tag)
+            TagRow(tag: tag, siblings: library.tags)
         }
         Button {
             guard let name = TextPrompt.ask(title: "New Tag",
@@ -160,6 +165,18 @@ struct SidebarView: View {
                 initial: facet.value) else { return }
             model.renameFieldValue(field, from: facet.value, to: new)
         }
+        // A taxonomy value can identify itself. This is how most
+        // classification gets done with no model involved at all.
+        if Store.entityColumn(for: field.builtinColumn) != nil {
+            Button("Identify by…") {
+                guard let pattern = TextPrompt.ask(
+                    title: "Identify “\(facet.value)”",
+                    message: "Any document whose text contains one of these comma-separated words is filed as “\(facet.value)”. Leave it empty to stop.",
+                    initial: facet.match ?? "",
+                    confirm: "Save", allowEmpty: true) else { return }
+                model.setEntityMatch(field, value: facet.value, pattern: pattern)
+            }
+        }
         Button("Clear from \(facet.count) Document\(facet.count == 1 ? "" : "s")", role: .destructive) {
             model.deleteFieldValue(field, value: facet.value)
         }
@@ -200,11 +217,20 @@ private struct LibraryHeader: View {
 private struct TagRow: View {
     @Environment(AppModel.self) private var model
     let tag: Tag
+    /// Every tag in the same library, for the "Move Under" menu.
+    var siblings: [Tag] = []
     @State private var targeted = false
 
     var body: some View {
         Label {
             HStack {
+                // Nesting is drawn by indentation rather than by disclosure
+                // triangles: a tag tree is shallow, and hiding a child behind a
+                // twisty makes it harder to drop onto, which is what these rows
+                // are mostly for.
+                if tag.depth > 0 {
+                    Spacer().frame(width: CGFloat(tag.depth) * 11)
+                }
                 Text(tag.name)
                 Spacer()
                 if tag.mirrors {
@@ -227,6 +253,18 @@ private struct TagRow: View {
         } isTargeted: { targeted = $0 }
     }
 
+    /// Every tag this one could sit under: not itself, and not anything already
+    /// below it, which would make a loop out of the tree.
+    private var candidateParents: [Tag] {
+        var banned: Set<Int64> = [tag.tagID]
+        // `siblings` is in drawing order, parents before children, so one pass
+        // is enough to find the whole subtree.
+        for other in siblings where other.parentID.map({ banned.contains($0) }) == true {
+            banned.insert(other.tagID)
+        }
+        return siblings.filter { !banned.contains($0.tagID) }
+    }
+
     @ViewBuilder
     private var menu: some View {
         Button("Rename…") {
@@ -247,6 +285,20 @@ private struct TagRow: View {
         Toggle("Mirror to Disk as Aliases", isOn: Binding(
             get: { tag.mirrors },
             set: { model.setTagMirroring(tag, enabled: $0) }))
+        // Nesting: assigning a child assigns its parents too, so filtering by
+        // the parent finds everything underneath it.
+        Menu("Move Under") {
+            Button("Nothing — Top Level") { model.setTagParent(tag, to: nil) }
+                .disabled(tag.parentID == nil)
+            Divider()
+            ForEach(candidateParents) { other in
+                Button(String(repeating: "    ", count: other.depth) + other.name) {
+                    model.setTagParent(tag, to: other)
+                }
+                .disabled(other.tagID == tag.parentID)
+            }
+        }
+        .disabled(candidateParents.isEmpty && tag.parentID == nil)
         Divider()
         Button("Delete Tag", role: .destructive) { model.deleteTag(tag) }
     }
@@ -351,8 +403,10 @@ private struct FolderRow: View {
 /// context menu; for a one-field question this is the honest amount of code.
 enum TextPrompt {
     @MainActor
+    /// `allowEmpty` is for the prompts where clearing the field is a real
+    /// answer rather than a cancel — a pattern you want to stop using.
     static func ask(title: String, message: String, initial: String,
-                    confirm: String = "Rename") -> String? {
+                    confirm: String = "Rename", allowEmpty: Bool = false) -> String? {
         let alert = NSAlert()
         alert.messageText = title
         alert.informativeText = message
@@ -363,7 +417,7 @@ enum TextPrompt {
         alert.addButton(withTitle: "Cancel")
         alert.window.initialFirstResponder = field
         guard alert.runModal() == .alertFirstButtonReturn else { return nil }
-        return field.stringValue.nilIfBlank
+        return allowEmpty ? field.stringValue : field.stringValue.nilIfBlank
     }
 }
 

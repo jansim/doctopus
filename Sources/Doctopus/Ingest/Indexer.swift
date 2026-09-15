@@ -36,6 +36,8 @@ actor Indexer {
 
     func update(settings: AppSettings) async {
         self.settings = settings
+        languageCache = nil
+        entityRuleCache = nil
         await intelligence.update(settings: settings)
     }
     func cancel() { cancelled = true }
@@ -72,8 +74,12 @@ actor Indexer {
         }
         _ = try? await store.reconcileMissing(seenPaths: seen)
 
-        // Documents gone for over a week are not coming back as a move.
-        _ = try? await store.purgeMissing(olderThan: 7 * 24 * 3600)
+        // A row whose file has been gone for a month is not coming back as a
+        // move — unless the file is sitting in the Trash, which `purgeMissing`
+        // checks before forgetting anything. Documents deleted on purpose age
+        // out on the same clock.
+        _ = try? await store.purgeMissing()
+        _ = try? await store.purgeDeleted()
 
         // Anything still pending from a previous interrupted run.
         if let pending = try? await store.documentIDsNeedingOCR() {
@@ -215,7 +221,10 @@ actor Indexer {
             return name
         }
 
-        if let hash = FileScanner.hash(url) { try? await store.setHash(id, hash) }
+        // Hashed before anything rewrites it, so the pre-optimization bytes are
+        // on record: that is the hash an identical original would present on a
+        // later import.
+        if let hash = FileScanner.hash(url) { try? await store.setHash(id, hash, isOriginal: true) }
 
         // The Finder's tags are read straight off the file every pass, so the
         // index follows whatever was done in the Finder without owning it.
@@ -253,7 +262,12 @@ actor Indexer {
         let known = (try? await store.facets(column: "correspondent"))?.map(\.value) ?? []
         let created = (try? url.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? Date()
         let findings = DocumentAnalyzer.analyze(url: url, text: extracted.text,
-                                                fallbackDate: created, knownCorrespondents: known)
+                                                fallbackDate: created, knownCorrespondents: known,
+                                                options: await analyzerOptions())
+        // Every date found is kept, not just the one that won. `03/04/2026` is
+        // wrong half the time however carefully it is read, and the runner-up
+        // as a chip in the review is a click rather than a retype.
+        try? await store.setDateCandidates(findings.dates, for: id)
 
         // 4. Optional model enrichment, on-device or over the network.
         var insight: DocumentInsight?
@@ -298,6 +312,26 @@ actor Indexer {
                                            from: nil, to: nil, approved: true)
         }
         return name
+    }
+
+    /// How this library reads a date, cached for the length of a pass: the
+    /// dominant language is a grouped scan, and asking per document would run
+    /// it once for every file in a bulk import.
+    private var languageCache: String??
+    /// The correspondents and types that identify themselves, loaded once a
+    /// pass for the same reason.
+    private var entityRuleCache: [Entity]?
+    private func analyzerOptions() async -> DocumentAnalyzer.Options {
+        if languageCache == nil {
+            languageCache = .some((try? await store.dominantLanguage()) ?? nil)
+        }
+        if entityRuleCache == nil {
+            entityRuleCache = (try? await store.matchingEntities()) ?? []
+        }
+        return DocumentAnalyzer.Options(dateOrder: settings.dateOrder,
+                                        ignoredDays: settings.ignoredDays,
+                                        language: languageCache ?? nil,
+                                        entityRules: entityRuleCache ?? [])
     }
 
     private func summaryLine(_ t: ExtractedText, _ f: DocumentAnalyzer.Findings, _ i: DocumentInsight?) -> String {

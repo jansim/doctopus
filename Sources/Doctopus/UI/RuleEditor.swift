@@ -50,10 +50,14 @@ struct RuleEditor: View {
                     Picker("Look in", selection: $draft.field) {
                         ForEach(Self.fields, id: \.key) { Text($0.label).tag($0.key) }
                     }
-                    TextField(text: $draft.pattern, prompt: Text("invoice, rechnung, facture")) {
+                    Picker("Match", selection: $draft.mode) {
+                        ForEach(MatchMode.allCases, id: \.self) { Text($0.label).tag($0) }
+                    }
+                    TextField(text: $draft.pattern, prompt: Text(patternPrompt)) {
                         Text("Pattern").font(.body)
                     }
                     .font(.system(.body, design: .monospaced))
+                    Toggle("Ignore capitalisation", isOn: $draft.caseInsensitive)
                     patternExplanation
                     matchPreview
                 } header: {
@@ -136,6 +140,8 @@ struct RuleEditor: View {
         }
         .onChange(of: draft.pattern) { refreshMatches() }
         .onChange(of: draft.field) { refreshMatches() }
+        .onChange(of: draft.mode) { refreshMatches() }
+        .onChange(of: draft.caseInsensitive) { refreshMatches() }
     }
 
     private var canSave: Bool {
@@ -144,25 +150,46 @@ struct RuleEditor: View {
 
     // MARK: - Pattern
 
+    private var patternPrompt: String {
+        switch draft.mode {
+        case .anyWord, .allWords, .fuzzy: return "invoice, rechnung, facture"
+        case .exactPhrase: return "amount due"
+        case .regex: return "^inv-\\d+"
+        }
+    }
+
     @ViewBuilder
     private var patternExplanation: some View {
-        switch Router.kind(of: draft.pattern) {
+        switch Router.kind(of: draft.pattern, mode: draft.mode) {
         case .empty:
-            Text("Comma-separated words match any of them, at the start of a word. Anything with regex characters in it is read as a case-insensitive regular expression.")
+            Text("Comma-separated words are matched at the start of a word, so “rechnung” catches “Rechnungsnummer” without firing on “Gehaltsabrechnung”.")
                 .font(.caption).foregroundStyle(.secondary)
         case .words(let words):
-            Text(words.count == 1
-                 ? "Matches words starting with “\(words[0])”."
-                 : "Matches any of \(words.count) words: \(words.map { "“\($0)”" }.joined(separator: ", ")).")
+            Text(explain(words, joiner: draft.mode == .allWords ? "all of" : "any of"))
+                .font(.caption).foregroundStyle(.secondary)
+        case .phrase:
+            Text("Matched as one phrase, with any line break or run of spaces allowed between the words — OCR breaks a phrase across a line more often than anything else defeats a literal match.")
+                .font(.caption).foregroundStyle(.secondary)
+        case .fuzzy(let words):
+            Text(words.isEmpty
+                 ? "Close enough counts, for OCR noise."
+                 : "Matches words within a typo or two of \(words.map { "“\($0)”" }.joined(separator: ", ")) — “Rechnunq” still catches “Rechnung”.")
                 .font(.caption).foregroundStyle(.secondary)
         case .regex:
-            Text("Read as a case-insensitive regular expression.")
+            Text("A regular expression\(draft.caseInsensitive ? ", ignoring capitalisation" : "").")
                 .font(.caption).foregroundStyle(.secondary)
         case .invalidRegex(let reason):
-            Label("Not a valid regular expression, so it is matched as plain words instead. \(reason)",
+            Label("Not a valid regular expression, so this rule will never match. \(reason)",
                   systemImage: "exclamationmark.triangle.fill")
                 .font(.caption).foregroundStyle(.orange)
         }
+    }
+
+    private func explain(_ words: [String], joiner: String) -> String {
+        guard !words.isEmpty else { return "Nothing to match yet." }
+        if words.count == 1 { return "Matches words starting with “\(words[0])”." }
+        return "Matches \(joiner) \(words.count) words: "
+            + words.map { "“\($0)”" }.joined(separator: ", ") + "."
     }
 
     @ViewBuilder
@@ -189,13 +216,13 @@ struct RuleEditor: View {
     /// keystroke for a few thousand documents.
     private func refreshMatches() {
         guard let samples else { return }
-        let pattern = draft.pattern, field = draft.field
+        let rule = draft
         var names: [String] = []
         var count = 0
         for sample in samples {
-            let subject = Router.subject(for: field, text: sample.text, filename: sample.filename,
+            let subject = Router.subject(for: rule.field, text: sample.text, filename: sample.filename,
                                          correspondent: sample.correspondent, docType: sample.docType)
-            guard Router.matches(pattern, in: subject) else { continue }
+            guard Router.matches(rule, in: subject) else { continue }
             count += 1
             if names.count < 3 { names.append(sample.filename) }
         }

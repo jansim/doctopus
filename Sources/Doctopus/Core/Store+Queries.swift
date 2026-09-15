@@ -7,11 +7,15 @@ extension Store {
     func listDocuments(selection: Selection, query: SearchQuery, sort: SortField,
                        ascending: Bool, limit: Int = 500) throws -> [DocumentRow] {
         let allFields = try cachedFields()
-        var wheres: [String] = ["d.missing=0"]
         var args: [Database.Value] = []
+        // Deleted documents are out of every listing but their own, which is
+        // the only place the row is allowed to show through at all.
+        var wheres: [String] = selection == .deleted
+            ? ["d.deleted_at IS NOT NULL"]
+            : ["d.missing=0", "d.deleted_at IS NULL"]
 
         switch selection {
-        case .all: break
+        case .all, .deleted: break
         case .inbox:
             wheres.append("(d.directory = ? OR d.directory LIKE ?)")
             args.append(.text("Inbox")); args.append(.text("%/Inbox"))
@@ -73,25 +77,22 @@ extension Store {
             }
         }
 
-        // Text search: FTS5 hit on OCR content, OR a LIKE on the human-facing fields.
+        // Text search. Every human-facing surface is a column of `doc_fts`, so
+        // one MATCH covers title, correspondent, type, tags, field values,
+        // filename and body — no `LIKE '%…%'` fallback, and no unranked
+        // results mixed into a ranked list.
         var joinFTS = ""
         var snippetCol = "NULL"
         if let expr = query.ftsExpression {
             joinFTS = """
-            LEFT JOIN (
-                SELECT doc_id, rank AS r, snippet(ocr_content, 0, '', '', '…', 14) AS snip
-                FROM ocr_content WHERE ocr_content MATCH ?
-            ) h ON h.doc_id = d.id
+            JOIN (
+                SELECT rowid AS doc, bm25(doc_fts, \(Store.bm25Weights)) AS r,
+                       snippet(doc_fts, 7, '', '', '…', 14) AS snip
+                FROM doc_fts WHERE doc_fts MATCH ?
+            ) h ON h.doc = d.id
             """
             snippetCol = "h.snip"
             args.insert(.text(expr), at: 0)  // the MATCH bind comes before the WHERE binds
-
-            var ors = ["h.doc_id IS NOT NULL"]
-            for p in query.likePatterns {
-                ors.append("(d.filename LIKE ? OR m.title LIKE ? OR m.correspondent LIKE ?)")
-                args.append(.text(p)); args.append(.text(p)); args.append(.text(p))
-            }
-            wheres.append("(" + ors.joined(separator: " OR ") + ")")
         }
 
         // Queue mode carries the latest pipeline event alongside each row, so
@@ -101,23 +102,50 @@ extension Store {
         if selection.isQueueMode {
             joinQueue = """
             LEFT JOIN processing p
-                ON p.id = (SELECT id FROM processing WHERE doc_id = d.id ORDER BY at DESC LIMIT 1)
+                ON p.id = (SELECT id FROM processing WHERE doc_id = d.id ORDER BY id DESC LIMIT 1)
+            LEFT JOIN events pe ON pe.id = p.event_id
             """
-            queueColumns = "p.id, p.at, p.action, p.detail, p.confidence, p.rule, p.status"
+            queueColumns = "p.id, pe.at, pe.action, pe.detail, pe.confidence, pe.rule, p.status"
         }
 
         let order: String
-        if selection.isQueueMode {
-            order = "p.at DESC"
+        if selection == .deleted {
+            order = "d.deleted_at DESC"
+        } else if selection.isQueueMode {
+            order = "pe.at DESC"
         } else if sort == .relevance && !joinFTS.isEmpty {
-            order = "(h.r IS NULL), h.r ASC, d.created_at DESC"
+            // bm25() is more negative the better the match.
+            order = "h.r ASC, d.created_at DESC"
         } else if case .field(let key) = sort, let f = allFields.first(where: { $0.key == key }) {
-            // Built-ins are columns; everything else is one row in the EAV table.
-            let expr = f.builtinColumn.map { "m.\($0)" }
-                ?? "(SELECT value FROM field_values WHERE doc_id = d.id AND field_id = \(f.id))"
+            // A typed field sorts by its number, day or flag; only text sorts
+            // by how it is spelled. That is the difference between €90 coming
+            // before €1,200 and coming after it.
+            let expr: String
+            let collate: String
+            if let column = f.builtinColumn {
+                if column == "amount" {
+                    // The amount keeps its currency in the text and its value
+                    // in a column of its own.
+                    expr = "m.amount_value"
+                    collate = ""
+                } else if let idColumn = Store.entityColumns[column] {
+                    expr = "(SELECT name FROM entities WHERE id = m.\(idColumn))"
+                    collate = " COLLATE NOCASE"
+                } else {
+                    expr = "m.\(column)"
+                    collate = " COLLATE NOCASE"
+                }
+            } else if let typed = f.type.storageColumn {
+                expr = "(SELECT \(typed) FROM field_values WHERE doc_id = d.id AND field_id = \(f.fieldID))"
+                collate = ""
+            } else {
+                expr = "(SELECT value FROM field_values WHERE doc_id = d.id AND field_id = \(f.fieldID))"
+                collate = " COLLATE NOCASE"
+            }
             // Blank values sort last whichever way the column points, so an
             // unfilled field never heads the list.
-            order = "(\(expr) IS NULL OR \(expr) = ''), \(expr) COLLATE NOCASE \(ascending ? "ASC" : "DESC")"
+            let blank = collate.isEmpty ? "\(expr) IS NULL" : "\(expr) IS NULL OR \(expr) = ''"
+            order = "(\(blank)), \(expr)\(collate) \(ascending ? "ASC" : "DESC")"
         } else {
             let column = sort.column ?? SortField.added.column!
             order = "\(sort == .relevance ? SortField.added.column! : column) \(ascending ? "ASC" : "DESC")"
@@ -126,10 +154,12 @@ extension Store {
         let sql = """
         SELECT d.id, d.path, d.directory, d.filename, d.ext, d.size, d.original_size,
                d.created_at, d.mtime, d.ocr_state, d.page_count, d.approved, d.missing,
-               m.title, m.correspondent, m.doc_type, m.language, m.doc_date, m.summary,
+               m.title, ec.name, et.name, m.language, m.doc_date, m.summary,
                \(snippetCol), \(queueColumns)
         FROM documents d
         LEFT JOIN metadata m ON m.doc_id = d.id
+        LEFT JOIN entities ec ON ec.id = m.correspondent_id
+        LEFT JOIN entities et ON et.id = m.doc_type_id
         \(joinFTS)
         \(joinQueue)
         WHERE \(wheres.joined(separator: " AND "))
@@ -196,6 +226,20 @@ extension Store {
         if let column = field.builtinColumn {
             let allowed = ["correspondent", "doc_type", "language", "amount", "intent"]
             guard allowed.contains(column) else { return }
+            // A taxonomy value is a row, so the filter is on its id — which is
+            // also why two spellings can no longer be two different filters.
+            if let idColumn = Store.entityColumns[column] {
+                // Qualified, because `fields` has a `name` column of its own.
+                let comparison = exact ? "e.name = ?" : "e.name LIKE ?"
+                wheres.append("""
+                    m.\(idColumn) IN (SELECT e.id FROM entities e
+                                      JOIN fields f ON f.id = e.field_id
+                                      WHERE f.builtin_column = ? AND \(comparison))
+                    """)
+                args.append(.text(column))
+                args.append(.text(exact ? value : "%\(value)%"))
+                return
+            }
             if exact {
                 wheres.append("m.\(column) = ?"); args.append(.text(value))
             } else {
@@ -213,11 +257,13 @@ extension Store {
         guard let base = try db.first("""
             SELECT d.id, d.path, d.directory, d.filename, d.ext, d.size, d.original_size,
                    d.created_at, d.mtime, d.ocr_state, d.page_count, d.approved, d.missing, d.hash,
-                   m.title, m.correspondent, m.doc_type, m.language, m.doc_date, m.summary,
+                   m.title, ec.name, et.name, m.language, m.doc_date, m.summary,
                    m.intent, m.date_source, m.confidence, m.source, m.amount,
                    s.confidence, s.words, s.source
             FROM documents d
             LEFT JOIN metadata m ON m.doc_id=d.id
+            LEFT JOIN entities ec ON ec.id = m.correspondent_id
+            LEFT JOIN entities et ON et.id = m.doc_type_id
             LEFT JOIN ocr_stats s ON s.doc_id=d.id
             WHERE d.id=?
             """, [.int(id)], { r -> DocumentDetail in
@@ -262,6 +308,9 @@ extension Store {
         d.pathSuggestions = try pathSuggestions(for: id)
         d.similarFolders = try similarFolders(for: id)
         d.folderAliases = try folderAliases(for: id)
+        d.history = try history(for: id)
+        d.notes = try notes(for: id)
+        d.dateCandidates = try dateCandidates(for: id)
         d.row.finderTags = try finderTags(docID: id)
         d.aliases = try aliases(for: id).map(\.path)
         return d
@@ -275,7 +324,7 @@ extension Store {
     /// the nodes it returns carry absolute paths.
     func folderTree() throws -> [FolderNode] {
         var counts: [String: Int] = [:]
-        try db.query("SELECT directory, COUNT(*) FROM documents WHERE missing=0 GROUP BY directory") {
+        try db.query("SELECT directory, COUNT(*) FROM documents WHERE missing=0 AND deleted_at IS NULL GROUP BY directory") {
             counts[$0.string(0)] = Int($0.int(1))
         }
 
@@ -308,9 +357,16 @@ extension Store {
     func facets(column: String) throws -> [Facet] {
         let allowed = ["correspondent", "doc_type", "language"]
         guard allowed.contains(column) else { return [] }
+        // A taxonomy field's values are rows, so its facets come from there —
+        // icon included, which is how an icon now survives a rename.
+        if Store.entityColumns[column] != nil {
+            return try entities(builtin: column)
+                .filter { $0.count > 0 }
+                .map { Facet(value: $0.name, count: $0.count, icon: $0.icon, match: $0.match) }
+        }
         return try db.map("""
             SELECT m.\(column), COUNT(*) FROM metadata m
-            JOIN documents d ON d.id=m.doc_id AND d.missing=0
+            JOIN documents d ON d.id=m.doc_id AND d.missing=0 AND d.deleted_at IS NULL
             WHERE m.\(column) IS NOT NULL AND TRIM(m.\(column)) <> ''
             GROUP BY m.\(column) COLLATE NOCASE ORDER BY COUNT(*) DESC, m.\(column) COLLATE NOCASE
             """) { Facet(value: $0.string(0), count: Int($0.int(1))) }
@@ -323,12 +379,16 @@ extension Store {
         var needsReview = 0
         var bytes: Int64 = 0
         var saved: Int64 = 0
+        /// Documents in the Trash whose rows are still here, waiting to be
+        /// restored or to age out.
+        var deleted = 0
 
         /// Summed across the open libraries for the app-wide footer.
         static func + (a: Stats, b: Stats) -> Stats {
             Stats(total: a.total + b.total, pending: a.pending + b.pending,
                   failed: a.failed + b.failed, needsReview: a.needsReview + b.needsReview,
-                  bytes: a.bytes + b.bytes, saved: a.saved + b.saved)
+                  bytes: a.bytes + b.bytes, saved: a.saved + b.saved,
+                  deleted: a.deleted + b.deleted)
         }
     }
 
@@ -338,18 +398,19 @@ extension Store {
             SELECT COUNT(*),
                    SUM(ocr_state=0), SUM(ocr_state=2), SUM(approved=0),
                    SUM(size), SUM(COALESCE(original_size,size) - size)
-            FROM documents WHERE missing=0
+            FROM documents WHERE missing=0 AND deleted_at IS NULL
             """) { r in
             s.total = Int(r.int(0)); s.pending = Int(r.int(1)); s.failed = Int(r.int(2))
             s.needsReview = Int(r.int(3)); s.bytes = r.int(4); s.saved = max(0, r.int(5))
         }
+        s.deleted = try deletedCount()
         return s
     }
 
     /// Distinct absolute folders under the root, for the "Move to…" menu.
     func allDirectories() throws -> [String] {
         var set = Set<String>()
-        try db.query("SELECT DISTINCT directory FROM documents WHERE missing=0") {
+        try db.query("SELECT DISTINCT directory FROM documents WHERE missing=0 AND deleted_at IS NULL") {
             set.insert(absPath($0.string(0)))
         }
         return set.sorted()

@@ -18,7 +18,7 @@ extension Store {
             } else {
                 try db.run("""
                     UPDATE processing SET status=0
-                    WHERE id = (SELECT id FROM processing WHERE doc_id=? ORDER BY at DESC LIMIT 1)
+                    WHERE id = (SELECT id FROM processing WHERE doc_id=? ORDER BY id DESC LIMIT 1)
                     """, [.int(docID)])
             }
             try db.run("UPDATE documents SET approved=? WHERE id=?", [.bool(approved), .int(docID)])
@@ -49,7 +49,7 @@ extension Store {
     func discardGeneratedInfo(_ docID: Int64) throws {
         try db.transaction {
             try db.run("""
-                UPDATE metadata SET title=NULL, correspondent=NULL, doc_type=NULL, language=NULL,
+                UPDATE metadata SET title=NULL, correspondent_id=NULL, doc_type_id=NULL, language=NULL,
                                     summary=NULL, intent=NULL, amount=NULL, confidence=NULL,
                                     source=NULL,
                                     doc_date = CASE WHEN date_source='manual' THEN doc_date END,
@@ -59,6 +59,7 @@ extension Store {
             try db.run("DELETE FROM document_tags WHERE doc_id=? AND auto=1", [.int(docID)])
             try db.run("DELETE FROM tag_suggestions WHERE doc_id=?", [.int(docID)])
             try db.run("DELETE FROM path_suggestions WHERE doc_id=?", [.int(docID)])
+            try refreshSearchIndex(docID)
         }
     }
 
@@ -69,23 +70,26 @@ extension Store {
     /// habits are often a better guess than any rule, and they cost nothing to
     /// offer.
     func similarFolders(for docID: Int64, limit: Int = 4) throws -> [PathSuggestion] {
-        guard let (correspondent, docType, directory) = try db.first("""
-            SELECT m.correspondent, m.doc_type, d.directory FROM documents d
+        guard let (correspondentID, docTypeID, directory) = try db.first("""
+            SELECT m.correspondent_id, m.doc_type_id, d.directory FROM documents d
             LEFT JOIN metadata m ON m.doc_id = d.id WHERE d.id=?
-            """, [.int(docID)], { ($0.stringOrNil(0), $0.stringOrNil(1), $0.string(2)) })
+            """, [.int(docID)], { ($0.intOrNil(0), $0.intOrNil(1), $0.string(2)) })
         else { return [] }
 
         var out: [PathSuggestion] = []
         var seen: Set<String> = [directory]
-        for (column, value, label) in [("correspondent", correspondent, "from"),
-                                       ("doc_type", docType, "of type")] {
-            guard let value = value?.nilIfBlank else { continue }
+        // Matching on the entity rather than on its spelling: two documents
+        // from the same correspondent are now the same correspondent even when
+        // the extractor wrote the name two ways.
+        for (idColumn, entityID, label) in [("correspondent_id", correspondentID, "from"),
+                                            ("doc_type_id", docTypeID, "of type")] {
+            guard let entityID, let value = try entityName(entityID)?.nilIfBlank else { continue }
             let rows = try db.map("""
                 SELECT d.directory, COUNT(*) FROM documents d
                 JOIN metadata m ON m.doc_id = d.id
-                WHERE d.missing=0 AND d.id<>? AND m.\(column) = ? COLLATE NOCASE
+                WHERE d.missing=0 AND d.deleted_at IS NULL AND d.id<>? AND m.\(idColumn) = ?
                 GROUP BY d.directory ORDER BY COUNT(*) DESC LIMIT ?
-                """, [.int(docID), .text(value), .int(Int64(limit))]) { ($0.string(0), Int($0.int(1))) }
+                """, [.int(docID), .int(entityID), .int(Int64(limit))]) { ($0.string(0), Int($0.int(1))) }
             let total = max(1, rows.reduce(0) { $0 + $1.1 })
             for (dir, count) in rows where seen.insert(dir).inserted {
                 out.append(PathSuggestion(

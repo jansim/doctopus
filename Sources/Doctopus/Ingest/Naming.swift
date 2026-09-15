@@ -16,11 +16,15 @@ enum Naming {
         var ext: String
     }
 
+    /// A document date is a day, stored as the UTC start of it, so every token
+    /// that renders one reads it back in UTC. Rendering in the local timezone
+    /// is how `{year}` ends up filing a document issued on 1 January into the
+    /// previous year on a Mac three hours west of where it was scanned.
     private static let isoDay: DateFormatter = {
         let f = DateFormatter()
         f.locale = Locale(identifier: "en_US_POSIX")
         f.dateFormat = "yyyy-MM-dd"
-        f.timeZone = .current
+        f.timeZone = TimeZone(secondsFromGMT: 0)
         return f
     }()
 
@@ -50,13 +54,14 @@ enum Naming {
             if let arg {
                 let f = DateFormatter()
                 f.locale = Locale(identifier: "en_US_POSIX")
+                f.timeZone = TimeZone(secondsFromGMT: 0)
                 f.dateFormat = arg
                 return f.string(from: d)
             }
             return isoDay.string(from: d)
-        case "year":  return ctx.date.map { String(Calendar.current.component(.year, from: $0)) } ?? ""
-        case "month": return ctx.date.map { String(format: "%02d", Calendar.current.component(.month, from: $0)) } ?? ""
-        case "day":   return ctx.date.map { String(format: "%02d", Calendar.current.component(.day, from: $0)) } ?? ""
+        case "year":  return ctx.date.map { String(DayDate.calendar.component(.year, from: $0)) } ?? ""
+        case "month": return ctx.date.map { String(format: "%02d", DayDate.calendar.component(.month, from: $0)) } ?? ""
+        case "day":   return ctx.date.map { String(format: "%02d", DayDate.calendar.component(.day, from: $0)) } ?? ""
         case "correspondent", "from": return sanitize(ctx.correspondent ?? "")
         case "title":  return sanitize(ctx.title ?? ctx.originalStem)
         case "type":   return sanitize(ctx.docType ?? "")

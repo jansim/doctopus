@@ -63,6 +63,12 @@ struct AppSettings: Codable, Sendable, Equatable {
     var mirrorTagsAsAliases = false
     var ocrConcurrency = 0        // 0 = auto
     var scanDestination = "Inbox"
+    /// How to read an ambiguous numeric date like `03/04/2026`. Per library,
+    /// because it is a property of the paperwork, not of the Mac reading it.
+    var dateOrder: DateOrder = .automatic
+    /// Days that are never a document date — the date printed in a letterhead,
+    /// a form's revision date — as `yyyy-MM-dd`, comma separated.
+    var ignoredDates = ""
     var viewMode: ViewMode = .list
     var galleryThumbnailSize: Double = 150
 
@@ -96,6 +102,13 @@ struct AppSettings: Codable, Sendable, Equatable {
             jpegQuality = newValue.jpegQuality
             targetDPI = newValue.targetDPI
         }
+    }
+
+    /// The days the analyzer must never take as a document date.
+    var ignoredDays: Set<String> {
+        Set(ignoredDates.split(separator: ",")
+            .compactMap { $0.trimmingCharacters(in: .whitespaces).nilIfBlank }
+            .compactMap { DayDate.parse($0).map { DayDate.text($0) } })
     }
 
     var optimizerOptions: Optimizer.Options {
@@ -196,6 +209,8 @@ extension AppSettings {
             mirrorTagsAsAliases: value(.mirrorTagsAsAliases, d.mirrorTagsAsAliases),
             ocrConcurrency: value(.ocrConcurrency, d.ocrConcurrency),
             scanDestination: value(.scanDestination, d.scanDestination),
+            dateOrder: value(.dateOrder, d.dateOrder),
+            ignoredDates: value(.ignoredDates, d.ignoredDates),
             viewMode: value(.viewMode, d.viewMode),
             galleryThumbnailSize: value(.galleryThumbnailSize, d.galleryThumbnailSize),
             jpegQuality: value(.jpegQuality, d.jpegQuality),

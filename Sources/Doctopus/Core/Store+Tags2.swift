@@ -7,6 +7,13 @@ extension Store {
     /// Icons chosen for individual values of a field — one for “Invoice”,
     /// another for “Tax”. Unset values fall back to the field's own icon.
     func setValueIcon(field: Field, value: String, icon: String?) throws {
+        // A taxonomy value carries its own icon, so renaming it can no longer
+        // orphan one — which is exactly what keying an icon by a string did.
+        if let column = field.builtinColumn, Store.entityColumns[column] != nil {
+            guard let id = try existingEntityID(named: value, builtin: column) else { return }
+            try setEntityIcon(id, icon: icon)
+            return
+        }
         guard let icon, !icon.isEmpty else {
             try db.run("DELETE FROM value_icons WHERE field_id=? AND value=?",
                        [.int(field.fieldID), .text(value)])
@@ -19,6 +26,11 @@ extension Store {
     }
 
     func valueIcons(field: Field) throws -> [String: String] {
+        if let column = field.builtinColumn, Store.entityColumns[column] != nil {
+            return try entities(builtin: column).reduce(into: [:]) { out, entity in
+                if let icon = entity.icon { out[entity.name] = icon }
+            }
+        }
         var out: [String: String] = [:]
         try db.query("SELECT value, icon FROM value_icons WHERE field_id=?", [.int(field.fieldID)]) {
             out[$0.string(0)] = $0.string(1)
@@ -62,7 +74,7 @@ extension Store {
     func finderTags() throws -> [Facet] {
         try db.map("""
             SELECT f.name, COUNT(*) FROM finder_tags f
-            JOIN documents d ON d.id = f.doc_id AND d.missing = 0
+            JOIN documents d ON d.id = f.doc_id AND d.missing = 0 AND d.deleted_at IS NULL
             GROUP BY f.name COLLATE NOCASE
             ORDER BY f.name COLLATE NOCASE
             """) { Facet(value: $0.string(0), count: Int($0.int(1))) }

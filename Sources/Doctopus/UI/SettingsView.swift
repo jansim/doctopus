@@ -82,6 +82,21 @@ private struct GeneralSettings: View {
                     Text("Aliases live in a Tags folder inside the library's folder. Individual tags can override this from the sidebar.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
+
+                Section("Dates") {
+                    Picker("Read 03/04/2026 as", selection: $model.settings.dateOrder) {
+                        ForEach(DateOrder.allCases, id: \.self) { order in
+                            Text(order.label).tag(order)
+                        }
+                    }
+                    Text("A numeric date with no month name in it is ambiguous, and reading it by this Mac's own region means the same library answering differently on another one. Automatic reads it from the language most of these documents are in.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    TextField("Never a document date", text: $model.settings.ignoredDates,
+                              prompt: Text("2019-01-01, 2020-05-04"))
+                        .font(.system(.body, design: .monospaced))
+                    Text("Days to skip when reading a document's date, as yyyy-MM-dd — the date printed in a letterhead, or a form's revision date, which otherwise gets picked up on every document that uses it.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
             }
 
             Section("Indexing") {
@@ -108,6 +123,7 @@ private struct GeneralSettings: View {
 private struct FieldSettings: View {
     @Environment(AppModel.self) private var model
     @State private var newName = ""
+    @State private var newType: FieldType = .string
 
     var body: some View {
         VStack(spacing: 0) {
@@ -134,9 +150,18 @@ private struct FieldSettings: View {
                     HStack {
                         TextField("Name", text: $newName)
                             .onSubmit(add)
+                        Picker("", selection: $newType) {
+                            ForEach(FieldType.allCases, id: \.self) { type in
+                                Text(type.label).tag(type)
+                            }
+                        }
+                        .labelsHidden()
+                        .frame(width: 150)
                         Button("Add", action: add)
                             .disabled(newName.nilIfBlank == nil)
                     }
+                    Text("A field's type is what makes it sortable: amounts compare as numbers rather than as text, so €90 comes before €1,200, and a Yes / No field stops being three spellings of the same answer.")
+                        .font(.caption).foregroundStyle(.secondary)
                     Text("Custom fields are yours to fill in — the extraction pipeline populates the built-in ones only. Fields are shared by every open library, so the list shows one column per field however many libraries fill it.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
@@ -147,8 +172,9 @@ private struct FieldSettings: View {
 
     private func add() {
         guard let name = newName.nilIfBlank else { return }
-        model.addCustomField(named: name)
+        model.addCustomField(named: name, type: newType)
         newName = ""
+        newType = .string
     }
 }
 
@@ -171,7 +197,25 @@ private struct FieldRow: View {
                     model.updateField(updated)
                 }
             if field.isBuiltin {
-                Text("built-in").font(.caption2).foregroundStyle(.tertiary)
+                // A built-in's type comes from the column behind it, so it is
+                // shown rather than offered.
+                Text(field.type == .string ? "built-in" : "built-in · \(field.type.label)")
+                    .font(.caption2).foregroundStyle(.tertiary)
+            } else {
+                Picker("", selection: Binding(
+                    get: { field.type },
+                    set: { new in
+                        var updated = field
+                        updated.type = new
+                        model.updateField(updated)
+                    })) {
+                    ForEach(FieldType.allCases, id: \.self) { type in
+                        Text(type.label).tag(type)
+                    }
+                }
+                .labelsHidden()
+                .frame(width: 140)
+                .help("What this field holds. Changing it re-reads every value it already has.")
             }
             Toggle("", isOn: binding(\.showInSidebar)).labelsHidden().frame(width: 52)
             Toggle("", isOn: binding(\.showInList)).labelsHidden().frame(width: 52)
