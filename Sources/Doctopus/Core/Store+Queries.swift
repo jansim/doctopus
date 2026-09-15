@@ -54,16 +54,30 @@ extension Store {
             wheres.append("d.id IN (SELECT dt.doc_id FROM document_tags dt JOIN tags tg ON tg.id=dt.tag_id WHERE tg.name=? COLLATE NOCASE)")
             args.append(.text(t))
         }
+        for t in query.negatedTags {
+            wheres.append("d.id NOT IN (SELECT dt.doc_id FROM document_tags dt JOIN tags tg ON tg.id=dt.tag_id WHERE tg.name=? COLLATE NOCASE)")
+            args.append(.text(t))
+        }
         for name in query.finderTags {
             wheres.append("d.id IN (SELECT doc_id FROM finder_tags WHERE name = ? COLLATE NOCASE)")
             args.append(.text(name))
         }
+        for name in query.negatedFinderTags {
+            wheres.append("d.id NOT IN (SELECT doc_id FROM finder_tags WHERE name = ? COLLATE NOCASE)")
+            args.append(.text(name))
+        }
         for filter in query.fieldFilters {
             guard let field = allFields.first(where: { $0.key == filter.key }) else { continue }
-            appendFieldFilter(field, filter.value, exact: false, to: &wheres, args: &args)
+            appendFieldFilter(field, filter.value, exact: false, negated: false, to: &wheres, args: &args)
+        }
+        for filter in query.negatedFieldFilters {
+            guard let field = allFields.first(where: { $0.key == filter.key }) else { continue }
+            appendFieldFilter(field, filter.value, exact: false, negated: true, to: &wheres, args: &args)
         }
         for v in query.exts           { wheres.append("d.ext = ?");              args.append(.text(v)) }
+        for v in query.negatedExts    { wheres.append("d.ext <> ?");             args.append(.text(v)) }
         for v in query.folders        { wheres.append("d.directory LIKE ?");     args.append(.text("%\(v)%")) }
+        for v in query.negatedFolders { wheres.append("d.directory NOT LIKE ?"); args.append(.text("%\(v)%")) }
         for f in query.flags {
             switch f {
             case "review", "unapproved": wheres.append("d.approved=0")
@@ -81,6 +95,39 @@ extension Store {
             case "missing":              wheres.append("d.missing=1")
             case "trashed", "deleted":   wheres.append("d.deleted_at IS NOT NULL")
             default: break
+            }
+        }
+        for f in query.negatedFlags {
+            switch f {
+            case "review", "unapproved": wheres.append("d.approved=1")
+            case "approved":             wheres.append("d.approved=0")
+            case "untagged":             wheres.append("d.id IN (SELECT doc_id FROM document_tags)")
+            case "tagged":               wheres.append("d.id NOT IN (SELECT doc_id FROM document_tags)")
+            case "pending":              wheres.append("d.ocr_state<>0")
+            case "failed":               wheres.append("d.ocr_state<>2")
+            case "optimized":            wheres.append("d.original_size IS NULL")
+            case "duplicate", "duplicates":
+                wheres.append("""
+                    (d.hash NOT IN (SELECT hash FROM documents WHERE missing=0 AND deleted_at IS NULL AND hash IS NOT NULL GROUP BY hash HAVING COUNT(*) > 1)
+                     AND (d.original_hash IS NULL OR d.original_hash NOT IN (SELECT original_hash FROM documents WHERE missing=0 AND deleted_at IS NULL AND original_hash IS NOT NULL GROUP BY original_hash HAVING COUNT(*) > 1)))
+                    """)
+            case "missing":              wheres.append("d.missing=0")
+            case "trashed", "deleted":   wheres.append("d.deleted_at IS NULL")
+            default: break
+            }
+        }
+        for df in query.dateFilters {
+            let col = df.column
+            if let start = df.start, let end = df.end {
+                wheres.append("\(col) >= ? AND \(col) <= ?")
+                args.append(.double(start.timeIntervalSince1970))
+                args.append(.double(end.timeIntervalSince1970))
+            } else if let start = df.start {
+                wheres.append("\(col) >= ?")
+                args.append(.double(start.timeIntervalSince1970))
+            } else if let end = df.end {
+                wheres.append("\(col) <= ?")
+                args.append(.double(end.timeIntervalSince1970))
             }
         }
 
@@ -228,7 +275,7 @@ extension Store {
     }
 
     /// Adds the WHERE clause for one field, wherever its values are stored.
-    private func appendFieldFilter(_ field: Field, _ value: String, exact: Bool,
+    private func appendFieldFilter(_ field: Field, _ value: String, exact: Bool, negated: Bool = false,
                                    to wheres: inout [String], args: inout [Database.Value]) {
         if let column = field.builtinColumn {
             let allowed = ["correspondent", "doc_type", "language", "amount", "intent"]
@@ -238,8 +285,9 @@ extension Store {
             if let idColumn = Store.entityColumns[column] {
                 // Qualified, because `fields` has a `name` column of its own.
                 let comparison = exact ? "e.name = ?" : "e.name LIKE ?"
+                let inOrNotIn = negated ? "NOT IN" : "IN"
                 wheres.append("""
-                    m.\(idColumn) IN (SELECT e.id FROM entities e
+                    m.\(idColumn) \(inOrNotIn) (SELECT e.id FROM entities e
                                       JOIN fields f ON f.id = e.field_id
                                       WHERE f.builtin_column = ? AND \(comparison))
                     """)
@@ -248,13 +296,14 @@ extension Store {
                 return
             }
             if exact {
-                wheres.append("m.\(column) = ?"); args.append(.text(value))
+                wheres.append("m.\(column) \(negated ? "<>" : "=") ?"); args.append(.text(value))
             } else {
-                wheres.append("m.\(column) LIKE ?"); args.append(.text("%\(value)%"))
+                wheres.append("m.\(column) \(negated ? "NOT LIKE" : "LIKE") ?"); args.append(.text("%\(value)%"))
             }
         } else {
             let comparison = exact ? "v.value = ?" : "v.value LIKE ?"
-            wheres.append("d.id IN (SELECT v.doc_id FROM field_values v WHERE v.field_id=? AND \(comparison))")
+            let inOrNotIn = negated ? "NOT IN" : "IN"
+            wheres.append("d.id \(inOrNotIn) (SELECT v.doc_id FROM field_values v WHERE v.field_id=? AND \(comparison))")
             args.append(.int(field.fieldID))
             args.append(.text(exact ? value : "%\(value)%"))
         }

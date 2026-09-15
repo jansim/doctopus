@@ -119,18 +119,18 @@ enum SelfTest {
         }
 
         print("\nSEARCH")
-        for probe in ["rechnung", "insurance polic", "type:Invoice", "\"net pay\""] {
+        for probe in ["rechnung", "insurance polic", "type:Invoice", "\"net pay\"", "rechnung OR kontoauszug", "-type:Invoice", "date:2026", "date:2026-02"] {
             let hits = (try? await store.listDocuments(selection: .all, query: SearchQuery(probe),
                                                        sort: .relevance, ascending: false)) ?? []
             Check.that("search \(probe) finds something", !hits.isEmpty, "\(hits.count) hit(s)")
         }
-        for probe in ["rechnung", "insurance polic", "kontoauszug", "steuer", "type:Invoice", "is:pending", "\"net pay\""] {
+        for probe in ["rechnung", "insurance polic", "kontoauszug", "steuer", "type:Invoice", "is:pending", "\"net pay\"", "rechnung OR kontoauszug", "-type:Invoice", "date:2026", "date:2026-02"] {
             let hits = (try? await store.listDocuments(selection: .all, query: SearchQuery(probe),
                                                        sort: .relevance, ascending: false)) ?? []
             let names = hits.prefix(3).map(\.filename).joined(separator: ", ")
-            print("  \(probe.padded(22)) → \(hits.count) hit\(hits.count == 1 ? "" : "s")\(hits.isEmpty ? "" : ": \(names)")")
+            print("  \(probe.padded(24)) → \(hits.count) hit\(hits.count == 1 ? "" : "s")\(hits.isEmpty ? "" : ": \(names)")")
             if let snippet = hits.first?.snippet {
-                print("  \("".padded(22))   …\(snippet.replacingOccurrences(of: "\n", with: " "))…")
+                print("  \("".padded(24))   …\(snippet.replacingOccurrences(of: "\n", with: " "))…")
             }
         }
 
