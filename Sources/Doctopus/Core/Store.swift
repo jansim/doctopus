@@ -932,6 +932,47 @@ actor Store {
         try db.first("SELECT COUNT(*) FROM processing WHERE status=0") { Int($0.int(0)) } ?? 0
     }
 
+    // MARK: - Classifier Training Data
+
+    struct ClassifierTrainingData: Sendable {
+        var docs: [DocumentClassifier.TrainingDoc]
+        var fingerprint: String
+    }
+
+    func classifierTrainingData() throws -> ClassifierTrainingData {
+        let docs = try db.map("""
+            SELECT d.id, ec.name, et.name,
+                   (SELECT f.body FROM doc_fts f WHERE f.rowid = d.id),
+                   d.mtime
+            FROM documents d
+            LEFT JOIN metadata m ON m.doc_id = d.id
+            LEFT JOIN entities ec ON ec.id = m.correspondent_id
+            LEFT JOIN entities et ON et.id = m.doc_type_id
+            WHERE d.missing=0 AND d.deleted_at IS NULL AND d.approved=1
+            """) {
+            (id: $0.int(0), correspondent: $0.stringOrNil(1), docType: $0.stringOrNil(2),
+             text: $0.stringOrNil(3) ?? "", mtime: $0.double(4))
+        }
+
+        let docIDs = docs.map(\.id)
+        let tagMap = (try? tags(forDocuments: docIDs).own) ?? [:]
+
+        var trainingDocs: [DocumentClassifier.TrainingDoc] = []
+        var maxMtime: Double = 0
+        for doc in docs {
+            let tNames = (tagMap[doc.id] ?? []).map(\.name)
+            trainingDocs.append(DocumentClassifier.TrainingDoc(
+                id: doc.id, text: doc.text,
+                correspondent: doc.correspondent, docType: doc.docType,
+                tags: tNames
+            ))
+            if doc.mtime > maxMtime { maxMtime = doc.mtime }
+        }
+
+        let fingerprint = "\(trainingDocs.count)-\(maxMtime)"
+        return ClassifierTrainingData(docs: trainingDocs, fingerprint: fingerprint)
+    }
+
     // MARK: - Optimization Originals
 
     var originalsDirectory: URL {
