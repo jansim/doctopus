@@ -235,6 +235,9 @@ actor Indexer {
         // Optimize for it.
         var optimized: Optimizer.Result?
         if isImport && settings.optimizeOnImport {
+            if let preHash = FileScanner.hash(url) {
+                try? await store.saveOriginalFile(for: id, from: url, hash: preHash)
+            }
             optimized = try? Optimizer.optimize(url: url, options: settings.optimizerOptions)
             if let optimized {
                 try? await store.setSizes(id, size: optimized.newSize, originalSize: optimized.originalSize)
@@ -721,6 +724,9 @@ actor Indexer {
         for id in ids {
             guard let path = try? await store.documentPath(id) else { continue }
             let url = URL(fileURLWithPath: path)
+            if let preHash = FileScanner.hash(url) {
+                try? await store.saveOriginalFile(for: id, from: url, hash: preHash)
+            }
             guard let result = try? Optimizer.optimize(url: url, options: settings.optimizerOptions) else { continue }
             try? await store.setSizes(id, size: result.newSize, originalSize: result.originalSize)
             try? await store.logProcessing(docID: id, action: "optimized",
@@ -731,5 +737,16 @@ actor Indexer {
         }
         onDataChanged()
         return (count, saved)
+    }
+
+    func revertOptimization(ids: [Int64]) async -> Int {
+        var count = 0
+        for id in ids {
+            if (try? await store.revertOptimization(id)) == true {
+                count += 1
+            }
+        }
+        if count > 0 { onDataChanged() }
+        return count
     }
 }

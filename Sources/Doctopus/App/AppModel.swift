@@ -991,6 +991,17 @@ final class AppModel {
         }
     }
 
+    func revertOptimization(_ rows: [DocumentRow]) {
+        Task {
+            var count = 0
+            for (lib, rows) in grouped(rows) {
+                count += await lib.indexer.revertOptimization(ids: rows.map(\.doc))
+            }
+            if count == 0 { notify("No original pre-optimization files were found to restore.", .info) }
+            else { notify("Reverted \(count) document\(count == 1 ? "" : "s") to original.") }
+        }
+    }
+
     func rename(_ rows: [DocumentRow], template: String) {
         Task {
             var n = 0
