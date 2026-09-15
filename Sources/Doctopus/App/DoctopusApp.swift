@@ -200,6 +200,8 @@ struct DoctopusCommands: Commands {
                 .disabled(model.selectedIDs.isEmpty || !model.modelStatus.isReady)
             Button("Optimize") { model.optimize(model.selectedRows) }
                 .disabled(model.selectedIDs.isEmpty)
+            Button("Revert to Original") { model.revertOptimization(model.selectedRows) }
+                .disabled(model.selectedIDs.isEmpty || !model.selectedRows.contains { $0.originalSize != nil })
             Divider()
             Button("Move to Trash") { model.moveToTrash(model.selectedRows) }
                 .keyboardShortcut(.delete, modifiers: [.command])

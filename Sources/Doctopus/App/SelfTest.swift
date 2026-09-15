@@ -869,6 +869,19 @@ enum SelfTest {
                        !kept.isEmpty || subject.docDate == nil)
         }
 
+        print("\nREVERTIBLE OPTIMISATION")
+        if let targetDoc = rows.first(where: { $0.ext == "pdf" }) {
+            let origSize = targetDoc.size
+            if let hash = FileScanner.hash(targetDoc.url) {
+                try? await store.saveOriginalFile(for: targetDoc.doc, from: targetDoc.url, hash: hash)
+                try? await store.setSizes(targetDoc.doc, size: origSize / 2, originalSize: origSize)
+                let origURL = try? await store.originalFileURL(for: targetDoc.doc)
+                Check.that("pre-optimization original file is preserved", origURL != nil && FileManager.default.fileExists(atPath: origURL!.path))
+                let reverted = (try? await store.revertOptimization(targetDoc.doc)) ?? false
+                Check.that("revert optimization restores document size and removes original_size", reverted)
+            }
+        }
+
         print("\nTYPED FIELDS")
         // Reading an amount as a number is the difference between €90 coming
         // before €1,200 and coming after it — and both conventions for writing

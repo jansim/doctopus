@@ -932,6 +932,57 @@ actor Store {
         try db.first("SELECT COUNT(*) FROM processing WHERE status=0") { Int($0.int(0)) } ?? 0
     }
 
+    // MARK: - Optimization Originals
+
+    var originalsDirectory: URL {
+        containerURL.appendingPathComponent("originals", isDirectory: true)
+    }
+
+    func originalFileURL(for docID: Int64) throws -> URL? {
+        guard let (path, originalHash) = try db.first(
+            "SELECT path, original_hash FROM documents WHERE id=? AND original_size IS NOT NULL AND original_hash IS NOT NULL",
+            [.int(docID)], { ($0.string(0), $0.string(1)) }) else { return nil }
+        let ext = URL(fileURLWithPath: path).pathExtension
+        let file = originalsDirectory.appendingPathComponent("\(originalHash).\(ext)")
+        return FileManager.default.fileExists(atPath: file.path) ? file : nil
+    }
+
+    func saveOriginalFile(for docID: Int64, from sourceURL: URL, hash: String) throws {
+        let fm = FileManager.default
+        let dir = originalsDirectory
+        try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        let target = dir.appendingPathComponent("\(hash).\(sourceURL.pathExtension)")
+        if !fm.fileExists(atPath: target.path) {
+            try fm.copyItem(at: sourceURL, to: target)
+        }
+    }
+
+    func revertOptimization(_ docID: Int64) throws -> Bool {
+        guard let (relPath, originalSize, originalHash) = try db.first("""
+            SELECT path, original_size, original_hash
+            FROM documents
+            WHERE id=? AND original_size IS NOT NULL AND original_hash IS NOT NULL
+            """, [.int(docID)], { ($0.string(0), $0.int(1), $0.string(2)) }) else { return false }
+
+        let currentURL = URL(fileURLWithPath: absPath(relPath))
+        let ext = currentURL.pathExtension
+        let originalURL = originalsDirectory.appendingPathComponent("\(originalHash).\(ext)")
+        guard FileManager.default.fileExists(atPath: originalURL.path) else { return false }
+
+        let fm = FileManager.default
+        _ = try? fm.removeItem(at: currentURL)
+        try fm.copyItem(at: originalURL, to: currentURL)
+
+        try db.run("""
+            UPDATE documents SET size=?, original_size=NULL, hash=original_hash
+            WHERE id=?
+            """, [.int(originalSize), .int(docID)])
+        try logProcessing(docID: docID, action: "reverted_optimization",
+                          detail: "Reverted to original pre-optimization file",
+                          confidence: nil, rule: nil, from: nil, to: currentURL.path, approved: true)
+        return true
+    }
+
     // MARK: - Verification queries
 
     struct VerificationDocInfo: Sendable {

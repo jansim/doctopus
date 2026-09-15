@@ -552,6 +552,9 @@ private struct DocumentMenu: View {
             }
             .disabled(!model.modelStatus.isReady)
             Button("Optimize") { model.optimize(rows) }
+            if rows.contains(where: { $0.originalSize != nil }) {
+                Button("Revert to Original") { model.revertOptimization(rows) }
+            }
             Button("Copy Path") {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(rows.map(\.path).joined(separator: "\n"), forType: .string)
