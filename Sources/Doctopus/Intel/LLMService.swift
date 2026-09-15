@@ -86,11 +86,11 @@ actor LLMService {
 
     var isAvailable: Bool { probe().isReady }
 
-    func enrich(text: String, filename: String, limit: Int) async -> DocumentInsight? {
+    func enrich(text: String, filename: String, limit: Int, candidateTags: [String] = []) async -> DocumentInsight? {
         guard probe().isReady else { return nil }
         #if canImport(FoundationModels)
         if #available(macOS 26.0, *) {
-            let prompt = LLMPrompt.user(text: text, filename: filename, limit: limit)
+            let prompt = LLMPrompt.user(text: text, filename: filename, limit: limit, candidateTags: candidateTags)
             do {
                 let session = try currentSession()
                 let response = try await session.respond(to: prompt, generating: GeneratedInsight.self)
@@ -106,7 +106,7 @@ actor LLMService {
                         .map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
                         .filter { !$0.isEmpty && $0.count < 32 },
                     confidence: 0.9,
-                    source: "llm")
+                    source: "llm:v\(LLMPrompt.promptVersion)")
             } catch {
                 // A single failure (context overflow, guardrail, model unloaded)
                 // must not poison the rest of the batch.

@@ -94,6 +94,8 @@ extension Store {
                     """)
             case "missing":              wheres.append("d.missing=1")
             case "trashed", "deleted":   wheres.append("d.deleted_at IS NOT NULL")
+            case "stale-analysis", "stale":
+                wheres.append("(m.source = 'heuristic' OR m.source IS NULL OR m.source NOT LIKE '%:v\(LLMPrompt.promptVersion)')")
             default: break
             }
         }

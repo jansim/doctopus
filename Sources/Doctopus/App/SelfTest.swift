@@ -517,7 +517,7 @@ enum SelfTest {
         Check.that("a fenced, chatty JSON reply still parses",
                    parsed?.correspondent == "Stadtwerke" && parsed?.docType == "Invoice"
                        && parsed?.language == "de" && parsed?.intent == "pay"
-                       && parsed?.tags == ["utilities", "gas"] && parsed?.source == "remote")
+                       && parsed?.tags == ["utilities", "gas"] && parsed?.source.hasPrefix("remote") == true)
         Check.that("a reply with nothing in it is a failure, not empty metadata",
                    RemoteLLMService.parse("{\"summary\": \"\", \"tags\": []}") == nil)
         Check.that("prose with no JSON in it is a failure",
@@ -554,6 +554,13 @@ enum SelfTest {
         let blocked = await indexer.analyze(ids: rows.map(\.doc))
         print("  analyze with no backend: \(blocked.blocked ?? "ran anyway")")
         Check.that("a manual run with no model reports why", blocked.blocked != nil)
+
+        let testPrompt = LLMPrompt.user(text: "Sample Document", filename: "invoice.pdf", limit: 1000, candidateTags: ["finances", "invoices"])
+        Check.that("prompt includes untrusted user data marker", testPrompt.contains("untrusted user data"))
+        Check.that("prompt includes candidate taxonomy tags", testPrompt.contains("finances, invoices"))
+
+        let staleHits = (try? await store.listDocuments(selection: .all, query: SearchQuery("is:stale-analysis"), sort: .added, ascending: false)) ?? []
+        Check.that("is:stale-analysis returns heuristic documents needing model analysis", !staleHits.isEmpty)
 
         // A live run against a real server, when one is pointed at. This is how
         // a configuration is verified without the UI:
