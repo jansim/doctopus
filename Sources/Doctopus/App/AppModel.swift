@@ -793,6 +793,18 @@ final class AppModel {
     }
     func cancelIndexing() { Task { for lib in libraries { await lib.indexer.cancel() } } }
 
+    func undo() {
+        guard let lib = activeLibrary else { return }
+        Task {
+            if let undone = try? await lib.store.undoLastEvent() {
+                refreshAll()
+                notify("Undid \(undone.action) for “\(undone.filename)”.", .success)
+            } else {
+                notify("Nothing to undo.", .info)
+            }
+        }
+    }
+
     // MARK: - Smart Folders / Saved Views
 
     func saveCurrentSearchAsSmartFolder(name: String, icon: String = "line.3.horizontal.decrease.circle") {

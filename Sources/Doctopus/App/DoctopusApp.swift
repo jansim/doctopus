@@ -123,6 +123,11 @@ struct DoctopusCommands: Commands {
     let model: AppModel
 
     var body: some Commands {
+        CommandGroup(replacing: .undoRedo) {
+            Button("Undo") { model.undo() }
+                .keyboardShortcut("z", modifiers: [.command])
+        }
+
         CommandGroup(replacing: .newItem) {
             Button("New Library from Folder…") { model.addLibrary() }
                 .keyboardShortcut("n", modifiers: [.command])

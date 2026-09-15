@@ -1045,6 +1045,18 @@ enum SelfTest {
                        (detailed?.history.count ?? 0) > 0)
             Check.that("history is newest first",
                        zip(kept, kept.dropFirst()).allSatisfy { $0.at >= $1.at })
+
+            // Test undo of file move
+            let origPath = subject.path
+            let movedTarget = root.appendingPathComponent("Work/undotest-\(subject.filename)")
+            if (try? FileManager.default.moveItem(at: subject.url, to: movedTarget)) != nil {
+                try? await store.updatePath(subject.doc, to: movedTarget.path)
+                try? await store.logProcessing(docID: subject.doc, action: "moved", detail: "test move",
+                                               confidence: nil, rule: nil, from: origPath, to: movedTarget.path, approved: true)
+                let undone = try? await store.undoLastEvent()
+                Check.that("undo restores moved file to previous path",
+                           undone != nil && FileManager.default.fileExists(atPath: origPath))
+            }
         }
 
         print("\nSEARCH INDEX")

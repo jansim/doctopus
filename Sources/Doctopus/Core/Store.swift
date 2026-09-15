@@ -932,6 +932,38 @@ actor Store {
         try db.first("SELECT COUNT(*) FROM processing WHERE status=0") { Int($0.int(0)) } ?? 0
     }
 
+    // MARK: - Undo
+
+    /// Reverts the most recent undoable file event (such as a move, rename, or routing).
+    func undoLastEvent() async throws -> (action: String, filename: String)? {
+        guard let last = try db.first("""
+            SELECT id, doc_id, action, from_path, to_path, detail
+            FROM events
+            WHERE action IN ('moved', 'renamed', 'routed')
+              AND from_path IS NOT NULL AND to_path IS NOT NULL
+            ORDER BY at DESC, id DESC LIMIT 1
+            """, [], { (id: $0.int(0), docID: $0.int(1), action: $0.string(2),
+                        from: absPath($0.string(3)), to: absPath($0.string(4)), detail: $0.stringOrNil(5)) }) else {
+            return nil
+        }
+
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: last.to) else { return nil }
+
+        let targetDir = URL(fileURLWithPath: last.from).deletingLastPathComponent()
+        try fm.createDirectory(at: targetDir, withIntermediateDirectories: true)
+        let targetURL = Naming.uniqueURL(in: targetDir, filename: URL(fileURLWithPath: last.from).lastPathComponent)
+
+        try fm.moveItem(at: URL(fileURLWithPath: last.to), to: targetURL)
+        try updatePath(last.docID, to: targetURL.path)
+        FileScanner.pruneEmptyDirectories(startingFrom: URL(fileURLWithPath: last.to).deletingLastPathComponent(), upTo: root)
+
+        try db.run("DELETE FROM events WHERE id=?", [.int(last.id)])
+
+        let filename = targetURL.lastPathComponent
+        return (last.action, filename)
+    }
+
     // MARK: - Saved Views
 
     func savedViews() throws -> [SavedView] {
