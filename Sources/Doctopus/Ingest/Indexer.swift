@@ -575,6 +575,9 @@ actor Indexer {
         var routed = 0
         /// Files that were already inside the library and were only indexed.
         var alreadyInLibrary = 0
+        /// Files skipped because their byte-identical copy is already in the library.
+        var duplicates = 0
+        var duplicateNames: [String] = []
         var failed = 0
     }
 
@@ -609,6 +612,14 @@ actor Indexer {
                       let r = try? await store.upsertDocument(facts) else { summary.failed += 1; continue }
                 summary.alreadyInLibrary += 1
                 if r.changed { inPlace.append((r.id, path)) }
+                continue
+            }
+            // Pre-flight duplicate check
+            if let sourceHash = FileScanner.hash(url),
+               let dup = try? await store.findDuplicate(hash: sourceHash) {
+                summary.duplicates += 1
+                summary.duplicateNames.append(url.lastPathComponent)
+                _ = dup
                 continue
             }
             do {

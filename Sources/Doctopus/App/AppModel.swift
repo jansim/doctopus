@@ -1576,7 +1576,11 @@ final class AppModel {
         Task {
             let result = await lib.indexer.importFiles(urls, into: dest, movingSource: movingSource,
                                                        route: chosen == nil)
-            if result.imported == 0, result.alreadyInLibrary == 0, result.failed == 0 {
+            if result.imported == 0, result.duplicates > 0, result.alreadyInLibrary == 0 {
+                notify(result.duplicates == 1
+                       ? "Skipped “\(result.duplicateNames.first ?? "file")” — already in library."
+                       : "Skipped \(result.duplicates) duplicate files already in library.", .info)
+            } else if result.imported == 0, result.alreadyInLibrary == 0, result.failed == 0 {
                 // Only a folder can come to nothing: files are filtered by type
                 // before they get this far.
                 notify(urls.count == 1

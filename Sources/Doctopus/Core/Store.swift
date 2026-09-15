@@ -352,6 +352,24 @@ actor Store {
             """, [.text(hash), .text(hash), .int(docID)]) { $0.int(0) }
     }
 
+    struct DuplicateMatch: Sendable {
+        var docID: Int64
+        var filename: String
+        var path: String
+    }
+
+    /// Finds any existing non-deleted document that matches `hash` either on disk
+    /// or in its pre-optimized original form.
+    func findDuplicate(hash: String) throws -> DuplicateMatch? {
+        try db.first("""
+            SELECT id, filename, path FROM documents
+            WHERE (hash = ? OR original_hash = ?) AND missing = 0 AND deleted_at IS NULL
+            LIMIT 1
+            """, [.text(hash), .text(hash)]) {
+            DuplicateMatch(docID: $0.int(0), filename: $0.string(1), path: absPath($0.string(2)))
+        }
+    }
+
     func documentIDsNeedingOCR(limit: Int = 5000) throws -> [(id: Int64, path: String, ext: String)] {
         try db.map("""
             SELECT id, path, ext FROM documents

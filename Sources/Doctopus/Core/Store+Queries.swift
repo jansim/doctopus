@@ -73,6 +73,13 @@ extension Store {
             case "pending":              wheres.append("d.ocr_state=0")
             case "failed":               wheres.append("d.ocr_state=2")
             case "optimized":            wheres.append("d.original_size IS NOT NULL")
+            case "duplicate", "duplicates":
+                wheres.append("""
+                    (d.hash IN (SELECT hash FROM documents WHERE missing=0 AND deleted_at IS NULL AND hash IS NOT NULL GROUP BY hash HAVING COUNT(*) > 1)
+                     OR d.original_hash IN (SELECT original_hash FROM documents WHERE missing=0 AND deleted_at IS NULL AND original_hash IS NOT NULL GROUP BY original_hash HAVING COUNT(*) > 1))
+                    """)
+            case "missing":              wheres.append("d.missing=1")
+            case "trashed", "deleted":   wheres.append("d.deleted_at IS NOT NULL")
             default: break
             }
         }

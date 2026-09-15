@@ -395,8 +395,9 @@ enum SelfTest {
         print("\nIMPORT (a file from outside the library)")
         let outside = FileManager.default.temporaryDirectory
             .appendingPathComponent("doctopus-import-\(UUID().uuidString).pdf")
-        if let sample = rows.first, let data = try? Data(contentsOf: sample.url),
-           (try? data.write(to: outside)) != nil {
+        if let sample = rows.first, var data = try? Data(contentsOf: sample.url) {
+            data.append(Data("\n% unique-\(UUID().uuidString)\n".utf8))
+            try? data.write(to: outside)
             // No auto-routing: routing has its own dry run above, and this
             // should not scatter folders through the fixture library.
             var quiet = settings
@@ -412,6 +413,12 @@ enum SelfTest {
             // import copies, and the original stays where the user left it.
             Check.that("importing copies and leaves the original alone",
                        FileManager.default.fileExists(atPath: outside.path) && copied != nil)
+
+            // Re-importing the same bytes must be detected as a duplicate and skipped
+            let dupResult = await indexer.importFiles([outside], into: root.appendingPathComponent("Inbox"))
+            Check.that("re-importing a byte-identical document is skipped as duplicate",
+                       dupResult.imported == 0 && dupResult.duplicates == 1)
+
             if let copied { try? FileManager.default.removeItem(at: copied.url) }
             try? FileManager.default.removeItem(at: outside)
         }
@@ -424,8 +431,10 @@ enum SelfTest {
         let tag = UUID().uuidString.prefix(6)
         let top = folder.appendingPathComponent("top-\(tag).pdf")
         let nested = deeper.appendingPathComponent("nested-\(tag).pdf")
-        if rows.count >= 2, let one = try? Data(contentsOf: rows[0].url),
-           let two = try? Data(contentsOf: rows[1].url) {
+        if rows.count >= 2, var one = try? Data(contentsOf: rows[0].url),
+           var two = try? Data(contentsOf: rows[1].url) {
+            one.append(Data("\n% unique-top-\(tag)\n".utf8))
+            two.append(Data("\n% unique-nested-\(tag)\n".utf8))
             try? one.write(to: top)
             try? two.write(to: nested)
             // Neither is a document: one is not a type Doctopus reads, the
@@ -1214,9 +1223,10 @@ enum SelfTest {
 
         /// A copy of a fixture from outside the library, under a chosen name.
         func stage(_ name: String) -> URL? {
-            guard let sample = neutral else { return nil }
+            guard let sample = neutral, var data = try? Data(contentsOf: sample.url) else { return nil }
+            data.append(Data("\n% unique-\(UUID().uuidString)\n".utf8))
             let url = fm.temporaryDirectory.appendingPathComponent("\(UUID().uuidString)-\(name).pdf")
-            return (try? fm.copyItem(at: sample.url, to: url)) != nil ? url : nil
+            return (try? data.write(to: url)) != nil ? url : nil
         }
         func imported(_ name: String) async -> DocumentRow? {
             ((try? await store.listDocuments(selection: .all, query: SearchQuery(""),
