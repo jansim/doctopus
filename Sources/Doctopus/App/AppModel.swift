@@ -585,18 +585,27 @@ final class AppModel {
     /// How many rows the centre pane holds at once. Each library is queried for
     /// this many, so the merge always has enough to fill the window whichever
     /// library the top of the list comes from.
-    private static let listLimit = 500
+    private static let pageBatchSize = 500
+    private var currentLimit = 500
+    var hasMoreDocuments = false
 
-    func reloadDocuments() {
+    func loadMore() {
+        guard hasMoreDocuments else { return }
+        currentLimit += Self.pageBatchSize
+        reloadDocuments(resetPaging: false)
+    }
+
+    func reloadDocuments(resetPaging: Bool = true) {
+        if resetPaging { currentLimit = Self.pageBatchSize }
         let sel = selection, text = searchText, sortField = sort, asc = sortAscending
         let keys = Set(fields.map(\.key))
         let libs = librariesInScope(for: sel)
-        guard !libs.isEmpty else { documents = []; selectedIDs = []; detail = nil; return }
+        guard !libs.isEmpty else { documents = []; selectedIDs = []; detail = nil; hasMoreDocuments = false; return }
         reloadDocsTask?.cancel()
         reloadDocsTask = Task { [weak self] in
             guard let self else { return }
             let query = SearchQuery(text, fieldKeys: keys)
-            let limit = Self.listLimit
+            let limit = self.currentLimit
 
             // Each library answers in parallel and keeps its own order; the
             // merge below is what turns them into one list.
@@ -622,6 +631,7 @@ final class AppModel {
             let rows = Self.merge((0..<libs.count).map { byIndex[$0] ?? [] },
                                   sort: sortField, ascending: asc, limit: limit)
             self.documents = rows
+            self.hasMoreDocuments = rows.count >= limit
             // Drop selections that no longer exist so the inspector cannot go stale.
             let live = Set(rows.map(\.id))
             let kept = self.selectedIDs.intersection(live)

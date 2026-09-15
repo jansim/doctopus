@@ -83,6 +83,9 @@ enum SelfTest {
                                                    sort: .added, ascending: false)) ?? []
         print("CHECKS")
         Check.that("documents indexed", stats.total > 0, "\(stats.total)")
+        let page1 = (try? await store.listDocuments(selection: .all, query: SearchQuery(""), sort: .added, ascending: false, limit: 3, offset: 0)) ?? []
+        let page2 = (try? await store.listDocuments(selection: .all, query: SearchQuery(""), sort: .added, ascending: false, limit: 3, offset: 3)) ?? []
+        Check.that("paging returns distinct slices", page1.count == 3 && page2.count == 3 && Set(page1.map(\.doc)).isDisjoint(with: Set(page2.map(\.doc))))
         var sources: Set<String> = []
         var textless: [String] = []
         for row in rows {

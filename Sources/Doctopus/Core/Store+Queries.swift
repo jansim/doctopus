@@ -5,7 +5,7 @@ extension Store {
     /// The center pane's single query. Search, token filters, sidebar selection
     /// and sort all collapse into one statement so paging stays O(limit).
     func listDocuments(selection: Selection, query: SearchQuery, sort: SortField,
-                       ascending: Bool, limit: Int = 500) throws -> [DocumentRow] {
+                       ascending: Bool, limit: Int = 500, offset: Int = 0) throws -> [DocumentRow] {
         let allFields = try cachedFields()
         var args: [Database.Value] = []
         // Deleted documents are out of every listing but their own, which is
@@ -218,7 +218,7 @@ extension Store {
         \(joinQueue)
         WHERE \(wheres.joined(separator: " AND "))
         ORDER BY \(order)
-        LIMIT \(limit)
+        LIMIT \(limit) OFFSET \(offset)
         """
 
         var rows = try db.map(sql, args) { r in
