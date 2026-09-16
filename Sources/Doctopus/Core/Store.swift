@@ -389,6 +389,14 @@ actor Store {
         try db.first("SELECT path FROM documents WHERE id=?", [.int(id)]) { absPath($0.string(0)) }
     }
 
+    /// Pages counted the last time the document was read, for a pass that asks
+    /// the model about a document already in the index.
+    func documentPageCount(_ id: Int64) throws -> Int? {
+        try db.first("SELECT page_count FROM documents WHERE id=?", [.int(id)]) {
+            $0.intOrNil(0).map(Int.init)
+        } ?? nil
+    }
+
     // MARK: - OCR
 
     func storeOCR(docID: Int64, text: String, confidence: Double, words: Int,

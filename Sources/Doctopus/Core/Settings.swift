@@ -20,6 +20,12 @@ struct AppWideSettings: Codable, Sendable, Equatable {
     /// small fixed window; a server's is whatever it was loaded with, so this
     /// is worth turning up when the machine on the other end can take it.
     var llmExcerptLimit = 6000
+    /// Send the first page of each document to the API as an image as well as
+    /// its text — worth having where the endpoint is a vision model, and
+    /// refused by every endpoint that is not.
+    var remoteVision = false
+    /// Longest edge, in pixels, of that page image.
+    var remoteVisionImageSize = 1024
     var ocrConcurrency = 0        // 0 = auto
     var viewMode: ViewMode = .list
     var galleryThumbnailSize: Double = 150
@@ -56,6 +62,12 @@ struct AppSettings: Codable, Sendable, Equatable {
     /// small fixed window; a server's is whatever it was loaded with, so this
     /// is worth turning up when the machine on the other end can take it.
     var llmExcerptLimit = 6000
+    /// Send the first page of each document to the API as an image as well as
+    /// its text — worth having where the endpoint is a vision model, and
+    /// refused by every endpoint that is not.
+    var remoteVision = false
+    /// Longest edge, in pixels, of that page image.
+    var remoteVisionImageSize = 1024
     /// When a model-proposed tag exactly matches one already in the library,
     /// assign it directly instead of leaving it for the user to accept.
     var autoAcceptMatchingTagSuggestions = false
@@ -84,6 +96,7 @@ struct AppSettings: Codable, Sendable, Equatable {
                 llmBackend: llmBackend, remoteEndpoint: remoteEndpoint, remoteModel: remoteModel,
                 remoteAPIKey: remoteAPIKey, remoteTimeout: remoteTimeout,
                 remoteParallelRequests: remoteParallelRequests, llmExcerptLimit: llmExcerptLimit,
+                remoteVision: remoteVision, remoteVisionImageSize: remoteVisionImageSize,
                 ocrConcurrency: ocrConcurrency, viewMode: viewMode,
                 galleryThumbnailSize: galleryThumbnailSize,
                 jpegQuality: jpegQuality, targetDPI: targetDPI)
@@ -96,6 +109,8 @@ struct AppSettings: Codable, Sendable, Equatable {
             remoteTimeout = newValue.remoteTimeout
             remoteParallelRequests = newValue.remoteParallelRequests
             llmExcerptLimit = newValue.llmExcerptLimit
+            remoteVision = newValue.remoteVision
+            remoteVisionImageSize = newValue.remoteVisionImageSize
             ocrConcurrency = newValue.ocrConcurrency
             viewMode = newValue.viewMode
             galleryThumbnailSize = newValue.galleryThumbnailSize
@@ -120,8 +135,14 @@ struct AppSettings: Codable, Sendable, Equatable {
 
     var remoteConfig: RemoteLLMConfig {
         RemoteLLMConfig(endpoint: remoteEndpoint, model: remoteModel, apiKey: remoteAPIKey,
-                        timeout: remoteTimeout, parallelRequests: remoteParallelRequests)
+                        timeout: remoteTimeout, parallelRequests: remoteParallelRequests,
+                        vision: remoteVision, visionImageSize: remoteVisionImageSize)
     }
+
+    /// True when each document's first page is sent as an image as well as its
+    /// text. A document OCR found nothing in is still worth asking about then —
+    /// a scan whose text layer is noise is exactly what a vision model is for.
+    var sendsPageImage: Bool { llmBackend == .remote && remoteVision }
 
     var effectiveConcurrency: Int {
         if ocrConcurrency > 0 { return min(ocrConcurrency, 16) }
@@ -205,6 +226,8 @@ extension AppSettings {
             remoteTimeout: value(.remoteTimeout, d.remoteTimeout),
             remoteParallelRequests: value(.remoteParallelRequests, d.remoteParallelRequests),
             llmExcerptLimit: value(.llmExcerptLimit, d.llmExcerptLimit),
+            remoteVision: value(.remoteVision, d.remoteVision),
+            remoteVisionImageSize: value(.remoteVisionImageSize, d.remoteVisionImageSize),
             autoAcceptMatchingTagSuggestions: value(.autoAcceptMatchingTagSuggestions, d.autoAcceptMatchingTagSuggestions),
             mirrorTagsAsAliases: value(.mirrorTagsAsAliases, d.mirrorTagsAsAliases),
             ocrConcurrency: value(.ocrConcurrency, d.ocrConcurrency),
@@ -235,6 +258,8 @@ extension AppWideSettings {
             remoteTimeout: value(.remoteTimeout, d.remoteTimeout),
             remoteParallelRequests: value(.remoteParallelRequests, d.remoteParallelRequests),
             llmExcerptLimit: value(.llmExcerptLimit, d.llmExcerptLimit),
+            remoteVision: value(.remoteVision, d.remoteVision),
+            remoteVisionImageSize: value(.remoteVisionImageSize, d.remoteVisionImageSize),
             ocrConcurrency: value(.ocrConcurrency, d.ocrConcurrency),
             viewMode: value(.viewMode, d.viewMode),
             galleryThumbnailSize: value(.galleryThumbnailSize, d.galleryThumbnailSize),

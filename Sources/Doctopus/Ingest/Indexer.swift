@@ -284,9 +284,10 @@ actor Indexer {
 
         // 4. Optional model enrichment, on-device or over the network.
         var insight: DocumentInsight?
-        if settings.llmBackend != .off, !extracted.text.isEmpty {
+        if settings.llmBackend != .off, !extracted.text.isEmpty || settings.sendsPageImage {
             let topTags = (try? await store.tags())?.prefix(10).map(\.name) ?? []
-            insight = await intelligence.enrich(text: extracted.text, filename: name, candidateTags: topTags)
+            insight = await intelligence.enrich(text: extracted.text, filename: name, url: url,
+                                                pageCount: extracted.pageCount, candidateTags: topTags)
         }
 
         try? await store.storeMetadata(Store.MetadataPatch(
@@ -542,10 +543,15 @@ actor Indexer {
 
     private func analyzeOne(id: Int64) async -> AnalyzeOutcome {
         guard let path = try? await store.documentPath(id) else { return .skipped }
-        let name = URL(fileURLWithPath: path).lastPathComponent
+        let url = URL(fileURLWithPath: path)
+        let name = url.lastPathComponent
         let text = (try? await store.ocrText(id)) ?? ""
-        guard text.count >= LLMPrompt.minimumCharacters else { return .skipped }
-        guard let insight = await intelligence.enrich(text: text, filename: name) else { return .failed }
+        guard text.count >= LLMPrompt.minimumCharacters || settings.sendsPageImage else { return .skipped }
+        // The file itself, not just its text: a vision-capable endpoint is shown
+        // the first page, which this pass has to go back to disk for.
+        let pages = (try? await store.documentPageCount(id)) ?? nil
+        guard let insight = await intelligence.enrich(text: text, filename: name, url: url,
+                                                      pageCount: pages) else { return .failed }
 
         // Dates, their provenance and amounts belong to the deterministic
         // analyzer, which has the file itself to work from; passing nil here

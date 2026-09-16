@@ -585,6 +585,64 @@ enum SelfTest {
         let testPrompt = LLMPrompt.user(text: "Sample Document", filename: "invoice.pdf", limit: 1000, candidateTags: ["finances", "invoices"])
         Check.that("prompt includes untrusted user data marker", testPrompt.contains("untrusted user data"))
         Check.that("prompt includes candidate taxonomy tags", testPrompt.contains("finances, invoices"))
+        Check.that("a page image is only spoken of when one is attached",
+                   !testPrompt.contains("attached image"))
+
+        // What a vision-capable endpoint is asked: the same questions, plus the
+        // page count and the first page itself.
+        let visionPrompt = LLMPrompt.user(text: "Sample Document", filename: "invoice.pdf", limit: 1000,
+                                          pageCount: 12, hasPageImage: true)
+        Check.that("prompt states how many pages the document has", visionPrompt.contains("Pages: 12"))
+        Check.that("prompt says the attached image is the document's first page",
+                   visionPrompt.contains("first page of the document"))
+        Check.that("the system message tells a vision model to read the page too",
+                   LLMPrompt.instructions(withPageImage: true).contains("page image")
+                       && !LLMPrompt.instructions().contains("page image"))
+
+        // The first page, rendered from a fixture that is really on disk. Asked
+        // for fresh: the rows read at the start of the run have been moved
+        // around by everything between here and there.
+        let pdfs = (try? await store.listDocuments(selection: .all, query: SearchQuery("ext:pdf"),
+                                                   sort: .added, ascending: false)) ?? []
+        if let pdf = pdfs.first(where: { FileManager.default.fileExists(atPath: $0.path) }) {
+            let rendered = PageImage.firstPage(of: pdf.url, maxDimension: 768)
+            print("  page image: " + (rendered.map { "\($0.width)×\($0.height), \($0.kilobytes) KB, \($0.pageCount ?? 0) page(s)" } ?? "none"))
+            Check.that("the first page of a PDF renders as a JPEG",
+                       rendered?.jpeg.starts(with: [0xFF, 0xD8, 0xFF]) == true)
+            Check.that("the rendered page fits the size it was asked for",
+                       rendered.map { max($0.width, $0.height) <= 768 } ?? false,
+                       rendered.map { "\($0.width)×\($0.height)" } ?? "—")
+            Check.that("rendering the page also counts the document's pages",
+                       (rendered?.pageCount ?? 0) >= 1)
+            Check.that("the page travels as an inline data URL",
+                       rendered?.dataURL.hasPrefix("data:image/jpeg;base64,") == true)
+        } else {
+            Check.that("a PDF fixture is there to render a page from", false)
+        }
+
+        // How that page is carried: one user turn, two content parts.
+        let stubPage = PageImage.Rendered(jpeg: Data([0xFF, 0xD8, 0xFF]), width: 8, height: 8, pageCount: 3)
+        let withImage = RemoteLLMService.userMessage(prompt: "prompt", image: stubPage)
+        let parts = withImage["content"] as? [[String: Any]]
+        Check.that("a page image travels beside the text as an image_url part",
+                   parts?.count == 2 && parts?.first?["type"] as? String == "text"
+                       && parts?.last?["type"] as? String == "image_url")
+        Check.that("the image part carries the page inline",
+                   ((parts?.last?["image_url"] as? [String: Any])?["url"] as? String)?
+                       .hasPrefix("data:image/jpeg;base64,") == true)
+        Check.that("with no image the user turn stays the plain string it always was",
+                   RemoteLLMService.userMessage(prompt: "prompt", image: nil)["content"] as? String == "prompt")
+
+        // Provenance: the inspector has to be able to say the model was shown
+        // the page, long after the fact.
+        let visionSource = RemoteLLMService.parse(#"{"title": "T"}"#, model: "qwen2.5-vl", vision: true)?.source
+        Check.that("what a vision model answered is stored as its own source",
+                   visionSource == "vlm:qwen2.5-vl:v\(LLMPrompt.promptVersion)", visionSource ?? "—")
+        Check.that("a vision answer reads back as an API model that saw the page",
+                   MetadataSource(visionSource ?? "") == .remote(model: "qwen2.5-vl", vision: true))
+        Check.that("a vision answer is not stale under the current prompt",
+                   !(visionSource ?? "").isEmpty
+                       && (visionSource ?? "").hasSuffix(":v\(LLMPrompt.promptVersion)"))
 
         let staleHits = (try? await store.listDocuments(selection: .all, query: SearchQuery("is:stale-analysis"), sort: .added, ascending: false)) ?? []
         Check.that("is:stale-analysis returns heuristic documents needing model analysis", !staleHits.isEmpty)
@@ -601,6 +659,10 @@ enum SelfTest {
             live.remoteModel = env["DOCTOPUS_LLM_MODEL"] ?? ""
             live.remoteAPIKey = env["DOCTOPUS_LLM_API_KEY"] ?? ""
             live.remoteTimeout = 60
+            // DOCTOPUS_LLM_VISION=1 additionally sends the first page as an
+            // image, which is how a vision model is verified before it is
+            // configured in the app.
+            live.remoteVision = env["DOCTOPUS_LLM_VISION"] == "1"
             await intelligence.update(settings: live)
 
             let offered = await intelligence.models(live.remoteConfig)
