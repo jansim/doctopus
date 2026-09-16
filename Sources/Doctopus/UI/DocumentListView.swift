@@ -497,11 +497,6 @@ private struct DocumentMenu: View {
             Button("Quick Look") { model.quickLook(startingAt: rows.first) }
             Button("Open in Default App") { model.open(rows) }
             Button("Reveal in Finder") { model.reveal(rows) }
-            if rows.count == 1, rows[0].isAliasHere, case .folder(let folder) = model.selection {
-                Button("Remove Alias from “\((folder as NSString).lastPathComponent)”") {
-                    model.removeAlias(rows[0], inFolder: folder)
-                }
-            }
             if model.selection.isQueueMode {
                 Divider()
                 Button("Approve") { model.setApproved(rows, true) }
@@ -565,6 +560,14 @@ private struct DocumentMenu: View {
             if model.selection == .deleted {
                 Button("Put Back") { model.restore(rows) }
                 Button("Remove from Library", role: .destructive) { model.forget(rows) }
+            } else if case .folder(let folder) = model.selection, rows.allSatisfy(\.isAliasHere) {
+                // Everything selected is in this folder as an alias, and that
+                // is all deleting it takes away — so the menu says so rather
+                // than promising the Trash.
+                Button(rows.count == 1
+                       ? "Remove Alias from “\((folder as NSString).lastPathComponent)”"
+                       : "Remove \(rows.count) Aliases from “\((folder as NSString).lastPathComponent)”",
+                       role: .destructive) { model.moveToTrash(rows) }
             } else {
                 Button("Move to Trash", role: .destructive) { model.moveToTrash(rows) }
             }

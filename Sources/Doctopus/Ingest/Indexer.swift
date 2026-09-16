@@ -496,9 +496,10 @@ actor Indexer {
     /// library root is passed over too, since moving the file there would take
     /// it out of the library altogether.
     ///
-    /// The promotion is recorded as an ordinary `moved` event, so Undo puts the
-    /// document back where it was — on its own, without the alias, which by
-    /// then is the document.
+    /// The promotion is recorded as a `promoted` event, which Undo knows how to
+    /// take apart: the document goes back where it was and the alias it stood
+    /// in for is written again, so undoing a delete leaves the library exactly
+    /// as it was before it.
     ///
     /// Returns nil when there is nowhere to go, and the caller deletes as it
     /// otherwise would.
@@ -555,7 +556,7 @@ actor Indexer {
             try? await store.updatePath(docID, to: target.path)
             FileScanner.pruneEmptyDirectories(startingFrom: home, upTo: store.root)
             try? await store.logProcessing(
-                docID: docID, action: "moved",
+                docID: docID, action: "promoted",
                 detail: "Deleted from \(home.lastPathComponent); kept where it was also filed",
                 confidence: nil, rule: nil, from: path, to: target.path, approved: true)
             await syncAliases(docID: docID, target: target)

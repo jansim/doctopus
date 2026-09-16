@@ -1106,6 +1106,19 @@ actor Store {
     // MARK: - Undo
 
     /// Reverts the most recent undoable file event (such as a move, rename, or routing).
+    ///
+    /// Two of these are about aliases rather than about the file, and both
+    /// carry the alias's own path as `to_path`:
+    ///
+    /// An `unfiled` event is a deleted alias. Nothing was moved, so nothing
+    /// moves back — the alias is simply written again, pointing at wherever
+    /// the document is now.
+    ///
+    /// A `promoted` event is a document that took the place of one of its own
+    /// aliases when it was deleted. It is put back whole: the document returns
+    /// to the folder it was deleted from *and* the alias it replaced is written
+    /// again, because undoing a delete that quietly unfiled the document from
+    /// somewhere else would be a worse surprise than the delete was.
     func undoLastEvent() async throws -> (action: String, filename: String)? {
         let fm = FileManager.default
         // Skips (and discards) events whose target file has since moved
@@ -1115,12 +1128,28 @@ actor Store {
             guard let last = try db.first("""
                 SELECT id, doc_id, action, from_path, to_path, detail
                 FROM events
-                WHERE action IN ('moved', 'renamed', 'routed')
+                WHERE action IN ('moved', 'renamed', 'routed', 'promoted', 'unfiled')
                   AND from_path IS NOT NULL AND to_path IS NOT NULL
                 ORDER BY at DESC, id DESC LIMIT 1
                 """, [], { (id: $0.int(0), docID: $0.int(1), action: $0.string(2),
                             from: absPath($0.string(3)), to: absPath($0.string(4)), detail: $0.stringOrNil(5)) }) else {
                 return nil
+            }
+
+            // A deleted alias left nothing at `to` to put back, so this one is
+            // undone by writing the alias again rather than by moving a file.
+            // It is skipped, like any other stale event, when the document it
+            // pointed at is itself gone.
+            if last.action == "unfiled" {
+                try db.run("DELETE FROM events WHERE id=?", [.int(last.id)])
+                guard let current = try documentPath(last.docID),
+                      fm.fileExists(atPath: current),
+                      let alias = try? AliasManager.createAlias(
+                          to: URL(fileURLWithPath: current),
+                          in: URL(fileURLWithPath: last.to).deletingLastPathComponent())
+                else { continue }
+                try recordAlias(docID: last.docID, tagID: nil, path: alias.path)
+                return (last.action, URL(fileURLWithPath: current).lastPathComponent)
             }
 
             guard fm.fileExists(atPath: last.to) else {
@@ -1134,6 +1163,16 @@ actor Store {
 
             try fm.moveItem(at: URL(fileURLWithPath: last.to), to: targetURL)
             try updatePath(last.docID, to: targetURL.path)
+
+            // Before pruning: an alias put back here is exactly what keeps the
+            // folder from being read as empty and swept away.
+            if last.action == "promoted",
+               let alias = try? AliasManager.createAlias(
+                   to: targetURL,
+                   in: URL(fileURLWithPath: last.to).deletingLastPathComponent()) {
+                try recordAlias(docID: last.docID, tagID: nil, path: alias.path)
+            }
+
             FileScanner.pruneEmptyDirectories(startingFrom: URL(fileURLWithPath: last.to).deletingLastPathComponent(), upTo: root)
 
             try db.run("DELETE FROM events WHERE id=?", [.int(last.id)])

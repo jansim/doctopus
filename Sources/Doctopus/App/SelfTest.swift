@@ -425,12 +425,64 @@ enum SelfTest {
             Check.that("…and the registry no longer carries the promoted placement",
                        !((try? await store.aliases(for: source.doc)) ?? [])
                            .contains(where: { $0.path == created.path }))
-            // Put it back, so the sections after this see the fixture library
-            // laid out the way they found it.
-            _ = await indexer.move(ids: [source.doc],
-                                   to: source.url.deletingLastPathComponent())
-            Check.that("…and it is the same document throughout, not a new one",
-                       (try? await store.documentPath(source.doc)) == source.path)
+
+            // Undo puts the delete back whole. Returning the document without
+            // the alias would quietly unfile it from the folder it was also
+            // in, which is not what was undone.
+            let undone = try? await store.undoLastEvent()
+            let restored = (try? await store.documentPath(source.doc)) ?? ""
+            let placements = ((try? await store.aliases(for: source.doc)) ?? [])
+                .filter { $0.tagID == nil }
+            Check.that("undo returns a promoted document to the folder it was deleted from",
+                       undone?.action == "promoted" && restored == source.path,
+                       undone?.action ?? "nothing to undo")
+            Check.that("…and writes the alias it stood in for again",
+                       placements.contains(where: { alias in
+                           let at = URL(fileURLWithPath: alias.path)
+                           guard AliasManager.isAlias(at),
+                                 let points = AliasManager.resolve(at) else { return false }
+                           return Store.canonical(points.standardizedFileURL.path)
+                               == Store.canonical(URL(fileURLWithPath: restored)
+                                   .standardizedFileURL.path)
+                       }),
+                       "\(placements.count) placement(s)")
+
+            // Leave the fixture library laid out the way this section found it.
+            for alias in placements {
+                AliasManager.removeAlias(at: alias.path,
+                                         pointingTo: URL(fileURLWithPath: restored))
+                try? await store.deleteAlias(id: alias.id)
+            }
+        }
+
+        // Deleting an alias on its own is undone the other way round: nothing
+        // moved, so the alias is written again where it was.
+        if let doc = rows.first(where: { $0.directory.hasSuffix("Inbox") }),
+           let elsewhere = rows.first(where: { $0.directory.hasSuffix("Work") })?
+               .url.deletingLastPathComponent(),
+           let created = try? AliasManager.createAlias(to: doc.url, in: elsewhere) {
+            try? await store.recordAlias(docID: doc.doc, tagID: nil, path: created.path)
+            let record = ((try? await store.aliases(for: doc.doc)) ?? [])
+                .first(where: { $0.path == created.path })
+            AliasManager.removeAlias(at: created.path, pointingTo: doc.url)
+            if let record { try? await store.deleteAlias(id: record.id) }
+            try? await store.logProcessing(
+                docID: doc.doc, action: "unfiled",
+                detail: "No longer filed under \(elsewhere.lastPathComponent)",
+                confidence: nil, rule: nil, from: doc.path, to: created.path, approved: true)
+
+            let undone = try? await store.undoLastEvent()
+            let back = ((try? await store.aliases(for: doc.doc)) ?? []).filter { $0.tagID == nil }
+            Check.that("undoing a deleted alias writes the alias again, and nothing else",
+                       undone?.action == "unfiled"
+                           && back.contains(where: { AliasManager.isAlias(URL(fileURLWithPath: $0.path)) })
+                           && (try? await store.documentPath(doc.doc)) == doc.path,
+                       undone?.action ?? "nothing to undo")
+
+            for alias in back {
+                AliasManager.removeAlias(at: alias.path, pointingTo: doc.url)
+                try? await store.deleteAlias(id: alias.id)
+            }
         }
 
         print("\nQUEUE MODE (same browser, review columns)")
