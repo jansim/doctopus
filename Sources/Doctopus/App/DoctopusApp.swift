@@ -62,8 +62,6 @@ enum Main {
                 exit(1)
             }
         }
-        // Every path above exits; this only keeps the process alive until one
-        // of them does.
         dispatchMain()
     }
 }

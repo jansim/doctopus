@@ -742,10 +742,6 @@ struct EditableRow: View {
             TextField("", text: $draft, prompt: Text("—"))
                 .textFieldStyle(.plain)
                 .onSubmit { if draft != value { onCommit(draft) } }
-                // A run of the model rewrites the title and the correspondent
-                // under a row that is already on screen, and `@State` survives
-                // that — so the new value is adopted here. A draft somebody is
-                // part-way through typing is theirs and is left alone.
                 .onChange(of: value) { old, new in if draft == old { draft = new } }
         }
     }

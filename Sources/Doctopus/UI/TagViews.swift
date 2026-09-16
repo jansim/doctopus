@@ -73,12 +73,7 @@ struct FinderTagChips: View {
     }
 }
 
-/// One of Doctopus's tags as an editable token: the tag's colour, its name,
-/// and an × that takes it off the document.
-///
-/// The inspector and the review panel both draw these, at two sizes — the
-/// review's columns are narrower — so the size is a parameter rather than a
-/// second copy of the chip.
+/// One of Doctopus's tags as an editable token.
 struct TagChip: View {
     let tag: Tag
     var compact = false
@@ -98,12 +93,9 @@ struct TagChip: View {
     }
 }
 
-/// A tag the model proposed: the same token, dashed, because it is not a tag
-/// yet. Clicking it accepts it; the × dismisses it.
+/// A tag the model proposed, displayed with a dashed border until accepted.
 struct TagSuggestionChip: View {
     let suggestion: TagSuggestion
-    /// The colour the tag already has elsewhere, so the chip previews exactly
-    /// how it will look once accepted.
     var color: Color = .secondary
     var compact = false
     let onAccept: () -> Void
@@ -126,7 +118,6 @@ struct TagSuggestionChip: View {
     }
 }
 
-/// The shape both chips share.
 private struct ChipBody<Content: View>: View {
     let compact: Bool
     @ViewBuilder let content: Content

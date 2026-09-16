@@ -267,9 +267,6 @@ enum SearchDateParser {
         return nil
     }
 
-    /// The calendar unit each keyword spans. Every relative range is the same
-    /// two questions — which unit, and this one or the one before it — so they
-    /// are asked once here rather than spelled out per keyword.
     private static let units: [String: Calendar.Component] = [
         "week": .weekOfYear, "month": .month, "quarter": .quarter, "year": .year,
     ]

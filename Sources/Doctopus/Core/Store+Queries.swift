@@ -35,9 +35,7 @@ extension Store {
             language: r.stringOrNil(16), docDate: r.date(17), summary: r.stringOrNil(18))
     }
 
-    /// Every built-in field's value for one row, keyed by field key. The two
-    /// that are not on `DocumentRow` — the amount and the intent — are passed
-    /// in, since only the caller's query knows whether it asked for them.
+    /// Built-in field values for one row, keyed by field key.
     static func builtinValues(fields: [Field], row: DocumentRow,
                               amount: String?, intent: String?) -> [String: String] {
         var values: [String: String] = [:]
@@ -284,9 +282,6 @@ extension Store {
         LIMIT \(limit) OFFSET \(offset)
         """
 
-        // The amount and the intent are built-in fields like any other, but
-        // they have no place on `DocumentRow`, so they are kept aside until the
-        // values dictionary is folded together below.
         var extras: [Int64: (amount: String?, intent: String?)] = [:]
         var rows = try db.map(sql, args) { r -> DocumentRow in
             var row = documentRow(r)
@@ -458,8 +453,6 @@ extension Store {
     }
 
     func facets(column: String) throws -> [Facet] {
-        // Only the three that browse as a list of values; an amount or an
-        // intent has nothing worth faceting.
         guard ["correspondent", "doc_type", "language"].contains(column) else { return [] }
         // A taxonomy field's values are rows, so its facets come from there —
         // icon included, which is how an icon now survives a rename.

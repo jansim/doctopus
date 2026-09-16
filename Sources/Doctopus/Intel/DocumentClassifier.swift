@@ -69,13 +69,9 @@ actor DocumentClassifier {
             return tokens.isEmpty ? nil : (doc: $0, tokens: tokens)
         }
 
-        // A correspondent or a type is one class per value, and needs two
-        // values before it can choose between them.
         correspondentModel = Self.choosing(Self.fit(corpus, label: { $0.correspondent?.nilIfBlank }))
         docTypeModel = Self.choosing(Self.fit(corpus, label: { $0.docType?.nilIfBlank }))
 
-        // A tag is one yes/no model each: every document is an example, either
-        // for the tag or against it.
         var tModels: [String: Model] = [:]
         for tag in Set(docs.flatMap(\.tags)) {
             guard let model = Self.fit(corpus, label: { $0.tags.contains(tag) ? "pos" : "neg" }),
@@ -87,14 +83,11 @@ actor DocumentClassifier {
         tagModels = tModels.isEmpty ? nil : tModels
     }
 
-    /// A model with only one class has nothing to choose between, so it is no
-    /// model at all.
     private static func choosing(_ model: Model?) -> Model? {
         (model?.classes.count ?? 0) >= 2 ? model : nil
     }
 
-    /// Counts one model's classes over the corpus. Documents the label says
-    /// nothing about are left out of it entirely.
+    /// Counts one model's classes over the corpus.
     private static func fit(_ corpus: [(doc: TrainingDoc, tokens: [String])],
                             label: (TrainingDoc) -> String?) -> Model? {
         var model = Model()
@@ -124,8 +117,7 @@ actor DocumentClassifier {
         docTypeModel.flatMap { predict(tokenize(text), $0) }
     }
 
-    /// Every tag whose own model says yes. One tokenization for the lot: there
-    /// is a model per tag in the library, and they all read the same words.
+    /// Every tag whose own model says yes.
     func predictTags(text: String) -> [Prediction] {
         guard let tagModels else { return [] }
         let tokens = tokenize(text)
@@ -139,9 +131,7 @@ actor DocumentClassifier {
 
     // MARK: - Probability scoring
 
-    /// The likeliest class, when it clears the confidence threshold. Scores are
-    /// compared in log space and normalised against the highest of them, so a
-    /// long document cannot underflow every class to zero.
+    /// The likeliest class, when it clears the confidence threshold.
     private func predict(_ tokens: [String], _ model: Model) -> Prediction? {
         guard !tokens.isEmpty, model.totalDocuments > 0 else { return nil }
         let totalDocs = Double(model.totalDocuments)

@@ -51,8 +51,6 @@ enum DocumentAnalyzer {
                         options: Options = .default) -> Findings {
         var f = Findings()
 
-        // The PDF's own metadata answers two of the questions below, and
-        // opening the file twice to ask them separately is not free.
         let pdfInfo = pdfAttributes(url)
 
         // Date: OCR text > embedded document metadata > EXIF > filename > filesystem.
@@ -263,7 +261,6 @@ enum DocumentAnalyzer {
         return date
     }
 
-    /// What a PDF says about itself. Nil for an image, which has no such thing.
     private static func pdfAttributes(_ url: URL) -> [AnyHashable: Any]? {
         guard url.pathExtension.lowercased() == "pdf" else { return nil }
         return PDFDocument(url: url)?.documentAttributes

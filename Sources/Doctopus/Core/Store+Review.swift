@@ -131,8 +131,6 @@ extension Store {
             """, [.text(matchExpr), .int(docID), .int(Int64(limit))]) { $0.int(0) }
         guard !similarIDs.isEmpty else { return [] }
 
-        // One query for the batch, then back into the order the ranking gave
-        // them — `IN` says nothing about the order rows come out in.
         let placeholders = similarIDs.map { _ in "?" }.joined(separator: ",")
         let rows = try db.map("""
             SELECT \(Store.rowColumns)

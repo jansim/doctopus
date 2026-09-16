@@ -16,14 +16,10 @@ extension Store {
         "doc_type": "doc_type_id",
     ]
 
-    /// The `metadata` columns a built-in field can be backed by. Named in one
-    /// place because every path that writes a column name into SQL checks
-    /// against this list first — that check is what keeps the interpolation
-    /// safe.
+    /// The `metadata` columns a built-in field can be backed by.
     static let fieldColumns: Set<String> = ["correspondent", "doc_type", "language", "amount", "intent"]
 
-    /// Those, plus the two `metadata` columns that are edited directly rather
-    /// than through a field.
+    /// Those, plus the `metadata` columns that are edited directly rather than through a field.
     static let editableColumns: Set<String> = fieldColumns.union(["title", "summary"])
 
     nonisolated static func entityColumn(for builtin: String?) -> String? {

@@ -747,12 +747,6 @@ actor Indexer {
         return (count, saved)
     }
 
-    /// Rewrites one file, keeping a copy of the bytes as they were first.
-    ///
-    /// The copy is content-addressed and shared, so it is only discarded again
-    /// when this call is the one that wrote it and the optimization then came
-    /// to nothing — otherwise an earlier optimization's original would go with
-    /// it. Returns nil when the file was left exactly as it was.
     private func optimizeFile(id: Int64, url: URL) async -> Optimizer.Result? {
         var savedOriginal: String?
         if let preHash = FileScanner.hash(url),
@@ -770,8 +764,6 @@ actor Indexer {
                            result.savings * 100, result.pagesRasterized,
                            result.pagesRasterized == 1 ? "" : "s"),
             confidence: nil, rule: nil, from: nil, to: nil, approved: true)
-        // The bytes on disk are new ones, so the hash of the file as it stands
-        // has to follow them. `original_hash` still holds what arrived.
         if let hash = FileScanner.hash(url) { try? await store.setHash(id, hash) }
         return result
     }

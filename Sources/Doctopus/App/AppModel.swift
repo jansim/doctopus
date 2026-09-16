@@ -17,12 +17,8 @@ struct GlobalSearchResult: Identifiable, Sendable {
     var title: String
     var subtitle: String?
     var icon: String
-    /// The document this names, library included — a row id alone would open
-    /// whichever library happened to be active.
     var document: DocumentRef?
     var path: String?
-    /// Which field a facet result belongs to, so selecting it filters the
-    /// field it actually came from.
     var fieldKey: String?
     var tagRef: TagRef?
     var savedViewID: Int64?
@@ -916,9 +912,7 @@ final class AppModel {
             results.append(GlobalSearchResult(id: "tag-\(tag.tagID)", category: .tag, title: tag.name, subtitle: "\(tag.count) document(s)", icon: "tag", tagRef: tag.id))
         }
 
-        // 3. Correspondents & Types. The other fields are deliberately left
-        // out: the palette jumps to a place, and a one-of value or an amount
-        // is a filter rather than somewhere to go.
+        // 3. Correspondents & Types
         let taxonomies: [(key: String, category: GlobalSearchResult.Category, icon: String)] = [
             ("correspondent", .correspondent, "person.2"),
             ("doc_type", .docType, "doc.on.doc"),
@@ -1892,8 +1886,7 @@ enum ByteFormat {
 }
 
 extension DateFormatter {
-    /// `2026-01-14 10.22.03` — a timestamp that is legal in a filename on every
-    /// filesystem, which the ISO spelling with its colons is not.
+    /// Timestamp formatted safely for filenames (e.g. `2026-01-14 10.22.03`).
     static let filenameSafe: DateFormatter = {
         let f = DateFormatter()
         f.locale = Locale(identifier: "en_US_POSIX")

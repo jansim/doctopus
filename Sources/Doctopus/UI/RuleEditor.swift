@@ -282,15 +282,11 @@ struct RuleEditor: View {
         }
     }
 
-    /// A router over this library with no rules of its own, only to answer
-    /// where a template would send something.
     private var previewRouter: Router {
         Router(rules: [], threshold: threshold, derivedTemplate: "",
                root: library.root, deriveWhenNoRule: false)
     }
 
-    /// Expanded by the router itself against a made-up document, so tokens,
-    /// empty values and absolute paths all come out the way they will for real.
     private var destinationURL: URL? {
         guard draft.destination.nilIfBlank != nil else { return nil }
         return previewRouter.expand(draft.destination, correspondent: "Acme Corp",
