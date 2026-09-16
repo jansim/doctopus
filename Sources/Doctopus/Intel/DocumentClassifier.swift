@@ -42,9 +42,13 @@ actor DocumentClassifier {
         var tags: [String]
     }
 
+    /// Whether `fingerprint` differs from the one the models were trained on,
+    /// so a caller can skip assembling a corpus that would change nothing.
+    func needsTraining(fingerprint: String) -> Bool { fingerprint != lastFingerprint }
+
     /// Retrains models on approved library documents if the training set has changed.
     func trainIfNeeded(docs: [TrainingDoc], fingerprint: String) {
-        guard fingerprint != lastFingerprint else { return }
+        guard needsTraining(fingerprint: fingerprint) else { return }
         train(docs: docs)
         lastFingerprint = fingerprint
     }
@@ -57,13 +61,19 @@ actor DocumentClassifier {
             return
         }
 
+        // Tokenizing is by far the expensive part and all three models below
+        // want the same tokens, so each document is tokenized once here rather
+        // than twice plus once more for every tag in the library.
+        let corpus: [(doc: TrainingDoc, tokens: [String])] = docs.compactMap {
+            let tokens = tokenize($0.text)
+            return tokens.isEmpty ? nil : (doc: $0, tokens: tokens)
+        }
+
         // 1. Train Correspondent Model
         var corrModel = Model()
         var corrVocab = Set<String>()
-        for doc in docs {
+        for (doc, tokens) in corpus {
             guard let c = doc.correspondent?.nilIfBlank else { continue }
-            let tokens = tokenize(doc.text)
-            guard !tokens.isEmpty else { continue }
             corrModel.totalDocuments += 1
             var stats = corrModel.classes[c] ?? ClassStats()
             stats.documentCount += 1
@@ -80,10 +90,8 @@ actor DocumentClassifier {
         // 2. Train DocType Model
         var typeModel = Model()
         var typeVocab = Set<String>()
-        for doc in docs {
+        for (doc, tokens) in corpus {
             guard let t = doc.docType?.nilIfBlank else { continue }
-            let tokens = tokenize(doc.text)
-            guard !tokens.isEmpty else { continue }
             typeModel.totalDocuments += 1
             var stats = typeModel.classes[t] ?? ClassStats()
             stats.documentCount += 1
@@ -108,9 +116,7 @@ actor DocumentClassifier {
             var posCount = 0
             var negCount = 0
 
-            for doc in docs {
-                let tokens = tokenize(doc.text)
-                guard !tokens.isEmpty else { continue }
+            for (doc, tokens) in corpus {
                 let isPos = doc.tags.contains(tag)
                 let label = isPos ? "pos" : "neg"
                 if isPos { posCount += 1 } else { negCount += 1 }

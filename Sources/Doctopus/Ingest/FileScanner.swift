@@ -81,25 +81,31 @@ enum FileScanner {
         return hasher.finalize().map { String(format: "%02x", $0) }.joined()
     }
 
-    /// Prunes empty directories climbing up from `dir` towards (and stopping before) `root`.
-    /// Leaves `.doctopus` and the library root intact.
+    /// Prunes empty directories climbing up from `dir` towards (and stopping
+    /// before) `root`. A directory counts as empty only when it holds nothing
+    /// but a `.DS_Store`, so the library root, nested `.doctopus` libraries and
+    /// any other hidden file are all left where they are.
     static func pruneEmptyDirectories(startingFrom dir: URL, upTo root: URL) {
         let fm = FileManager.default
         let rootStandardized = root.standardizedFileURL.path
         var current = dir.standardizedFileURL
         while current.path != rootStandardized && current.path.hasPrefix(rootStandardized + "/") {
             guard let contents = try? fm.contentsOfDirectory(atPath: current.path) else { break }
-            let visible = contents.filter { $0 != ".DS_Store" && !$0.hasSuffix(".doctopus") && !$0.hasPrefix(".") }
-            if visible.isEmpty {
-                let dsStore = current.appendingPathComponent(".DS_Store")
-                if fm.fileExists(atPath: dsStore.path) { try? fm.removeItem(at: dsStore) }
-                do {
-                    try fm.removeItem(at: current)
-                    current = current.deletingLastPathComponent()
-                } catch {
-                    break
-                }
-            } else {
+            // .DS_Store is the only disposable entry. Everything else counts as
+            // content — including dot-files like .git and nested .doctopus
+            // libraries — because the removeItem below is recursive.
+            guard contents.allSatisfy({ $0 == ".DS_Store" }) else { break }
+            let dsStore = current.appendingPathComponent(".DS_Store")
+            if fm.fileExists(atPath: dsStore.path) { try? fm.removeItem(at: dsStore) }
+            // Re-check rather than trust the filter: only ever remove a
+            // directory that is genuinely empty right now, so a failed
+            // .DS_Store removal cannot escalate into a recursive delete.
+            guard let remaining = try? fm.contentsOfDirectory(atPath: current.path),
+                  remaining.isEmpty else { break }
+            do {
+                try fm.removeItem(at: current)
+                current = current.deletingLastPathComponent()
+            } catch {
                 break
             }
         }

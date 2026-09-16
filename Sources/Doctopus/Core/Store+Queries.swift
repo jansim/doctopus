@@ -15,6 +15,8 @@ extension Store {
             : ["d.missing=0", "d.deleted_at IS NULL"]
 
         switch selection {
+        // A smart folder carries no filter of its own: its query arrives in
+        // `query`, the same way a typed search does.
         case .all, .deleted, .savedView: break
         case .inbox:
             wheres.append("(d.directory = ? OR d.directory LIKE ?)")
@@ -110,7 +112,7 @@ extension Store {
             case "optimized":            wheres.append("d.original_size IS NULL")
             case "duplicate", "duplicates":
                 wheres.append("""
-                    (d.hash NOT IN (SELECT hash FROM documents WHERE missing=0 AND deleted_at IS NULL AND hash IS NOT NULL GROUP BY hash HAVING COUNT(*) > 1)
+                    ((d.hash IS NULL OR d.hash NOT IN (SELECT hash FROM documents WHERE missing=0 AND deleted_at IS NULL AND hash IS NOT NULL GROUP BY hash HAVING COUNT(*) > 1))
                      AND (d.original_hash IS NULL OR d.original_hash NOT IN (SELECT original_hash FROM documents WHERE missing=0 AND deleted_at IS NULL AND original_hash IS NOT NULL GROUP BY original_hash HAVING COUNT(*) > 1)))
                     """)
             case "missing":              wheres.append("d.missing=0")

@@ -156,7 +156,7 @@ actor RemoteLLMService {
                 if reply.truncated {
                     Self.log("\(filename): the reply was cut off at \(reply.tokens ?? 0) tokens")
                 }
-                guard let insight = Self.parse(reply.content) else {
+                guard let insight = Self.parse(reply.content, model: config.trimmedModel) else {
                     Self.log("\(filename): could not read a document from \(format.rawValue) reply: \(reply.content.prefix(400))")
                     return nil
                 }

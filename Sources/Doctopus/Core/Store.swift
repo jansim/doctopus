@@ -939,6 +939,18 @@ actor Store {
         var fingerprint: String
     }
 
+    /// The training set's fingerprint on its own, without loading a line of
+    /// document text. Indexing asks once per document, where the corpus only
+    /// changes when a document is approved or edited.
+    func classifierTrainingFingerprint() throws -> String {
+        let row = try db.first("""
+            SELECT COUNT(*), COALESCE(MAX(mtime), 0)
+            FROM documents
+            WHERE missing=0 AND deleted_at IS NULL AND approved=1
+            """) { (count: Int($0.int(0)), maxMtime: $0.double(1)) }
+        return "\(row?.count ?? 0)-\(row?.maxMtime ?? 0)"
+    }
+
     func classifierTrainingData() throws -> ClassifierTrainingData {
         let docs = try db.map("""
             SELECT d.id, ec.name, et.name,
@@ -988,14 +1000,25 @@ actor Store {
         return FileManager.default.fileExists(atPath: file.path) ? file : nil
     }
 
-    func saveOriginalFile(for docID: Int64, from sourceURL: URL, hash: String) throws {
+    /// - Returns: whether this call is the one that wrote the copy. Originals
+    ///   are content-addressed and therefore shared, so an already-present copy
+    ///   belongs to an earlier optimization and is not the caller's to remove.
+    @discardableResult
+    func saveOriginalFile(for docID: Int64, from sourceURL: URL, hash: String) throws -> Bool {
         let fm = FileManager.default
         let dir = originalsDirectory
         try fm.createDirectory(at: dir, withIntermediateDirectories: true)
         let target = dir.appendingPathComponent("\(hash).\(sourceURL.pathExtension)")
-        if !fm.fileExists(atPath: target.path) {
-            try fm.copyItem(at: sourceURL, to: target)
-        }
+        guard !fm.fileExists(atPath: target.path) else { return false }
+        try fm.copyItem(at: sourceURL, to: target)
+        return true
+    }
+
+    /// Drops a pre-optimization copy whose optimization never happened. Nothing
+    /// records it in that case — `original_size` stays NULL — so left alone it
+    /// would sit in `originals/` for the life of the library.
+    func discardOriginalFile(hash: String, ext: String) {
+        try? FileManager.default.removeItem(at: originalsDirectory.appendingPathComponent("\(hash).\(ext)"))
     }
 
     func revertOptimization(_ docID: Int64) throws -> Bool {
@@ -1011,8 +1034,21 @@ actor Store {
         guard FileManager.default.fileExists(atPath: originalURL.path) else { return false }
 
         let fm = FileManager.default
-        _ = try? fm.removeItem(at: currentURL)
-        try fm.copyItem(at: originalURL, to: currentURL)
+        // Stage the restore beside the live file and swap it in, so a failing
+        // copy can never leave the row pointing at a file that no longer exists.
+        let staged = currentURL.deletingLastPathComponent()
+            .appendingPathComponent(".doctopus-revert-\(UUID().uuidString).\(ext)")
+        try fm.copyItem(at: originalURL, to: staged)
+        do {
+            if fm.fileExists(atPath: currentURL.path) {
+                _ = try fm.replaceItemAt(currentURL, withItemAt: staged)
+            } else {
+                try fm.moveItem(at: staged, to: currentURL)
+            }
+        } catch {
+            try? fm.removeItem(at: staged)
+            throw error
+        }
 
         try db.run("""
             UPDATE documents SET size=?, original_size=NULL, hash=original_hash
@@ -1232,7 +1268,13 @@ actor Store {
     func applyRuleToExisting(ruleID: Int64) async throws -> RuleApplyResult {
         let allRules = try rules()
         guard let rule = allRules.first(where: { $0.id == ruleID }) else { return RuleApplyResult() }
+        return try await applyRuleToExisting(rule)
+    }
 
+    /// The same, for a rule that has not been saved yet — the rule editor
+    /// applies the draft in front of the user, and Cancel still has to leave
+    /// the rule list untouched.
+    func applyRuleToExisting(_ rule: Rule) async throws -> RuleApplyResult {
         let docs = try db.map("""
             SELECT d.id, d.path, d.filename, d.created_at, m.doc_date, ec.name, et.name,
                    (SELECT f.body FROM doc_fts f WHERE f.rowid = d.id)

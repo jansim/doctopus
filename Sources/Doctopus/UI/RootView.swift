@@ -183,13 +183,22 @@ private struct SearchSuggestions: View {
 
     var body: some View {
         if model.searchText.isEmpty {
-            ForEach(["is:review", "is:untagged", "is:duplicate", "is:stale-analysis", "ext:pdf", "date:this month", "date:2026"], id: \.self) { token in
+            // A multi-word value has to arrive quoted or the tokenizer splits
+            // it into a filter and a stray search term.
+            ForEach(["is:review", "is:untagged", "is:duplicate", "is:stale-analysis", "ext:pdf",
+                     "date:\"this month\"", "date:2026"], id: \.self) { token in
                 Text(token).searchCompletion(token)
             }
-        } else if let last = model.searchText.split(separator: " ").last.map(String.init) {
+        } else {
+            // The token being completed is whatever follows the last space, so
+            // a trailing space starts a fresh one rather than re-offering the
+            // token before it — and `base` stays exactly the text kept intact.
+            let text = model.searchText
+            let start = text.lastIndex(of: " ").map { text.index(after: $0) } ?? text.startIndex
+            let last = String(text[start...])
+            let base = String(text[..<start])
             let (prefix, query) = splitToken(last)
             let comps = completions(for: prefix, query: query)
-            let base = model.searchText.dropLast(last.count)
             ForEach(comps.prefix(12), id: \.self) { value in
                 Text(value).searchCompletion("\(base)\(prefix):\(quoted(value))")
             }

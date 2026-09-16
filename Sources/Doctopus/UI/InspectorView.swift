@@ -160,11 +160,7 @@ private struct DetailInspector: View {
     }
 
     private static func sourceLabel(_ s: String) -> String {
-        switch s {
-        case "llm": return "On-device model"
-        case "remote": return "API model"
-        default: return "Heuristics"
-        }
+        MetadataSource(s).detailedLabel
     }
 
     private func dateSourceLabel(_ s: String) -> String {
