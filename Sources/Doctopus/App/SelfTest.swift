@@ -604,6 +604,16 @@ enum SelfTest {
                        !enriched.isEmpty && enriched.allSatisfy { $0.metadataSource == "remote" && $0.row.summary != nil })
         }
 
+        print("\nURL SCHEMES & SHORTCUTS")
+        if let searchURL = URL(string: "doctopus://search?q=rechnung") {
+            let action = URLSchemeHandler.parse(searchURL)
+            Check.that("URL scheme parses doctopus://search", action == .search("rechnung"))
+        }
+        if let importURL = URL(string: "doctopus://import?path=/tmp/scan.pdf") {
+            let action = URLSchemeHandler.parse(importURL)
+            Check.that("URL scheme parses doctopus://import", action == .import("/tmp/scan.pdf"))
+        }
+
         print("\nENTITIES")
         // Correspondents and types are rows now, so renaming one is one row and
         // renaming it onto another is a merge — which two free-text columns

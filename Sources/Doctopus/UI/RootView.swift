@@ -45,6 +45,9 @@ struct RootView: View {
         .onReceive(NotificationCenter.default.publisher(for: .showRenameSheet)) { _ in
             if !model.selectedIDs.isEmpty { renameSheet = true }
         }
+        .onOpenURL { url in
+            model.handleURL(url)
+        }
         // Alerts are for things that went wrong; a routine result is a toast.
         .alert("Doctopus", isPresented: Binding(
             get: { model.errorMessage != nil },

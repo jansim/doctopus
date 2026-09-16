@@ -3,6 +3,39 @@ import SwiftUI
 import Observation
 import AppKit
 
+enum URLSchemeHandler: Sendable {
+    enum Action: Equatable, Sendable {
+        case search(String)
+        case `import`(String)
+        case open(Int64)
+        case verify
+    }
+
+    static func parse(_ url: URL) -> Action? {
+        guard url.scheme == "doctopus" else { return nil }
+        let host = url.host ?? url.path
+        let comps = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        let queryItems = comps?.queryItems ?? []
+        func param(_ name: String) -> String? {
+            queryItems.first(where: { $0.name == name })?.value
+        }
+
+        switch host {
+        case "import":
+            if let path = param("path") { return .import(path) }
+        case "search":
+            if let q = param("q") ?? param("query") { return .search(q) }
+        case "open", "doc", "document":
+            if let idStr = param("id"), let docID = Int64(idStr) { return .open(docID) }
+        case "verify":
+            return .verify
+        default:
+            break
+        }
+        return nil
+    }
+}
+
 /// Main-actor coordinator between the SwiftUI views and the background actors.
 ///
 /// Views only ever read this; every mutation funnels through an action here so
@@ -860,6 +893,27 @@ final class AppModel {
             viewMode = mode
         }
         reloadDocuments()
+    }
+
+    // MARK: - URL Schemes & Shortcuts
+
+    func handleURL(_ url: URL) {
+        guard let action = URLSchemeHandler.parse(url) else { return }
+        switch action {
+        case .import(let path):
+            let fileURL = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
+            importFiles([fileURL], into: nil)
+        case .search(let q):
+            selection = .all
+            searchText = q
+        case .open(let docID):
+            selection = .all
+            if let lib = activeLibrary {
+                selectedIDs = [DocumentRef(library: lib.id, doc: docID)]
+            }
+        case .verify:
+            verifyLibrary()
+        }
     }
 
     // MARK: - Document actions
