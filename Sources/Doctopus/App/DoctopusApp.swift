@@ -166,6 +166,8 @@ struct DoctopusCommands: Commands {
                 .keyboardShortcut("n", modifiers: [.command])
             Button("Open Library…") { model.openLibraryPicker() }
                 .keyboardShortcut("o", modifiers: [.command])
+            Button("Quick Open…") { NotificationCenter.default.post(name: .showQuickSwitcher, object: nil) }
+                .keyboardShortcut("o", modifiers: [.command, .shift])
             Button("Import Files…") { importPanel() }
                 .keyboardShortcut("i", modifiers: [.command])
         }
@@ -217,4 +219,5 @@ struct DoctopusCommands: Commands {
 
 extension Notification.Name {
     static let showRenameSheet = Notification.Name("io.doctopus.showRenameSheet")
+    static let showQuickSwitcher = Notification.Name("io.doctopus.showQuickSwitcher")
 }

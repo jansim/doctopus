@@ -3,6 +3,27 @@ import SwiftUI
 import Observation
 import AppKit
 
+struct GlobalSearchResult: Identifiable, Sendable {
+    enum Category: String, Sendable {
+        case document = "Document"
+        case tag = "Tag"
+        case correspondent = "Correspondent"
+        case docType = "Document Type"
+        case folder = "Folder"
+        case savedView = "Smart Folder"
+    }
+    var id: String
+    var category: Category
+    var title: String
+    var subtitle: String?
+    var icon: String
+    var docID: Int64?
+    var path: String?
+    var entityID: Int64?
+    var tagRef: TagRef?
+    var savedViewID: Int64?
+}
+
 enum URLSchemeHandler: Sendable {
     enum Action: Equatable, Sendable {
         case search(String)
@@ -852,6 +873,51 @@ final class AppModel {
                 errorMessage = "Could not verify library: \(error.localizedDescription)"
             }
         }
+    }
+
+    // MARK: - Global Search
+
+    func globalSearch(text: String, limit: Int = 20) -> [GlobalSearchResult] {
+        guard !text.trimmingCharacters(in: .whitespaces).isEmpty else { return [] }
+        let query = text.lowercased()
+        var results: [GlobalSearchResult] = []
+
+        // 1. Saved Views
+        for sv in savedViews where sv.name.lowercased().contains(query) {
+            results.append(GlobalSearchResult(id: "sv-\(sv.id)", category: .savedView, title: sv.name, subtitle: sv.query, icon: sv.icon, savedViewID: sv.id))
+        }
+
+        // 2. Tags
+        for tag in distinctTags where tag.name.lowercased().contains(query) {
+            results.append(GlobalSearchResult(id: "tag-\(tag.tagID)", category: .tag, title: tag.name, subtitle: "\(tag.count) document(s)", icon: "tag", tagRef: tag.id))
+        }
+
+        // 3. Correspondents & Types
+        for (fieldKey, facetList) in facets {
+            let cat: GlobalSearchResult.Category = fieldKey == "doc_type" ? .docType : .correspondent
+            let iconName = fieldKey == "doc_type" ? "doc.on.doc" : "person.2"
+            for f in facetList where f.value.lowercased().contains(query) {
+                results.append(GlobalSearchResult(id: "facet-\(fieldKey)-\(f.value)", category: cat, title: f.value, subtitle: "\(f.count) document(s)", icon: f.icon ?? iconName, path: fieldKey))
+            }
+        }
+
+        // 4. Folders
+        func collectFolders(_ nodes: [FolderNode]) {
+            for n in nodes {
+                if n.name.lowercased().contains(query) && !n.isRoot {
+                    results.append(GlobalSearchResult(id: "folder-\(n.path)", category: .folder, title: n.name, subtitle: n.path, icon: "folder", path: n.path))
+                }
+                collectFolders(n.children)
+            }
+        }
+        collectFolders(folders)
+
+        // 5. Documents
+        for doc in documents where doc.displayTitle.lowercased().contains(query) || doc.filename.lowercased().contains(query) {
+            results.append(GlobalSearchResult(id: "doc-\(doc.doc)", category: .document, title: doc.displayTitle, subtitle: doc.filename, icon: "doc.text", docID: doc.doc))
+        }
+
+        return Array(results.prefix(limit))
     }
 
     // MARK: - Smart Folders / Saved Views
