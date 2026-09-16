@@ -157,12 +157,56 @@ struct SearchQuery: Sendable, Equatable {
                 }
             }
         }
-        guard !parts.isEmpty else { return nil }
-        let hasBool = parts.contains { $0 == "AND" || $0 == "OR" || $0 == "NOT" || $0 == "(" || $0 == ")" }
+        let balanced = SearchQuery.balance(parts)
+        guard !balanced.isEmpty else { return nil }
+        let hasBool = balanced.contains { SearchQuery.isFTSOperator($0) || $0 == "(" || $0 == ")" }
         if !hasBool {
-            return parts.joined(separator: " AND ")
+            return balanced.joined(separator: " AND ")
         }
-        return parts.joined(separator: " ")
+        return balanced.joined(separator: " ")
+    }
+
+    private static func isFTSOperator(_ t: String) -> Bool { t == "AND" || t == "OR" || t == "NOT" }
+
+    /// An expression is read while it is still being typed, so it passes
+    /// through states like `foo and` or `(foo or`. FTS5 rejects those outright,
+    /// and the resulting throw blanks the whole document list — so an operator
+    /// with nothing to operate on, and a bracket with no partner, are dropped
+    /// here rather than handed to SQLite.
+    private static func balance(_ parts: [String]) -> [String] {
+        var out: [String] = []
+        var depth = 0
+        // Whether the next token has to be an operand: true at the start, after
+        // an operator, and just inside an opening bracket.
+        var expectsOperand = true
+        for token in parts {
+            if isFTSOperator(token) {
+                guard !expectsOperand else { continue }
+                out.append(token)
+                expectsOperand = true
+            } else if token == "(" {
+                out.append(token)
+                depth += 1
+                expectsOperand = true
+            } else if token == ")" {
+                // Nothing open, or nothing in it yet.
+                guard depth > 0, !expectsOperand else { continue }
+                out.append(token)
+                depth -= 1
+                expectsOperand = false
+            } else {
+                out.append(token)
+                expectsOperand = false
+            }
+        }
+        // Whatever the cursor left dangling: a trailing operator, or a bracket
+        // opened with nothing after it.
+        while let last = out.last, isFTSOperator(last) || last == "(" {
+            if last == "(" { depth -= 1 }
+            out.removeLast()
+        }
+        out.append(contentsOf: Array(repeating: ")", count: max(0, depth)))
+        return out
     }
 }
 

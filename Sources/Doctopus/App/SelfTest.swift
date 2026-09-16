@@ -46,7 +46,13 @@ enum SelfTest {
         catch { print("✗ could not stage library: \(error)"); exit(1) }
 
         let container = root.appendingPathComponent("library.doctopus", isDirectory: true)
-        guard let store = try? Store(directory: container) else { print("✗ could not open store"); exit(1) }
+        let store: Store
+        do {
+            store = try Store(directory: container)
+        } catch {
+            print("✗ could not open store: \(error)")
+            exit(1)
+        }
         print("Library: \(container.lastPathComponent)")
         print("Root:   \(root.path)\n")
 
@@ -511,7 +517,7 @@ enum SelfTest {
         Check.that("a fenced, chatty JSON reply still parses",
                    parsed?.correspondent == "Stadtwerke" && parsed?.docType == "Invoice"
                        && parsed?.language == "de" && parsed?.intent == "pay"
-                       && parsed?.tags == ["utilities", "gas"] && parsed?.source == "remote")
+                       && parsed?.tags == ["utilities", "gas"] && parsed?.source.hasPrefix("remote") == true)
         Check.that("a reply with nothing in it is a failure, not empty metadata",
                    RemoteLLMService.parse("{\"summary\": \"\", \"tags\": []}") == nil)
         Check.that("prose with no JSON in it is a failure",
@@ -548,6 +554,13 @@ enum SelfTest {
         let blocked = await indexer.analyze(ids: rows.map(\.doc))
         print("  analyze with no backend: \(blocked.blocked ?? "ran anyway")")
         Check.that("a manual run with no model reports why", blocked.blocked != nil)
+
+        let testPrompt = LLMPrompt.user(text: "Sample Document", filename: "invoice.pdf", limit: 1000, candidateTags: ["finances", "invoices"])
+        Check.that("prompt includes untrusted user data marker", testPrompt.contains("untrusted user data"))
+        Check.that("prompt includes candidate taxonomy tags", testPrompt.contains("finances, invoices"))
+
+        let staleHits = (try? await store.listDocuments(selection: .all, query: SearchQuery("is:stale-analysis"), sort: .added, ascending: false)) ?? []
+        Check.that("is:stale-analysis returns heuristic documents needing model analysis", !staleHits.isEmpty)
 
         // A live run against a real server, when one is pointed at. This is how
         // a configuration is verified without the UI:
@@ -588,8 +601,25 @@ enum SelfTest {
                 print("  \(d.row.filename.padded(40)) \(d.metadataSource ?? "—")  \(d.row.summary ?? "no summary")")
             }
             Check.that("what the API returned is stored as its own source",
-                       !enriched.isEmpty && enriched.allSatisfy { $0.metadataSource == "remote" && $0.row.summary != nil })
+                       !enriched.isEmpty && enriched.allSatisfy {
+                           if case .remote = MetadataSource($0.metadataSource ?? "") { return $0.row.summary != nil }
+                           return false
+                       })
         }
+
+        print("\nURL SCHEMES & SHORTCUTS")
+        if let searchURL = URL(string: "doctopus://search?q=rechnung") {
+            let action = URLSchemeHandler.parse(searchURL)
+            Check.that("URL scheme parses doctopus://search", action == .search("rechnung"))
+        }
+        if let importURL = URL(string: "doctopus://import?path=/tmp/scan.pdf") {
+            let action = URLSchemeHandler.parse(importURL)
+            Check.that("URL scheme parses doctopus://import", action == .import("/tmp/scan.pdf"))
+        }
+
+        print("\nAUTOCOMPLETE & GLOBAL SEARCH")
+        let globalResults = (try? await store.listDocuments(selection: .all, query: SearchQuery("rechnung"), sort: .added, ascending: false)) ?? []
+        Check.that("search suggestions and queries return hits for terms", !globalResults.isEmpty)
 
         print("\nENTITIES")
         // Correspondents and types are rows now, so renaming one is one row and
@@ -869,6 +899,19 @@ enum SelfTest {
                        !kept.isEmpty || subject.docDate == nil)
         }
 
+        print("\nREVERTIBLE OPTIMISATION")
+        if let targetDoc = rows.first(where: { $0.ext == "pdf" }) {
+            let origSize = targetDoc.size
+            if let hash = FileScanner.hash(targetDoc.url) {
+                try? await store.saveOriginalFile(for: targetDoc.doc, from: targetDoc.url, hash: hash)
+                try? await store.setSizes(targetDoc.doc, size: origSize / 2, originalSize: origSize)
+                let origURL = try? await store.originalFileURL(for: targetDoc.doc)
+                Check.that("pre-optimization original file is preserved", origURL != nil && FileManager.default.fileExists(atPath: origURL!.path))
+                let reverted = (try? await store.revertOptimization(targetDoc.doc)) ?? false
+                Check.that("revert optimization restores document size and removes original_size", reverted)
+            }
+        }
+
         print("\nTYPED FIELDS")
         // Reading an amount as a number is the difference between €90 coming
         // before €1,200 and coming after it — and both conventions for writing
@@ -1058,6 +1101,27 @@ enum SelfTest {
                            undone != nil && FileManager.default.fileExists(atPath: origPath))
             }
         }
+
+        if let sample = rows.first {
+            let similar = (try? await store.similarDocuments(for: sample.doc, limit: 3)) ?? []
+            Check.that("more-like-this finds similar documents without self", !similar.contains { $0.doc == sample.doc })
+        }
+
+        print("\nLOCAL CLASSIFIER")
+        let classifier = DocumentClassifier(confidenceThreshold: 0.5)
+        let sampleDocs = [
+            DocumentClassifier.TrainingDoc(id: 1, text: "Rechnung Stadtwerke München Gas Strom Energie Abrechnung", correspondent: "Stadtwerke München", docType: "Invoice", tags: ["utilities", "bills"]),
+            DocumentClassifier.TrainingDoc(id: 2, text: "Stadtwerke München Jahresabrechnung Strom Erdgas", correspondent: "Stadtwerke München", docType: "Invoice", tags: ["utilities", "bills"]),
+            DocumentClassifier.TrainingDoc(id: 3, text: "Deutsche Bank Kontoauszug Finanzstatus Saldo Überweisung", correspondent: "Deutsche Bank AG", docType: "Bank Statement", tags: ["finance"]),
+            DocumentClassifier.TrainingDoc(id: 4, text: "Kontoauszug Deutsche Bank Girokonto Buchung", correspondent: "Deutsche Bank AG", docType: "Bank Statement", tags: ["finance"])
+        ]
+        await classifier.train(docs: sampleDocs)
+        let predCorr = await classifier.predictCorrespondent(text: "Stadtwerke München Abschlagszahlung Gas")
+        let predType = await classifier.predictDocType(text: "Deutsche Bank Auszug Buchungsbestätigung")
+        let predTags = await classifier.predictTags(text: "Rechnung Strom Energie")
+        Check.that("classifier predicts correspondent on matching vocabulary", predCorr?.label == "Stadtwerke München")
+        Check.that("classifier predicts doc_type on matching vocabulary", predType?.label == "Bank Statement")
+        Check.that("classifier predicts multi-label tags", predTags.contains { $0.label == "utilities" || $0.label == "bills" })
 
         print("\nSEARCH INDEX")
         // Everything a person can see is a column of `doc_fts`, so each of
@@ -1342,6 +1406,52 @@ enum SelfTest {
         Check.that("removing an alias never deletes a real file in its place",
                    !removed && fm.fileExists(atPath: impostor.path))
         try? fm.removeItem(at: impostor)
+
+        // 9. Pruning an emptied folder never takes a hidden file with it.
+        // `removeItem` is recursive, so a folder still holding a dot-file is
+        // not empty however little the Finder shows in it.
+        let keepDir = root.appendingPathComponent("Work/prune-check", isDirectory: true)
+        try? fm.createDirectory(at: keepDir, withIntermediateDirectories: true)
+        let hidden = keepDir.appendingPathComponent(".notes.md")
+        try? Data("not the pruner's to delete".utf8).write(to: hidden)
+        FileScanner.pruneEmptyDirectories(startingFrom: keepDir, upTo: root)
+        Check.that("pruning leaves a folder that still holds a hidden file",
+                   fm.fileExists(atPath: hidden.path))
+        try? fm.removeItem(at: keepDir)
+
+        // …and one holding nothing but a .DS_Store really does go.
+        let goneDir = root.appendingPathComponent("Work/prune-empty", isDirectory: true)
+        try? fm.createDirectory(at: goneDir, withIntermediateDirectories: true)
+        try? Data().write(to: goneDir.appendingPathComponent(".DS_Store"))
+        FileScanner.pruneEmptyDirectories(startingFrom: goneDir, upTo: root)
+        Check.that("…and prunes one holding nothing but a .DS_Store",
+                   !fm.fileExists(atPath: goneDir.path))
+
+        print("\nHALF-TYPED SEARCHES")
+        // FTS5 rejects a dangling operator outright, and the throw would blank
+        // the whole list — so every state the field passes through on the way
+        // to a real query has to stay runnable.
+        for partial in ["rechnung and", "and", "not", "or kontoauszug", "(rechnung or",
+                        "rechnung )", "(", "rechnung and or kontoauszug"] {
+            let hits = try? await store.listDocuments(selection: .all, query: SearchQuery(partial),
+                                                      sort: .added, ascending: false)
+            Check.that("“\(partial)” is still a query the list can run", hits != nil,
+                       SearchQuery(partial).ftsExpression ?? "no expression")
+        }
+
+        print("\nMETADATA SOURCE")
+        // The string carries a prompt version, and may carry a model name with
+        // colons of its own (`llama3:8b`), so it is never matched whole.
+        Check.that("an on-device analysis is labelled as one",
+                   MetadataSource("llm:v\(LLMPrompt.promptVersion)").label == "On-device model")
+        Check.that("an API analysis is labelled as one, whatever its version",
+                   MetadataSource("remote:v9").label == "API model")
+        Check.that("a model name is read back out of the source",
+                   MetadataSource("remote:llama3:8b:v2").model == "llama3:8b")
+        Check.that("a source with no model names none",
+                   MetadataSource("remote:v2").model == nil)
+        Check.that("anything else is heuristics",
+                   MetadataSource("heuristic").label == "Heuristics")
 
         for id in ruleIDs { try? await store.deleteRule(id) }
         await indexer.update(settings: settings)

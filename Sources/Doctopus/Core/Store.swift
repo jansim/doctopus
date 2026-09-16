@@ -932,6 +932,134 @@ actor Store {
         try db.first("SELECT COUNT(*) FROM processing WHERE status=0") { Int($0.int(0)) } ?? 0
     }
 
+    // MARK: - Classifier Training Data
+
+    struct ClassifierTrainingData: Sendable {
+        var docs: [DocumentClassifier.TrainingDoc]
+        var fingerprint: String
+    }
+
+    /// The training set's fingerprint on its own, without loading a line of
+    /// document text. Indexing asks once per document, where the corpus only
+    /// changes when a document is approved or edited.
+    func classifierTrainingFingerprint() throws -> String {
+        let row = try db.first("""
+            SELECT COUNT(*), COALESCE(MAX(mtime), 0)
+            FROM documents
+            WHERE missing=0 AND deleted_at IS NULL AND approved=1
+            """) { (count: Int($0.int(0)), maxMtime: $0.double(1)) }
+        return "\(row?.count ?? 0)-\(row?.maxMtime ?? 0)"
+    }
+
+    func classifierTrainingData() throws -> ClassifierTrainingData {
+        let docs = try db.map("""
+            SELECT d.id, ec.name, et.name,
+                   (SELECT f.body FROM doc_fts f WHERE f.rowid = d.id),
+                   d.mtime
+            FROM documents d
+            LEFT JOIN metadata m ON m.doc_id = d.id
+            LEFT JOIN entities ec ON ec.id = m.correspondent_id
+            LEFT JOIN entities et ON et.id = m.doc_type_id
+            WHERE d.missing=0 AND d.deleted_at IS NULL AND d.approved=1
+            """) {
+            (id: $0.int(0), correspondent: $0.stringOrNil(1), docType: $0.stringOrNil(2),
+             text: $0.stringOrNil(3) ?? "", mtime: $0.double(4))
+        }
+
+        let docIDs = docs.map(\.id)
+        let tagMap = (try? tags(forDocuments: docIDs).own) ?? [:]
+
+        var trainingDocs: [DocumentClassifier.TrainingDoc] = []
+        var maxMtime: Double = 0
+        for doc in docs {
+            let tNames = (tagMap[doc.id] ?? []).map(\.name)
+            trainingDocs.append(DocumentClassifier.TrainingDoc(
+                id: doc.id, text: doc.text,
+                correspondent: doc.correspondent, docType: doc.docType,
+                tags: tNames
+            ))
+            if doc.mtime > maxMtime { maxMtime = doc.mtime }
+        }
+
+        let fingerprint = "\(trainingDocs.count)-\(maxMtime)"
+        return ClassifierTrainingData(docs: trainingDocs, fingerprint: fingerprint)
+    }
+
+    // MARK: - Optimization Originals
+
+    var originalsDirectory: URL {
+        containerURL.appendingPathComponent("originals", isDirectory: true)
+    }
+
+    func originalFileURL(for docID: Int64) throws -> URL? {
+        guard let (path, originalHash) = try db.first(
+            "SELECT path, original_hash FROM documents WHERE id=? AND original_size IS NOT NULL AND original_hash IS NOT NULL",
+            [.int(docID)], { ($0.string(0), $0.string(1)) }) else { return nil }
+        let ext = URL(fileURLWithPath: path).pathExtension
+        let file = originalsDirectory.appendingPathComponent("\(originalHash).\(ext)")
+        return FileManager.default.fileExists(atPath: file.path) ? file : nil
+    }
+
+    /// - Returns: whether this call is the one that wrote the copy. Originals
+    ///   are content-addressed and therefore shared, so an already-present copy
+    ///   belongs to an earlier optimization and is not the caller's to remove.
+    @discardableResult
+    func saveOriginalFile(for docID: Int64, from sourceURL: URL, hash: String) throws -> Bool {
+        let fm = FileManager.default
+        let dir = originalsDirectory
+        try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        let target = dir.appendingPathComponent("\(hash).\(sourceURL.pathExtension)")
+        guard !fm.fileExists(atPath: target.path) else { return false }
+        try fm.copyItem(at: sourceURL, to: target)
+        return true
+    }
+
+    /// Drops a pre-optimization copy whose optimization never happened. Nothing
+    /// records it in that case — `original_size` stays NULL — so left alone it
+    /// would sit in `originals/` for the life of the library.
+    func discardOriginalFile(hash: String, ext: String) {
+        try? FileManager.default.removeItem(at: originalsDirectory.appendingPathComponent("\(hash).\(ext)"))
+    }
+
+    func revertOptimization(_ docID: Int64) throws -> Bool {
+        guard let (relPath, originalSize, originalHash) = try db.first("""
+            SELECT path, original_size, original_hash
+            FROM documents
+            WHERE id=? AND original_size IS NOT NULL AND original_hash IS NOT NULL
+            """, [.int(docID)], { ($0.string(0), $0.int(1), $0.string(2)) }) else { return false }
+
+        let currentURL = URL(fileURLWithPath: absPath(relPath))
+        let ext = currentURL.pathExtension
+        let originalURL = originalsDirectory.appendingPathComponent("\(originalHash).\(ext)")
+        guard FileManager.default.fileExists(atPath: originalURL.path) else { return false }
+
+        let fm = FileManager.default
+        // Stage the restore beside the live file and swap it in, so a failing
+        // copy can never leave the row pointing at a file that no longer exists.
+        let staged = currentURL.deletingLastPathComponent()
+            .appendingPathComponent(".doctopus-revert-\(UUID().uuidString).\(ext)")
+        try fm.copyItem(at: originalURL, to: staged)
+        do {
+            if fm.fileExists(atPath: currentURL.path) {
+                _ = try fm.replaceItemAt(currentURL, withItemAt: staged)
+            } else {
+                try fm.moveItem(at: staged, to: currentURL)
+            }
+        } catch {
+            try? fm.removeItem(at: staged)
+            throw error
+        }
+
+        try db.run("""
+            UPDATE documents SET size=?, original_size=NULL, hash=original_hash
+            WHERE id=?
+            """, [.int(originalSize), .int(docID)])
+        try logProcessing(docID: docID, action: "reverted_optimization",
+                          detail: "Reverted to original pre-optimization file",
+                          confidence: nil, rule: nil, from: nil, to: currentURL.path, approved: true)
+        return true
+    }
+
     // MARK: - Verification queries
 
     struct VerificationDocInfo: Sendable {
@@ -1140,7 +1268,13 @@ actor Store {
     func applyRuleToExisting(ruleID: Int64) async throws -> RuleApplyResult {
         let allRules = try rules()
         guard let rule = allRules.first(where: { $0.id == ruleID }) else { return RuleApplyResult() }
+        return try await applyRuleToExisting(rule)
+    }
 
+    /// The same, for a rule that has not been saved yet — the rule editor
+    /// applies the draft in front of the user, and Cancel still has to leave
+    /// the rule list untouched.
+    func applyRuleToExisting(_ rule: Rule) async throws -> RuleApplyResult {
         let docs = try db.map("""
             SELECT d.id, d.path, d.filename, d.created_at, m.doc_date, ec.name, et.name,
                    (SELECT f.body FROM doc_fts f WHERE f.rowid = d.id)

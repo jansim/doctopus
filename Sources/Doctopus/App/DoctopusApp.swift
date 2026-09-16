@@ -156,9 +156,11 @@ struct DoctopusCommands: Commands {
     let model: AppModel
 
     var body: some Commands {
-        CommandGroup(replacing: .undoRedo) {
-            Button("Undo") { model.undo() }
-                .keyboardShortcut("z", modifiers: [.command])
+        // Added alongside the standard Undo/Redo rather than replacing it: ⌘Z
+        // has to keep undoing typing in text fields, not move files on disk.
+        CommandGroup(after: .undoRedo) {
+            Button("Undo File Change") { model.undo() }
+                .keyboardShortcut("z", modifiers: [.command, .option])
         }
 
         CommandGroup(replacing: .newItem) {
@@ -166,6 +168,8 @@ struct DoctopusCommands: Commands {
                 .keyboardShortcut("n", modifiers: [.command])
             Button("Open Library…") { model.openLibraryPicker() }
                 .keyboardShortcut("o", modifiers: [.command])
+            Button("Quick Open…") { NotificationCenter.default.post(name: .showQuickSwitcher, object: nil) }
+                .keyboardShortcut("o", modifiers: [.command, .shift])
             Button("Import Files…") { importPanel() }
                 .keyboardShortcut("i", modifiers: [.command])
         }
@@ -200,6 +204,8 @@ struct DoctopusCommands: Commands {
                 .disabled(model.selectedIDs.isEmpty || !model.modelStatus.isReady)
             Button("Optimize") { model.optimize(model.selectedRows) }
                 .disabled(model.selectedIDs.isEmpty)
+            Button("Revert to Original") { model.revertOptimization(model.selectedRows) }
+                .disabled(model.selectedIDs.isEmpty || !model.selectedRows.contains { $0.originalSize != nil })
             Divider()
             Button("Move to Trash") { model.moveToTrash(model.selectedRows) }
                 .keyboardShortcut(.delete, modifiers: [.command])
@@ -215,4 +221,5 @@ struct DoctopusCommands: Commands {
 
 extension Notification.Name {
     static let showRenameSheet = Notification.Name("io.doctopus.showRenameSheet")
+    static let showQuickSwitcher = Notification.Name("io.doctopus.showQuickSwitcher")
 }

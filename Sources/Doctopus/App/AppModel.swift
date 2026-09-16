@@ -3,6 +3,60 @@ import SwiftUI
 import Observation
 import AppKit
 
+struct GlobalSearchResult: Identifiable, Sendable {
+    enum Category: String, Sendable {
+        case document = "Document"
+        case tag = "Tag"
+        case correspondent = "Correspondent"
+        case docType = "Document Type"
+        case folder = "Folder"
+        case savedView = "Smart Folder"
+    }
+    var id: String
+    var category: Category
+    var title: String
+    var subtitle: String?
+    var icon: String
+    var docID: Int64?
+    var path: String?
+    var entityID: Int64?
+    var tagRef: TagRef?
+    var savedViewID: Int64?
+}
+
+enum URLSchemeHandler: Sendable {
+    enum Action: Equatable, Sendable {
+        case search(String)
+        case `import`(String)
+        case open(Int64)
+        case verify
+    }
+
+    static func parse(_ url: URL) -> Action? {
+        guard url.scheme == "doctopus" else { return nil }
+        let host = url.host ?? url.path
+        let comps = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        let queryItems = comps?.queryItems ?? []
+        func param(_ name: String) -> String? {
+            queryItems.first(where: { $0.name == name })?.value
+        }
+
+        switch host {
+        case "import":
+            if let path = param("path") { return .import(path) }
+        case "search":
+            if let q = param("q") ?? param("query") { return .search(q) }
+        case "open", "doc", "document":
+            if let idStr = param("id"), let docID = Int64(idStr) { return .open(docID) }
+        case "verify":
+            return .verify
+        default:
+            break
+        }
+        return nil
+    }
+}
+
 /// Main-actor coordinator between the SwiftUI views and the background actors.
 ///
 /// Views only ever read this; every mutation funnels through an action here so
@@ -122,6 +176,18 @@ final class AppModel {
             // Settings follow the selection unless the Settings window has
             // pinned a library of its own.
             if settingsLibraryID == nil { adoptSettings(of: activeLibrary) }
+            // A smart folder *is* its query, and the sidebar's List binding
+            // assigns `selection` directly, so adopting the query has to happen
+            // here — anywhere else and only the callers that remember to route
+            // through it would filter at all.
+            if case .savedView(let id, let query) = selection {
+                searchText = query
+                if let sv = savedViews.first(where: { $0.id == id }) { adoptSavedViewSettings(sv) }
+            } else if case .savedView = oldValue {
+                // The text was put there by the smart folder, not typed, so it
+                // leaves with it rather than silently filtering the next place.
+                searchText = ""
+            }
             reloadDocuments()
         }
     }
@@ -739,6 +805,12 @@ final class AppModel {
         d.row.library = libID
         for i in d.tags.indices { d.tags[i].library = libID }
         for i in d.row.tags.indices { d.row.tags[i].library = libID }
+        // Similar documents are rows the inspector can navigate to, so they
+        // need their library as much as the subject does.
+        for i in d.similarDocuments.indices {
+            d.similarDocuments[i].library = libID
+            for j in d.similarDocuments[i].tags.indices { d.similarDocuments[i].tags[j].library = libID }
+        }
         return d
     }
 
@@ -823,6 +895,51 @@ final class AppModel {
         }
     }
 
+    // MARK: - Global Search
+
+    func globalSearch(text: String, limit: Int = 20) -> [GlobalSearchResult] {
+        guard !text.trimmingCharacters(in: .whitespaces).isEmpty else { return [] }
+        let query = text.lowercased()
+        var results: [GlobalSearchResult] = []
+
+        // 1. Saved Views
+        for sv in savedViews where sv.name.lowercased().contains(query) {
+            results.append(GlobalSearchResult(id: "sv-\(sv.id)", category: .savedView, title: sv.name, subtitle: sv.query, icon: sv.icon, savedViewID: sv.id))
+        }
+
+        // 2. Tags
+        for tag in distinctTags where tag.name.lowercased().contains(query) {
+            results.append(GlobalSearchResult(id: "tag-\(tag.tagID)", category: .tag, title: tag.name, subtitle: "\(tag.count) document(s)", icon: "tag", tagRef: tag.id))
+        }
+
+        // 3. Correspondents & Types
+        for (fieldKey, facetList) in facets {
+            let cat: GlobalSearchResult.Category = fieldKey == "doc_type" ? .docType : .correspondent
+            let iconName = fieldKey == "doc_type" ? "doc.on.doc" : "person.2"
+            for f in facetList where f.value.lowercased().contains(query) {
+                results.append(GlobalSearchResult(id: "facet-\(fieldKey)-\(f.value)", category: cat, title: f.value, subtitle: "\(f.count) document(s)", icon: f.icon ?? iconName, path: fieldKey))
+            }
+        }
+
+        // 4. Folders
+        func collectFolders(_ nodes: [FolderNode]) {
+            for n in nodes {
+                if n.name.lowercased().contains(query) && !n.isRoot {
+                    results.append(GlobalSearchResult(id: "folder-\(n.path)", category: .folder, title: n.name, subtitle: n.path, icon: "folder", path: n.path))
+                }
+                collectFolders(n.children)
+            }
+        }
+        collectFolders(folders)
+
+        // 5. Documents
+        for doc in documents where doc.displayTitle.lowercased().contains(query) || doc.filename.lowercased().contains(query) {
+            results.append(GlobalSearchResult(id: "doc-\(doc.doc)", category: .document, title: doc.displayTitle, subtitle: doc.filename, icon: "doc.text", docID: doc.doc))
+        }
+
+        return Array(results.prefix(limit))
+    }
+
     // MARK: - Smart Folders / Saved Views
 
     func saveCurrentSearchAsSmartFolder(name: String, icon: String = "line.3.horizontal.decrease.circle") {
@@ -850,8 +967,12 @@ final class AppModel {
     }
 
     func selectSavedView(_ sv: SavedView) {
+        // The query, sort and view mode are adopted by `selection`'s observer,
+        // which every path into a smart folder goes through.
         selection = .savedView(id: sv.id, query: sv.query)
-        searchText = sv.query
+    }
+
+    private func adoptSavedViewSettings(_ sv: SavedView) {
         if let sk = sv.sortKey, let sortField = SortField(storageKey: sk) {
             sort = sortField
             sortAscending = sv.ascending
@@ -859,7 +980,27 @@ final class AppModel {
         if let vm = sv.viewMode, let mode = ViewMode(rawValue: vm) {
             viewMode = mode
         }
-        reloadDocuments()
+    }
+
+    // MARK: - URL Schemes & Shortcuts
+
+    func handleURL(_ url: URL) {
+        guard let action = URLSchemeHandler.parse(url) else { return }
+        switch action {
+        case .import(let path):
+            let fileURL = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
+            importFiles([fileURL], into: nil)
+        case .search(let q):
+            selection = .all
+            searchText = q
+        case .open(let docID):
+            selection = .all
+            if let lib = activeLibrary {
+                selectedIDs = [DocumentRef(library: lib.id, doc: docID)]
+            }
+        case .verify:
+            verifyLibrary()
+        }
     }
 
     // MARK: - Document actions
@@ -990,6 +1131,17 @@ final class AppModel {
             }
             if count == 0 { notify("Nothing to optimize — these files are already compact.", .info) }
             else { notify("Optimized \(count) file\(count == 1 ? "" : "s"), saved \(ByteFormat.string(saved)).") }
+        }
+    }
+
+    func revertOptimization(_ rows: [DocumentRow]) {
+        Task {
+            var count = 0
+            for (lib, rows) in grouped(rows) {
+                count += await lib.indexer.revertOptimization(ids: rows.map(\.doc))
+            }
+            if count == 0 { notify("No original pre-optimization files were found to restore.", .info) }
+            else { notify("Reverted \(count) document\(count == 1 ? "" : "s") to original.") }
         }
     }
 

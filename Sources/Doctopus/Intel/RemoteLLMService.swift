@@ -139,9 +139,9 @@ actor RemoteLLMService {
     // MARK: - Enrichment
 
     func enrich(text: String, filename: String,
-                config: RemoteLLMConfig, limit: Int) async -> DocumentInsight? {
+                config: RemoteLLMConfig, limit: Int, candidateTags: [String] = []) async -> DocumentInsight? {
         guard let base = config.baseURL, config.isConfigured else { return nil }
-        let prompt = LLMPrompt.user(text: text, filename: filename, limit: limit)
+        let prompt = LLMPrompt.user(text: text, filename: filename, limit: limit, candidateTags: candidateTags)
         let key = base.absoluteString
         var format = formats[key] ?? .schema
 
@@ -156,7 +156,7 @@ actor RemoteLLMService {
                 if reply.truncated {
                     Self.log("\(filename): the reply was cut off at \(reply.tokens ?? 0) tokens")
                 }
-                guard let insight = Self.parse(reply.content) else {
+                guard let insight = Self.parse(reply.content, model: config.trimmedModel) else {
                     Self.log("\(filename): could not read a document from \(format.rawValue) reply: \(reply.content.prefix(400))")
                     return nil
                 }
@@ -321,7 +321,7 @@ actor RemoteLLMService {
     /// Models are asked for bare JSON and usually oblige, but a code fence or a
     /// sentence of preamble is common enough that it is cheaper to tolerate
     /// than to re-prompt.
-    static func parse(_ content: String) -> DocumentInsight? {
+    static func parse(_ content: String, model: String? = nil) -> DocumentInsight? {
         guard let data = jsonObject(in: content),
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return nil }
@@ -341,7 +341,8 @@ actor RemoteLLMService {
         insight.intent = string("intent", "action")?.lowercased()
         insight.title = string("title")
         insight.tags = tags(object["tags"])
-        insight.source = "remote"
+        let modelPart = model.flatMap { $0.nilIfBlank }.map { ":\($0)" } ?? ""
+        insight.source = "remote\(modelPart):v\(LLMPrompt.promptVersion)"
         // The same weight the on-device backend claims: a model that answered
         // at all should not outrank or underrank the other one by provenance.
         insight.confidence = 0.9

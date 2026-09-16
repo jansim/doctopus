@@ -129,6 +129,8 @@ struct DocumentDetail: Sendable {
     var pathSuggestions: [PathSuggestion] = []
     /// Folders where documents like this one already are.
     var similarFolders: [PathSuggestion] = []
+    /// Documents with similar content based on full-text index similarity.
+    var similarDocuments: [DocumentRow] = []
     var aliases: [String] = []
     /// The subset of `aliases` someone filed by hand, as opposed to the ones a
     /// mirrored tag keeps — the document's secondary places.

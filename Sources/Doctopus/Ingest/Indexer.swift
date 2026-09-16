@@ -17,6 +17,7 @@ struct IndexProgress: Sendable, Equatable {
 actor Indexer {
     private let store: Store
     private let intelligence: Intelligence
+    private let classifier = DocumentClassifier()
     private var settings: AppSettings
     private var cancelled = false
     private var running = false
@@ -235,7 +236,15 @@ actor Indexer {
         // Optimize for it.
         var optimized: Optimizer.Result?
         if isImport && settings.optimizeOnImport {
+            var savedOriginal: String?
+            if let preHash = FileScanner.hash(url),
+               (try? await store.saveOriginalFile(for: id, from: url, hash: preHash)) == true {
+                savedOriginal = preHash
+            }
             optimized = try? Optimizer.optimize(url: url, options: settings.optimizerOptions)
+            if optimized == nil, let savedOriginal {
+                await store.discardOriginalFile(hash: savedOriginal, ext: url.pathExtension)
+            }
             if let optimized {
                 try? await store.setSizes(id, size: optimized.newSize, originalSize: optimized.originalSize)
                 try? await store.logProcessing(
@@ -261,7 +270,7 @@ actor Indexer {
         // 3. Deterministic findings.
         let known = (try? await store.facets(column: "correspondent"))?.map(\.value) ?? []
         let created = (try? url.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? Date()
-        let findings = DocumentAnalyzer.analyze(url: url, text: extracted.text,
+        var findings = DocumentAnalyzer.analyze(url: url, text: extracted.text,
                                                 fallbackDate: created, knownCorrespondents: known,
                                                 options: await analyzerOptions())
         // Every date found is kept, not just the one that won. `03/04/2026` is
@@ -269,10 +278,34 @@ actor Indexer {
         // as a chip in the review is a click rather than a retype.
         try? await store.setDateCandidates(findings.dates, for: id)
 
+        // 3b. Local classifier prediction over approved library documents.
+        // The fingerprint is checked before the corpus is assembled: this runs
+        // once per document indexed, and loading the training set pulls every
+        // approved document's full text out of the index.
+        if let fingerprint = try? await store.classifierTrainingFingerprint() {
+            if await classifier.needsTraining(fingerprint: fingerprint),
+               let trainData = try? await store.classifierTrainingData() {
+                await classifier.trainIfNeeded(docs: trainData.docs, fingerprint: trainData.fingerprint)
+            }
+            if findings.correspondent == nil,
+               let pred = await classifier.predictCorrespondent(text: extracted.text) {
+                findings.correspondent = pred.label
+            }
+            if findings.docType == nil,
+               let pred = await classifier.predictDocType(text: extracted.text) {
+                findings.docType = pred.label
+            }
+            let predTags = await classifier.predictTags(text: extracted.text)
+            for tag in predTags {
+                try? await store.suggestTag(tag.label, for: id, autoAcceptMatching: settings.autoAcceptMatchingTagSuggestions)
+            }
+        }
+
         // 4. Optional model enrichment, on-device or over the network.
         var insight: DocumentInsight?
         if settings.llmBackend != .off, !extracted.text.isEmpty {
-            insight = await intelligence.enrich(text: extracted.text, filename: name)
+            let topTags = (try? await store.tags())?.prefix(10).map(\.name) ?? []
+            insight = await intelligence.enrich(text: extracted.text, filename: name, candidateTags: topTags)
         }
 
         try? await store.storeMetadata(Store.MetadataPatch(
@@ -560,7 +593,7 @@ actor Indexer {
     }
 
     private func analysisLine(_ i: DocumentInsight) -> String {
-        var parts = [i.source == "remote" ? "API model" : "On-device model"]
+        var parts = [MetadataSource(i.source).detailedLabel]
         if let type = i.docType { parts.append(type) }
         if let c = i.correspondent { parts.append(c) }
         if !i.tags.isEmpty { parts.append(i.tags.prefix(4).joined(separator: ", ")) }
@@ -727,7 +760,15 @@ actor Indexer {
         for id in ids {
             guard let path = try? await store.documentPath(id) else { continue }
             let url = URL(fileURLWithPath: path)
-            guard let result = try? Optimizer.optimize(url: url, options: settings.optimizerOptions) else { continue }
+            var savedOriginal: String?
+            if let preHash = FileScanner.hash(url),
+               (try? await store.saveOriginalFile(for: id, from: url, hash: preHash)) == true {
+                savedOriginal = preHash
+            }
+            guard let result = try? Optimizer.optimize(url: url, options: settings.optimizerOptions) else {
+                if let savedOriginal { await store.discardOriginalFile(hash: savedOriginal, ext: url.pathExtension) }
+                continue
+            }
             try? await store.setSizes(id, size: result.newSize, originalSize: result.originalSize)
             try? await store.logProcessing(docID: id, action: "optimized",
                                            detail: String(format: "%.0f%% smaller", result.savings * 100),
@@ -737,5 +778,16 @@ actor Indexer {
         }
         onDataChanged()
         return (count, saved)
+    }
+
+    func revertOptimization(ids: [Int64]) async -> Int {
+        var count = 0
+        for id in ids {
+            if (try? await store.revertOptimization(id)) == true {
+                count += 1
+            }
+        }
+        if count > 0 { onDataChanged() }
+        return count
     }
 }

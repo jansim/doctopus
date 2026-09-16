@@ -15,6 +15,8 @@ extension Store {
             : ["d.missing=0", "d.deleted_at IS NULL"]
 
         switch selection {
+        // A smart folder carries no filter of its own: its query arrives in
+        // `query`, the same way a typed search does.
         case .all, .deleted, .savedView: break
         case .inbox:
             wheres.append("(d.directory = ? OR d.directory LIKE ?)")
@@ -94,6 +96,8 @@ extension Store {
                     """)
             case "missing":              wheres.append("d.missing=1")
             case "trashed", "deleted":   wheres.append("d.deleted_at IS NOT NULL")
+            case "stale-analysis", "stale":
+                wheres.append("(m.source = 'heuristic' OR m.source IS NULL OR m.source NOT LIKE '%:v\(LLMPrompt.promptVersion)')")
             default: break
             }
         }
@@ -108,7 +112,7 @@ extension Store {
             case "optimized":            wheres.append("d.original_size IS NULL")
             case "duplicate", "duplicates":
                 wheres.append("""
-                    (d.hash NOT IN (SELECT hash FROM documents WHERE missing=0 AND deleted_at IS NULL AND hash IS NOT NULL GROUP BY hash HAVING COUNT(*) > 1)
+                    ((d.hash IS NULL OR d.hash NOT IN (SELECT hash FROM documents WHERE missing=0 AND deleted_at IS NULL AND hash IS NOT NULL GROUP BY hash HAVING COUNT(*) > 1))
                      AND (d.original_hash IS NULL OR d.original_hash NOT IN (SELECT original_hash FROM documents WHERE missing=0 AND deleted_at IS NULL AND original_hash IS NOT NULL GROUP BY original_hash HAVING COUNT(*) > 1)))
                     """)
             case "missing":              wheres.append("d.missing=0")
@@ -390,6 +394,7 @@ extension Store {
         d.tagSuggestions = try tagSuggestions(for: id)
         d.pathSuggestions = try pathSuggestions(for: id)
         d.similarFolders = try similarFolders(for: id)
+        d.similarDocuments = (try? similarDocuments(for: id)) ?? []
         d.folderAliases = try folderAliases(for: id)
         d.history = try history(for: id)
         d.notes = try notes(for: id)

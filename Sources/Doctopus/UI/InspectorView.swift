@@ -43,6 +43,7 @@ private struct DetailInspector: View {
                 finderTagsSection
                 notesSection
                 fileSection
+                if !detail.similarDocuments.isEmpty { similarDocumentsSection }
                 if !detail.aliases.isEmpty { aliasSection }
                 if !detail.history.isEmpty { historySection }
                 textSection
@@ -159,11 +160,7 @@ private struct DetailInspector: View {
     }
 
     private static func sourceLabel(_ s: String) -> String {
-        switch s {
-        case "llm": return "On-device model"
-        case "remote": return "API model"
-        default: return "Heuristics"
-        }
+        MetadataSource(s).detailedLabel
     }
 
     private func dateSourceLabel(_ s: String) -> String {
@@ -365,6 +362,29 @@ private struct DetailInspector: View {
     private var shortPath: String {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         return row.directory.hasPrefix(home) ? "~" + row.directory.dropFirst(home.count) : row.directory
+    }
+
+    @ViewBuilder
+    private var similarDocumentsSection: some View {
+        Section2("Similar Documents") {
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(detail.similarDocuments.prefix(3)) { doc in
+                    Button {
+                        model.selectedIDs = [doc.id]
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "doc.text")
+                                .foregroundStyle(.secondary)
+                            Text(doc.displayTitle)
+                                .font(.callout)
+                                .lineLimit(1)
+                            Spacer()
+                        }
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
     }
 
     private var aliasSection: some View {
