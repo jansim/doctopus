@@ -5,6 +5,7 @@ struct RootView: View {
     @State private var columnVisibility = NavigationSplitViewVisibility.all
     @State private var showInspector = true
     @State private var renameSheet = false
+    @State private var showQuickSwitcher = false
 
     var body: some View {
         @Bindable var model = model
@@ -42,8 +43,12 @@ struct RootView: View {
         // covers focus outside them, such as the toolbar.
         .acceptsScans()
         .sheet(isPresented: $renameSheet) { RenameSheet(isPresented: $renameSheet) }
+        .sheet(isPresented: $showQuickSwitcher) { QuickSwitcherSheet() }
         .onReceive(NotificationCenter.default.publisher(for: .showRenameSheet)) { _ in
             if !model.selectedIDs.isEmpty { renameSheet = true }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .showQuickSwitcher)) { _ in
+            showQuickSwitcher = true
         }
         .onOpenURL { url in
             model.handleURL(url)
@@ -178,28 +183,40 @@ private struct SearchSuggestions: View {
 
     var body: some View {
         if model.searchText.isEmpty {
-            ForEach(["is:review", "is:untagged", "is:optimized", "ext:pdf"], id: \.self) { token in
+            ForEach(["is:review", "is:untagged", "is:duplicate", "is:stale-analysis", "ext:pdf", "date:this month", "date:2026"], id: \.self) { token in
                 Text(token).searchCompletion(token)
             }
-        } else if let last = model.searchText.split(separator: " ").last.map(String.init),
-                  last.hasSuffix(":") {
-            let prefix = model.searchText.dropLast(last.count)
-            ForEach(completions(for: last).prefix(12), id: \.self) { value in
-                Text(value).searchCompletion("\(prefix)\(last)\(quoted(value))")
+        } else if let last = model.searchText.split(separator: " ").last.map(String.init) {
+            let (prefix, query) = splitToken(last)
+            let comps = completions(for: prefix, query: query)
+            let base = model.searchText.dropLast(last.count)
+            ForEach(comps.prefix(12), id: \.self) { value in
+                Text(value).searchCompletion("\(base)\(prefix):\(quoted(value))")
             }
         }
     }
 
-    private func completions(for token: String) -> [String] {
-        let prefix = String(token.dropLast()).lowercased()
+    private func splitToken(_ token: String) -> (prefix: String, query: String) {
+        guard let colon = token.firstIndex(of: ":") else { return ("", token) }
+        let p = String(token[token.startIndex..<colon]).lowercased()
+        let q = String(token[token.index(after: colon)...]).lowercased()
+        return (p, q)
+    }
+
+    private func completions(for prefix: String, query: String) -> [String] {
+        guard !prefix.isEmpty else { return [] }
+        let candidates: [String]
         switch prefix {
-        case "tag": return model.tagNames
-        case "is": return ["review", "approved", "untagged", "tagged", "pending", "failed", "optimized"]
-        case "ext": return ["pdf", "png", "jpg"]
+        case "tag": candidates = model.tagNames
+        case "is": candidates = ["review", "approved", "untagged", "tagged", "pending", "failed", "optimized", "duplicate", "stale-analysis", "missing", "trashed"]
+        case "ext": candidates = ["pdf", "png", "jpg", "jpeg"]
+        case "date", "created", "added": candidates = ["today", "yesterday", "this week", "last week", "this month", "last month", "this year", "last year", "this quarter", "2026", "2025"]
         default:
             let key = SearchQuery.aliases[prefix] ?? prefix
-            return (model.facets[key] ?? []).map(\.value)
+            candidates = (model.facets[key] ?? []).map(\.value)
         }
+        if query.isEmpty { return candidates }
+        return candidates.filter { $0.lowercased().hasPrefix(query) || $0.lowercased().contains(query) }
     }
 
     private func quoted(_ v: String) -> String { v.contains(" ") ? "\"\(v)\"" : v }

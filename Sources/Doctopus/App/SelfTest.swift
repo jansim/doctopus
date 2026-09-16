@@ -614,6 +614,10 @@ enum SelfTest {
             Check.that("URL scheme parses doctopus://import", action == .import("/tmp/scan.pdf"))
         }
 
+        print("\nAUTOCOMPLETE & GLOBAL SEARCH")
+        let globalResults = (try? await store.listDocuments(selection: .all, query: SearchQuery("rechnung"), sort: .added, ascending: false)) ?? []
+        Check.that("search suggestions and queries return hits for terms", !globalResults.isEmpty)
+
         print("\nENTITIES")
         // Correspondents and types are rows now, so renaming one is one row and
         // renaming it onto another is a merge — which two free-text columns
