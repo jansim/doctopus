@@ -642,6 +642,12 @@ actor Indexer {
                 summary.duplicates += 1
                 summary.duplicateNames.append(url.lastPathComponent)
                 _ = dup
+                // `movingSource` files are the app's own scratch copies (e.g. a
+                // scan staged in the temp directory); the move is skipped, so
+                // this is the only chance to clean it up instead of leaking it.
+                // A plain import's source is the user's own file and is never
+                // touched.
+                if movingSource { try? FileManager.default.removeItem(at: url) }
                 continue
             }
             do {

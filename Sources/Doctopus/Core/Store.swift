@@ -1071,32 +1071,40 @@ actor Store {
 
     /// Reverts the most recent undoable file event (such as a move, rename, or routing).
     func undoLastEvent() async throws -> (action: String, filename: String)? {
-        guard let last = try db.first("""
-            SELECT id, doc_id, action, from_path, to_path, detail
-            FROM events
-            WHERE action IN ('moved', 'renamed', 'routed')
-              AND from_path IS NOT NULL AND to_path IS NOT NULL
-            ORDER BY at DESC, id DESC LIMIT 1
-            """, [], { (id: $0.int(0), docID: $0.int(1), action: $0.string(2),
-                        from: absPath($0.string(3)), to: absPath($0.string(4)), detail: $0.stringOrNil(5)) }) else {
-            return nil
-        }
-
         let fm = FileManager.default
-        guard fm.fileExists(atPath: last.to) else { return nil }
+        // Skips (and discards) events whose target file has since moved
+        // outside Doctopus, so one stale event can't permanently block undo
+        // of everything older than it.
+        while true {
+            guard let last = try db.first("""
+                SELECT id, doc_id, action, from_path, to_path, detail
+                FROM events
+                WHERE action IN ('moved', 'renamed', 'routed')
+                  AND from_path IS NOT NULL AND to_path IS NOT NULL
+                ORDER BY at DESC, id DESC LIMIT 1
+                """, [], { (id: $0.int(0), docID: $0.int(1), action: $0.string(2),
+                            from: absPath($0.string(3)), to: absPath($0.string(4)), detail: $0.stringOrNil(5)) }) else {
+                return nil
+            }
 
-        let targetDir = URL(fileURLWithPath: last.from).deletingLastPathComponent()
-        try fm.createDirectory(at: targetDir, withIntermediateDirectories: true)
-        let targetURL = Naming.uniqueURL(in: targetDir, filename: URL(fileURLWithPath: last.from).lastPathComponent)
+            guard fm.fileExists(atPath: last.to) else {
+                try db.run("DELETE FROM events WHERE id=?", [.int(last.id)])
+                continue
+            }
 
-        try fm.moveItem(at: URL(fileURLWithPath: last.to), to: targetURL)
-        try updatePath(last.docID, to: targetURL.path)
-        FileScanner.pruneEmptyDirectories(startingFrom: URL(fileURLWithPath: last.to).deletingLastPathComponent(), upTo: root)
+            let targetDir = URL(fileURLWithPath: last.from).deletingLastPathComponent()
+            try fm.createDirectory(at: targetDir, withIntermediateDirectories: true)
+            let targetURL = Naming.uniqueURL(in: targetDir, filename: URL(fileURLWithPath: last.from).lastPathComponent)
 
-        try db.run("DELETE FROM events WHERE id=?", [.int(last.id)])
+            try fm.moveItem(at: URL(fileURLWithPath: last.to), to: targetURL)
+            try updatePath(last.docID, to: targetURL.path)
+            FileScanner.pruneEmptyDirectories(startingFrom: URL(fileURLWithPath: last.to).deletingLastPathComponent(), upTo: root)
 
-        let filename = targetURL.lastPathComponent
-        return (last.action, filename)
+            try db.run("DELETE FROM events WHERE id=?", [.int(last.id)])
+
+            let filename = targetURL.lastPathComponent
+            return (last.action, filename)
+        }
     }
 
     // MARK: - Saved Views
@@ -1249,52 +1257,59 @@ actor Store {
             guard Router.matches(rule, in: subject) else { continue }
             result.matched += 1
 
-            // 1. Assign tags
-            if let tagNames = rule.tagNames {
-                let tags = tagNames.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
-                for tag in tags {
-                    let tid = try tagID(named: tag)
-                    try assign(tag: tid, to: doc.id, auto: true)
+            // Documents already processed above must count even if a later
+            // one fails, so one bad row can't discard the whole batch's
+            // progress — the caller only ever sees `try?`'s empty fallback.
+            do {
+                // 1. Assign tags
+                if let tagNames = rule.tagNames {
+                    let tags = tagNames.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+                    for tag in tags {
+                        let tid = try tagID(named: tag)
+                        try assign(tag: tid, to: doc.id, auto: true)
+                    }
+                    if !tags.isEmpty { result.tagged += 1 }
                 }
-                if !tags.isEmpty { result.tagged += 1 }
-            }
 
-            // 2. Assign metadata
-            var patch = Store.MetadataPatch(docID: doc.id)
-            var updatedMeta = false
-            if let corr = rule.setCorrespondent, !corr.isEmpty {
-                patch.correspondent = corr
-                updatedMeta = true
-            }
-            if let dtype = rule.setDocType, !dtype.isEmpty {
-                patch.docType = dtype
-                updatedMeta = true
-            }
-            if updatedMeta {
-                try storeMetadata(patch)
-                result.metadataUpdated += 1
-            }
+                // 2. Assign metadata
+                var patch = Store.MetadataPatch(docID: doc.id)
+                var updatedMeta = false
+                if let corr = rule.setCorrespondent, !corr.isEmpty {
+                    patch.correspondent = corr
+                    updatedMeta = true
+                }
+                if let dtype = rule.setDocType, !dtype.isEmpty {
+                    patch.docType = dtype
+                    updatedMeta = true
+                }
+                if updatedMeta {
+                    try storeMetadata(patch)
+                    result.metadataUpdated += 1
+                }
 
-            // 3. Move if destination template specified
-            let destStr = rule.destination.trimmingCharacters(in: .whitespaces)
-            if !destStr.isEmpty {
-                let destURL = router.expand(destStr, correspondent: patch.correspondent ?? doc.correspondent,
-                                            docType: patch.docType ?? doc.docType, date: doc.docDate ?? doc.created)
-                if router.isInsideLibrary(destURL) {
-                    let currentDir = URL(fileURLWithPath: doc.path).deletingLastPathComponent()
-                    if currentDir.standardizedFileURL != destURL.standardizedFileURL {
-                        try? FileManager.default.createDirectory(at: destURL, withIntermediateDirectories: true)
-                        let target = Naming.uniqueURL(in: destURL, filename: doc.filename)
-                        if (try? FileManager.default.moveItem(at: URL(fileURLWithPath: doc.path), to: target)) != nil {
-                            try updatePath(doc.id, to: target.path)
-                            FileScanner.pruneEmptyDirectories(startingFrom: currentDir, upTo: root)
-                            try logProcessing(docID: doc.id, action: "routed", detail: "Applied rule “\(rule.name)”",
-                                              confidence: rule.weight, rule: rule.name,
-                                              from: doc.path, to: target.path, approved: true)
-                            result.moved += 1
+                // 3. Move if destination template specified
+                let destStr = rule.destination.trimmingCharacters(in: .whitespaces)
+                if !destStr.isEmpty {
+                    let destURL = router.expand(destStr, correspondent: patch.correspondent ?? doc.correspondent,
+                                                docType: patch.docType ?? doc.docType, date: doc.docDate ?? doc.created)
+                    if router.isInsideLibrary(destURL) {
+                        let currentDir = URL(fileURLWithPath: doc.path).deletingLastPathComponent()
+                        if currentDir.standardizedFileURL != destURL.standardizedFileURL {
+                            try? FileManager.default.createDirectory(at: destURL, withIntermediateDirectories: true)
+                            let target = Naming.uniqueURL(in: destURL, filename: doc.filename)
+                            if (try? FileManager.default.moveItem(at: URL(fileURLWithPath: doc.path), to: target)) != nil {
+                                try updatePath(doc.id, to: target.path)
+                                FileScanner.pruneEmptyDirectories(startingFrom: currentDir, upTo: root)
+                                try logProcessing(docID: doc.id, action: "routed", detail: "Applied rule “\(rule.name)”",
+                                                  confidence: rule.weight, rule: rule.name,
+                                                  from: doc.path, to: target.path, approved: true)
+                                result.moved += 1
+                            }
                         }
                     }
                 }
+            } catch {
+                continue
             }
         }
         return result

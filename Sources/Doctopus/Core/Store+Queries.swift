@@ -120,17 +120,27 @@ extension Store {
         }
         for df in query.dateFilters {
             let col = df.column
+            let clause: String
             if let start = df.start, let end = df.end {
-                wheres.append("\(col) >= ? AND \(col) <= ?")
+                clause = "\(col) >= ? AND \(col) <= ?"
                 args.append(.double(start.timeIntervalSince1970))
                 args.append(.double(end.timeIntervalSince1970))
             } else if let start = df.start {
-                wheres.append("\(col) >= ?")
+                clause = "\(col) >= ?"
                 args.append(.double(start.timeIntervalSince1970))
             } else if let end = df.end {
-                wheres.append("\(col) <= ?")
+                clause = "\(col) <= ?"
                 args.append(.double(end.timeIntervalSince1970))
+            } else {
+                continue
             }
+            wheres.append(df.negated ? "NOT (\(clause))" : clause)
+        }
+        for term in query.negatedTerms {
+            let unquoted = term.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: "\"", with: "")
+            guard !unquoted.isEmpty else { continue }
+            wheres.append("d.id NOT IN (SELECT rowid FROM doc_fts WHERE doc_fts MATCH ?)")
+            args.append(.text(unquoted.contains(" ") ? "\"\(unquoted)\"" : "\"\(unquoted)\"*"))
         }
 
         // Text search. Every human-facing surface is a column of `doc_fts`, so
@@ -287,20 +297,37 @@ extension Store {
             if let idColumn = Store.entityColumns[column] {
                 // Qualified, because `fields` has a `name` column of its own.
                 let comparison = exact ? "e.name = ?" : "e.name LIKE ?"
-                let inOrNotIn = negated ? "NOT IN" : "IN"
-                wheres.append("""
-                    m.\(idColumn) \(inOrNotIn) (SELECT e.id FROM entities e
+                let subquery = """
+                    (SELECT e.id FROM entities e
                                       JOIN fields f ON f.id = e.field_id
                                       WHERE f.builtin_column = ? AND \(comparison))
-                    """)
+                    """
+                // A negated filter must also match documents with no value at
+                // all for this field — `NOT IN` alone evaluates to SQL NULL
+                // (and is dropped by WHERE) when the column itself is NULL.
+                if negated {
+                    wheres.append("(m.\(idColumn) IS NULL OR m.\(idColumn) NOT IN \(subquery))")
+                } else {
+                    wheres.append("m.\(idColumn) IN \(subquery)")
+                }
                 args.append(.text(column))
                 args.append(.text(exact ? value : "%\(value)%"))
                 return
             }
             if exact {
-                wheres.append("m.\(column) \(negated ? "<>" : "=") ?"); args.append(.text(value))
+                if negated {
+                    wheres.append("(m.\(column) IS NULL OR m.\(column) <> ?)")
+                } else {
+                    wheres.append("m.\(column) = ?")
+                }
+                args.append(.text(value))
             } else {
-                wheres.append("m.\(column) \(negated ? "NOT LIKE" : "LIKE") ?"); args.append(.text("%\(value)%"))
+                if negated {
+                    wheres.append("(m.\(column) IS NULL OR m.\(column) NOT LIKE ?)")
+                } else {
+                    wheres.append("m.\(column) LIKE ?")
+                }
+                args.append(.text("%\(value)%"))
             }
         } else {
             let comparison = exact ? "v.value = ?" : "v.value LIKE ?"
