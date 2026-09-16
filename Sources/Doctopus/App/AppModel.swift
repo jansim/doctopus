@@ -545,7 +545,9 @@ final class AppModel {
             self.facets = facets
             self.queue = queue
             self.stats = stats
-            self.reloadDocuments()
+            // A passive refresh (e.g. a Finder change) must not snap an
+            // expanded "Load More" list back down to the first page.
+            self.reloadDocuments(resetPaging: false)
         }
     }
 
@@ -1661,7 +1663,7 @@ final class AppModel {
         Task {
             let result = await lib.indexer.importFiles(urls, into: dest, movingSource: movingSource,
                                                        route: chosen == nil)
-            if result.imported == 0, result.duplicates > 0, result.alreadyInLibrary == 0 {
+            if result.imported == 0, result.duplicates > 0, result.alreadyInLibrary == 0, result.failed == 0 {
                 notify(result.duplicates == 1
                        ? "Skipped “\(result.duplicateNames.first ?? "file")” — already in library."
                        : "Skipped \(result.duplicates) duplicate files already in library.", .info)

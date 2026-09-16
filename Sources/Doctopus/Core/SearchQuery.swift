@@ -30,6 +30,7 @@ struct SearchQuery: Sendable, Equatable {
         var column: String   // "m.doc_date" or "d.created_at"
         var start: Date?
         var end: Date?
+        var negated: Bool = false
     }
 
     /// Shorthands kept stable regardless of how a field is renamed.
@@ -86,19 +87,19 @@ struct SearchQuery: Sendable, Equatable {
                 if isNegated { negatedFlags.insert(f) } else { flags.insert(f) }
             case "date", "docdate", "doc_date":
                 if let range = SearchDateParser.parse(value) {
-                    dateFilters.append(DateFilter(column: "COALESCE(m.doc_date, d.created_at)", start: range.start, end: range.end))
+                    dateFilters.append(DateFilter(column: "COALESCE(m.doc_date, d.created_at)", start: range.start, end: range.end, negated: isNegated))
                 }
             case "created", "added":
                 if let range = SearchDateParser.parse(value) {
-                    dateFilters.append(DateFilter(column: "d.created_at", start: range.start, end: range.end))
+                    dateFilters.append(DateFilter(column: "d.created_at", start: range.start, end: range.end, negated: isNegated))
                 }
             case "before":
-                if let range = SearchDateParser.parse(value) {
-                    dateFilters.append(DateFilter(column: "COALESCE(m.doc_date, d.created_at)", start: nil, end: range.end ?? range.start))
+                if let range = SearchDateParser.parse(value), let cutoff = range.start ?? range.end {
+                    dateFilters.append(DateFilter(column: "COALESCE(m.doc_date, d.created_at)", start: nil, end: cutoff.addingTimeInterval(-1), negated: isNegated))
                 }
             case "after":
-                if let range = SearchDateParser.parse(value) {
-                    dateFilters.append(DateFilter(column: "COALESCE(m.doc_date, d.created_at)", start: range.start ?? range.end, end: nil))
+                if let range = SearchDateParser.parse(value), let cutoff = range.end ?? range.start {
+                    dateFilters.append(DateFilter(column: "COALESCE(m.doc_date, d.created_at)", start: cutoff.addingTimeInterval(1), end: nil, negated: isNegated))
                 }
             default:
                 let key = SearchQuery.aliases[prefix] ?? prefix
@@ -131,15 +132,20 @@ struct SearchQuery: Sendable, Equatable {
     }
 
     /// FTS5 MATCH expression: each term becomes a prefix query, supporting boolean operators.
+    /// Negated terms are excluded, not included here — FTS5's `NOT` is a binary
+    /// exclusion operator with no valid standalone form, so `negatedTerms` are
+    /// applied separately as `NOT IN` subqueries against `doc_fts`.
     var ftsExpression: String? {
-        guard !terms.isEmpty || !negatedTerms.isEmpty else { return nil }
+        guard !terms.isEmpty else { return nil }
         var parts: [String] = []
         for term in terms {
             let cleaned = term.trimmingCharacters(in: .whitespaces)
             guard !cleaned.isEmpty else { continue }
             let upper = cleaned.uppercased()
-            if upper == "AND" || upper == "OR" || upper == "NOT" || cleaned == "(" || cleaned == ")" {
-                parts.append(upper == "NOT" ? "NOT" : cleaned)
+            if upper == "AND" || upper == "OR" || upper == "NOT" {
+                parts.append(upper)
+            } else if cleaned == "(" || cleaned == ")" {
+                parts.append(cleaned)
             } else if cleaned.hasPrefix("\"") && cleaned.hasSuffix("\"") {
                 parts.append(cleaned)
             } else {
@@ -150,10 +156,6 @@ struct SearchQuery: Sendable, Equatable {
                     parts.append("\"\(unquoted)\"*")
                 }
             }
-        }
-        for neg in negatedTerms {
-            let unquoted = neg.replacingOccurrences(of: "\"", with: "")
-            parts.append("NOT \"\(unquoted)\"*")
         }
         guard !parts.isEmpty else { return nil }
         let hasBool = parts.contains { $0 == "AND" || $0 == "OR" || $0 == "NOT" || $0 == "(" || $0 == ")" }
