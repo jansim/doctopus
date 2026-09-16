@@ -1180,6 +1180,12 @@ final class AppModel {
     /// Moves the master files to the Trash — never deletes them outright — and
     /// forgets them only once the Trash has actually taken them.
     ///
+    /// A document that was also filed in another folder by hand is not trashed
+    /// at all: it moves to the nearest of those folders and the alias standing
+    /// there is taken away, so the document leaves the folder it was deleted
+    /// from without the other placements being left pointing at nothing. See
+    /// `Indexer.promoteClosestAlias`.
+    ///
     /// A row shown in a folder through an alias *looks* like it lives there,
     /// but trashing it trashes the original somewhere else. That is worth a
     /// question; an ordinary trash, which Finder does not ask about either, is
@@ -1200,9 +1206,21 @@ final class AppModel {
         }
         Task {
             var trashed = 0
+            var rehomed: [(title: String, folder: String)] = []
             var failed: [String] = []
             for (lib, rows) in grouped(rows) {
                 for row in rows {
+                    // Somewhere else to be beats the Trash. Not for a row being
+                    // viewed through an alias: the alert above promised the
+                    // original would be trashed, and the placement the user is
+                    // deleting from is the very one that would be promoted,
+                    // which would move the document *into* this folder.
+                    if !row.isAliasHere,
+                       let newHome = await lib.indexer.promoteClosestAlias(docID: row.doc) {
+                        rehomed.append((row.displayTitle,
+                                        newHome.deletingLastPathComponent().lastPathComponent))
+                        continue
+                    }
                     do {
                         var landed: NSURL?
                         try FileManager.default.trashItem(at: row.url, resultingItemURL: &landed)
@@ -1223,9 +1241,20 @@ final class AppModel {
             if !failed.isEmpty {
                 errorMessage = "Could not move \(failed.count == 1 ? "“\(failed[0])”" : "\(failed.count) files") to the Trash. \(failed.count == 1 ? "It was" : "They were") left where \(failed.count == 1 ? "it is" : "they are")."
             }
-            if trashed > 0 {
-                notify(trashed == 1 && rows.count == 1 ? "Moved “\(rows[0].displayTitle)” to the Trash."
-                                                       : "Moved \(trashed) documents to the Trash.")
+            // One toast replaces the last, so the two outcomes share a line
+            // rather than the second one hiding the first.
+            let trashedText = trashed == 1 && rows.count == 1
+                ? "Moved “\(rows[0].displayTitle)” to the Trash."
+                : "Moved \(trashed) documents to the Trash."
+            let rehomedText = rehomed.count == 1
+                ? "“\(rehomed[0].title)” is also filed in “\(rehomed[0].folder)”, so it moved there instead of the Trash."
+                : "\(rehomed.count) documents are also filed in other folders, so they moved there instead of the Trash."
+            if trashed > 0 && !rehomed.isEmpty {
+                notify(trashedText + " " + rehomedText)
+            } else if trashed > 0 {
+                notify(trashedText)
+            } else if !rehomed.isEmpty {
+                notify(rehomedText)
             }
         }
     }

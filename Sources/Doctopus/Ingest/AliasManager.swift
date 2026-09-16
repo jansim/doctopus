@@ -54,6 +54,21 @@ enum AliasManager {
                         relativeTo: nil, bookmarkDataIsStale: &stale)
     }
 
+    /// How far apart two folders are in the tree: the steps up from one to the
+    /// folder they share, and back down to the other. A subfolder is 1 away, a
+    /// sibling 2, an unrelated branch further.
+    ///
+    /// This is what "closest" means when a document has been filed in several
+    /// places and one of them has to stand in for where it used to live: the
+    /// nearest folder is the one that changes least about where it is found.
+    static func distance(from: URL, to: URL) -> Int {
+        let a = from.standardizedFileURL.pathComponents
+        let b = to.standardizedFileURL.pathComponents
+        var shared = 0
+        while shared < a.count, shared < b.count, a[shared] == b[shared] { shared += 1 }
+        return (a.count - shared) + (b.count - shared)
+    }
+
     static func isAlias(_ url: URL) -> Bool {
         (try? url.resourceValues(forKeys: [.isAliasFileKey]).isAliasFile) == true
     }

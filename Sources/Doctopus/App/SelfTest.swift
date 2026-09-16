@@ -402,6 +402,37 @@ enum SelfTest {
             }
         }
 
+        // Deleting a document that is filed in a second folder by hand is not
+        // a delete at all: the nearest of those placements takes its place, so
+        // the library keeps the document and loses only the folder it was
+        // deleted from.
+        if let source = rows.first(where: { $0.directory.hasSuffix("Inbox") }),
+           let second = rows.first(where: { $0.directory.hasSuffix("Work") })?
+               .url.deletingLastPathComponent(),
+           let created = try? AliasManager.createAlias(to: source.url, in: second) {
+            try? await store.recordAlias(docID: source.doc, tagID: nil, path: created.path)
+            let landed = await indexer.promoteClosestAlias(docID: source.doc)
+            print("  deleted \(source.filename.padded(32)) → "
+                  + (landed?.deletingLastPathComponent().lastPathComponent ?? "the Trash"))
+            Check.that("deleting an aliased document promotes the alias into the document",
+                       landed?.deletingLastPathComponent().standardizedFileURL
+                           == second.standardizedFileURL
+                           && FileManager.default.fileExists(atPath: landed?.path ?? ""))
+            Check.that("…and the alias it stood in for is gone",
+                       !FileManager.default.fileExists(atPath: created.path))
+            Check.that("…and nothing is left in the folder it was deleted from",
+                       !FileManager.default.fileExists(atPath: source.path))
+            Check.that("…and the registry no longer carries the promoted placement",
+                       !((try? await store.aliases(for: source.doc)) ?? [])
+                           .contains(where: { $0.path == created.path }))
+            // Put it back, so the sections after this see the fixture library
+            // laid out the way they found it.
+            _ = await indexer.move(ids: [source.doc],
+                                   to: source.url.deletingLastPathComponent())
+            Check.that("…and it is the same document throughout, not a new one",
+                       (try? await store.documentPath(source.doc)) == source.path)
+        }
+
         print("\nQUEUE MODE (same browser, review columns)")
         let queued = (try? await store.listDocuments(selection: .queue, query: SearchQuery(""),
                                                      sort: .added, ascending: false)) ?? []
