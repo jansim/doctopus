@@ -2,6 +2,60 @@ import Foundation
 
 extension Store {
 
+    // MARK: - Reading document rows
+    //
+    // Three queries hand back `DocumentRow`s — the list, one document's detail
+    // and the more-like-this lookup. They share these columns, in this order,
+    // so one decoder reads all three; anything a query needs on top goes after
+    // them, where it cannot shift an index out from under the others.
+
+    static let rowColumns = """
+        d.id, d.path, d.directory, d.filename, d.ext, d.size, d.original_size,
+        d.created_at, d.mtime, d.ocr_state, d.page_count, d.approved, d.missing,
+        m.title, ec.name, et.name, m.language, m.doc_date, m.summary
+        """
+
+    static let rowTables = """
+        FROM documents d
+        LEFT JOIN metadata m ON m.doc_id = d.id
+        LEFT JOIN entities ec ON ec.id = m.correspondent_id
+        LEFT JOIN entities et ON et.id = m.doc_type_id
+        """
+
+    func documentRow(_ r: Database.Row) -> DocumentRow {
+        DocumentRow(
+            doc: r.int(0), path: absPath(r.string(1)), directory: absPath(r.string(2)),
+            filename: r.string(3), ext: r.string(4), size: r.int(5),
+            originalSize: r.intOrNil(6),
+            createdAt: Date(timeIntervalSince1970: r.double(7)),
+            mtime: Date(timeIntervalSince1970: r.double(8)),
+            ocrState: OCRState(rawValue: r.int(9)) ?? .pending,
+            pageCount: r.intOrNil(10).map(Int.init), approved: r.bool(11), missing: r.bool(12),
+            title: r.stringOrNil(13), correspondent: r.stringOrNil(14), docType: r.stringOrNil(15),
+            language: r.stringOrNil(16), docDate: r.date(17), summary: r.stringOrNil(18))
+    }
+
+    /// Every built-in field's value for one row, keyed by field key. The two
+    /// that are not on `DocumentRow` — the amount and the intent — are passed
+    /// in, since only the caller's query knows whether it asked for them.
+    static func builtinValues(fields: [Field], row: DocumentRow,
+                              amount: String?, intent: String?) -> [String: String] {
+        var values: [String: String] = [:]
+        for field in fields {
+            let value: String?
+            switch field.builtinColumn {
+            case "doc_type":      value = row.docType
+            case "correspondent": value = row.correspondent
+            case "language":      value = row.language
+            case "amount":        value = amount
+            case "intent":        value = intent
+            default: continue
+            }
+            if let value { values[field.key] = value }
+        }
+        return values
+    }
+
     /// The center pane's single query. Search, token filters, sidebar selection
     /// and sort all collapse into one statement so paging stays O(limit).
     func listDocuments(selection: Selection, query: SearchQuery, sort: SortField,
@@ -220,14 +274,9 @@ extension Store {
         }
 
         let sql = """
-        SELECT d.id, d.path, d.directory, d.filename, d.ext, d.size, d.original_size,
-               d.created_at, d.mtime, d.ocr_state, d.page_count, d.approved, d.missing,
-               m.title, ec.name, et.name, m.language, m.doc_date, m.summary,
-               \(snippetCol), \(queueColumns)
-        FROM documents d
-        LEFT JOIN metadata m ON m.doc_id = d.id
-        LEFT JOIN entities ec ON ec.id = m.correspondent_id
-        LEFT JOIN entities et ON et.id = m.doc_type_id
+        SELECT \(Store.rowColumns),
+               \(snippetCol), \(queueColumns), m.amount, m.intent
+        \(Store.rowTables)
         \(joinFTS)
         \(joinQueue)
         WHERE \(wheres.joined(separator: " AND "))
@@ -235,23 +284,20 @@ extension Store {
         LIMIT \(limit) OFFSET \(offset)
         """
 
-        var rows = try db.map(sql, args) { r in
-            DocumentRow(
-                doc: r.int(0), path: absPath(r.string(1)), directory: absPath(r.string(2)),
-                filename: r.string(3),
-                ext: r.string(4), size: r.int(5), originalSize: r.intOrNil(6),
-                createdAt: Date(timeIntervalSince1970: r.double(7)),
-                mtime: Date(timeIntervalSince1970: r.double(8)),
-                ocrState: OCRState(rawValue: r.int(9)) ?? .pending,
-                pageCount: r.intOrNil(10).map(Int.init), approved: r.bool(11), missing: r.bool(12),
-                title: r.stringOrNil(13), correspondent: r.stringOrNil(14), docType: r.stringOrNil(15),
-                language: r.stringOrNil(16), docDate: r.date(17), summary: r.stringOrNil(18),
-                snippet: r.stringOrNil(19)?.nilIfBlank,
-                queue: r.intOrNil(20).map { id in
-                    QueueInfo(entryID: id, at: r.date(21) ?? .now, action: r.string(22),
-                              detail: r.stringOrNil(23), confidence: r.doubleOrNil(24),
-                              rule: r.stringOrNil(25), approved: r.bool(26))
-                })
+        // The amount and the intent are built-in fields like any other, but
+        // they have no place on `DocumentRow`, so they are kept aside until the
+        // values dictionary is folded together below.
+        var extras: [Int64: (amount: String?, intent: String?)] = [:]
+        var rows = try db.map(sql, args) { r -> DocumentRow in
+            var row = documentRow(r)
+            row.snippet = r.stringOrNil(19)?.nilIfBlank
+            row.queue = r.intOrNil(20).map { id in
+                QueueInfo(entryID: id, at: r.date(21) ?? .now, action: r.string(22),
+                          detail: r.stringOrNil(23), confidence: r.doubleOrNil(24),
+                          rule: r.stringOrNil(25), approved: r.bool(26))
+            }
+            extras[row.doc] = (amount: r.stringOrNil(27), intent: r.stringOrNil(28))
+            return row
         }
 
         // A document shown inside a folder it does not physically live in is
@@ -273,17 +319,11 @@ extension Store {
         // never need to know whether a field is built in or user-defined.
         let custom = try customValues(for: rows.map(\.doc), fields: allFields)
         for i in rows.indices {
-            var values: [String: String] = [:]
-            for field in allFields {
-                switch field.builtinColumn {
-                case "doc_type":      values[field.key] = rows[i].docType
-                case "correspondent": values[field.key] = rows[i].correspondent
-                case "language":      values[field.key] = rows[i].language
-                default: break
-                }
-            }
-            if let extra = custom[rows[i].doc] { values.merge(extra) { _, new in new } }
-            rows[i].values = values.compactMapValues { $0 }
+            let extra = extras[rows[i].doc]
+            var values = Store.builtinValues(fields: allFields, row: rows[i],
+                                             amount: extra?.amount, intent: extra?.intent)
+            if let custom = custom[rows[i].doc] { values.merge(custom) { _, new in new } }
+            rows[i].values = values
         }
         return rows
     }
@@ -292,8 +332,7 @@ extension Store {
     private func appendFieldFilter(_ field: Field, _ value: String, exact: Bool, negated: Bool = false,
                                    to wheres: inout [String], args: inout [Database.Value]) {
         if let column = field.builtinColumn {
-            let allowed = ["correspondent", "doc_type", "language", "amount", "intent"]
-            guard allowed.contains(column) else { return }
+            guard Store.fieldColumns.contains(column) else { return }
             // A taxonomy value is a row, so the filter is on its id — which is
             // also why two spellings can no longer be two different filters.
             if let idColumn = Store.entityColumns[column] {
@@ -342,30 +381,15 @@ extension Store {
 
     func detail(_ id: Int64) throws -> DocumentDetail? {
         guard let base = try db.first("""
-            SELECT d.id, d.path, d.directory, d.filename, d.ext, d.size, d.original_size,
-                   d.created_at, d.mtime, d.ocr_state, d.page_count, d.approved, d.missing, d.hash,
-                   m.title, ec.name, et.name, m.language, m.doc_date, m.summary,
-                   m.intent, m.date_source, m.confidence, m.source, m.amount,
+            SELECT \(Store.rowColumns),
+                   d.hash, m.intent, m.date_source, m.confidence, m.source, m.amount,
                    s.confidence, s.words, s.source
-            FROM documents d
-            LEFT JOIN metadata m ON m.doc_id=d.id
-            LEFT JOIN entities ec ON ec.id = m.correspondent_id
-            LEFT JOIN entities et ON et.id = m.doc_type_id
+            \(Store.rowTables)
             LEFT JOIN ocr_stats s ON s.doc_id=d.id
             WHERE d.id=?
             """, [.int(id)], { r -> DocumentDetail in
-            let row = DocumentRow(
-                doc: r.int(0), path: absPath(r.string(1)), directory: absPath(r.string(2)),
-                filename: r.string(3),
-                ext: r.string(4), size: r.int(5), originalSize: r.intOrNil(6),
-                createdAt: Date(timeIntervalSince1970: r.double(7)),
-                mtime: Date(timeIntervalSince1970: r.double(8)),
-                ocrState: OCRState(rawValue: r.int(9)) ?? .pending,
-                pageCount: r.intOrNil(10).map(Int.init), approved: r.bool(11), missing: r.bool(12),
-                title: r.stringOrNil(14), correspondent: r.stringOrNil(15), docType: r.stringOrNil(16),
-                language: r.stringOrNil(17), docDate: r.date(18), summary: r.stringOrNil(19))
-            return DocumentDetail(
-                row: row, hash: r.stringOrNil(13), intent: r.stringOrNil(20),
+            DocumentDetail(
+                row: documentRow(r), hash: r.stringOrNil(19), intent: r.stringOrNil(20),
                 dateSource: r.stringOrNil(21), metadataSource: r.stringOrNil(23),
                 metadataConfidence: r.doubleOrNil(22), amount: r.stringOrNil(24),
                 ocrConfidence: r.doubleOrNil(25), ocrWords: r.intOrNil(26).map(Int.init),
@@ -374,21 +398,12 @@ extension Store {
 
         var d = base
         let allFields = try cachedFields()
-        var values: [String: String] = [:]
-        for field in allFields {
-            switch field.builtinColumn {
-            case "doc_type":      values[field.key] = d.row.docType
-            case "correspondent": values[field.key] = d.row.correspondent
-            case "language":      values[field.key] = d.row.language
-            case "amount":        values[field.key] = d.amount
-            case "intent":        values[field.key] = d.intent
-            default: break
-            }
+        var values = Store.builtinValues(fields: allFields, row: d.row,
+                                         amount: d.amount, intent: d.intent)
+        if let custom = try customValues(for: [id], fields: allFields)[id] {
+            values.merge(custom) { _, new in new }
         }
-        if let extra = try customValues(for: [id], fields: allFields)[id] {
-            values.merge(extra) { _, new in new }
-        }
-        d.row.values = values.compactMapValues { $0 }
+        d.row.values = values
         d.text = try ocrText(id)
         d.tags = try tags(for: id)
         d.tagSuggestions = try tagSuggestions(for: id)
@@ -443,8 +458,9 @@ extension Store {
     }
 
     func facets(column: String) throws -> [Facet] {
-        let allowed = ["correspondent", "doc_type", "language"]
-        guard allowed.contains(column) else { return [] }
+        // Only the three that browse as a list of values; an amount or an
+        // intent has nothing worth faceting.
+        guard ["correspondent", "doc_type", "language"].contains(column) else { return [] }
         // A taxonomy field's values are rows, so its facets come from there —
         // icon included, which is how an icon now survives a rename.
         if Store.entityColumns[column] != nil {
@@ -493,14 +509,5 @@ extension Store {
         }
         s.deleted = try deletedCount()
         return s
-    }
-
-    /// Distinct absolute folders under the root, for the "Move to…" menu.
-    func allDirectories() throws -> [String] {
-        var set = Set<String>()
-        try db.query("SELECT DISTINCT directory FROM documents WHERE missing=0 AND deleted_at IS NULL") {
-            set.insert(absPath($0.string(0)))
-        }
-        return set.sorted()
     }
 }

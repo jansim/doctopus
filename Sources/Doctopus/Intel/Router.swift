@@ -44,7 +44,6 @@ struct Router: Sendable {
         var ambiguous = false
         var setCorrespondent: String?
         var setDocType: String?
-        var setFields: String?
 
         var shouldMove: Bool { destination != nil }
     }
@@ -120,7 +119,6 @@ struct Router: Sendable {
         }
         let setCorr = matched.compactMap(\.rule.setCorrespondent).first { !$0.isEmpty }
         let setType = matched.compactMap(\.rule.setDocType).first { !$0.isEmpty }
-        let setFields = matched.compactMap(\.rule.setFields).first { !$0.isEmpty }
 
         // The first matching rule is the user's own choice of winner, unless a
         // later one — pointing somewhere else — fits about as well.
@@ -135,20 +133,19 @@ struct Router: Sendable {
         }
         return decide(best: first.candidate, runnerUp: ambiguous ? rival : nil,
                       tags: unionTags, tagsFromRule: true,
-                      setCorrespondent: setCorr, setDocType: setType, setFields: setFields,
+                      setCorrespondent: setCorr, setDocType: setType,
                       candidates: candidates, currentDirectory: currentDirectory)
     }
 
     /// Turns the best candidate into a move — or, when it is not a clear
     /// enough call, into a document that stays put with its candidates.
     private func decide(best: Candidate, runnerUp: Candidate?, tags: [String], tagsFromRule: Bool,
-                        setCorrespondent: String? = nil, setDocType: String? = nil, setFields: String? = nil,
+                        setCorrespondent: String? = nil, setDocType: String? = nil,
                         candidates: [Candidate], currentDirectory: URL) -> Decision {
         var decision = Decision(destination: nil, confidence: best.confidence, rule: best.rule,
                                 tags: tags, tagsFromRule: tagsFromRule, explanation: best.explanation,
                                 candidates: candidates, ambiguous: false,
-                                setCorrespondent: setCorrespondent, setDocType: setDocType,
-                                setFields: setFields)
+                                setCorrespondent: setCorrespondent, setDocType: setDocType)
         if let runnerUp {
             decision.ambiguous = true
             decision.explanation = "“\(best.rule)” (\(pct(best.confidence))) and “\(runnerUp.rule)” (\(pct(runnerUp.confidence))) fit equally well — left for you to choose"

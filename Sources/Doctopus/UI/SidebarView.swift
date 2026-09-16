@@ -480,7 +480,9 @@ private struct StatusFooter: View {
                 Circle()
                     .fill(model.modelStatus.isReady ? Color.green : Color.secondary.opacity(0.5))
                     .frame(width: 6, height: 6)
-                Text(model.modelStatus.isReady ? "On-device model" : "Heuristics only")
+                // Which backend is answering, not which one happens to be
+                // first in the enum: an endpoint is not the on-device model.
+                Text(model.modelStatus.isReady ? model.settings.llmBackend.label : "Heuristics only")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Spacer()

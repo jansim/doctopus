@@ -17,9 +17,13 @@ struct GlobalSearchResult: Identifiable, Sendable {
     var title: String
     var subtitle: String?
     var icon: String
-    var docID: Int64?
+    /// The document this names, library included — a row id alone would open
+    /// whichever library happened to be active.
+    var document: DocumentRef?
     var path: String?
-    var entityID: Int64?
+    /// Which field a facet result belongs to, so selecting it filters the
+    /// field it actually came from.
+    var fieldKey: String?
     var tagRef: TagRef?
     var savedViewID: Int64?
 }
@@ -912,12 +916,19 @@ final class AppModel {
             results.append(GlobalSearchResult(id: "tag-\(tag.tagID)", category: .tag, title: tag.name, subtitle: "\(tag.count) document(s)", icon: "tag", tagRef: tag.id))
         }
 
-        // 3. Correspondents & Types
-        for (fieldKey, facetList) in facets {
-            let cat: GlobalSearchResult.Category = fieldKey == "doc_type" ? .docType : .correspondent
-            let iconName = fieldKey == "doc_type" ? "doc.on.doc" : "person.2"
-            for f in facetList where f.value.lowercased().contains(query) {
-                results.append(GlobalSearchResult(id: "facet-\(fieldKey)-\(f.value)", category: cat, title: f.value, subtitle: "\(f.count) document(s)", icon: f.icon ?? iconName, path: fieldKey))
+        // 3. Correspondents & Types. The other fields are deliberately left
+        // out: the palette jumps to a place, and a one-of value or an amount
+        // is a filter rather than somewhere to go.
+        let taxonomies: [(key: String, category: GlobalSearchResult.Category, icon: String)] = [
+            ("correspondent", .correspondent, "person.2"),
+            ("doc_type", .docType, "doc.on.doc"),
+        ]
+        for taxonomy in taxonomies {
+            for f in facets[taxonomy.key] ?? [] where f.value.lowercased().contains(query) {
+                results.append(GlobalSearchResult(id: "facet-\(taxonomy.key)-\(f.value)",
+                                                  category: taxonomy.category, title: f.value,
+                                                  subtitle: "\(f.count) document(s)",
+                                                  icon: f.icon ?? taxonomy.icon, fieldKey: taxonomy.key))
             }
         }
 
@@ -934,7 +945,9 @@ final class AppModel {
 
         // 5. Documents
         for doc in documents where doc.displayTitle.lowercased().contains(query) || doc.filename.lowercased().contains(query) {
-            results.append(GlobalSearchResult(id: "doc-\(doc.doc)", category: .document, title: doc.displayTitle, subtitle: doc.filename, icon: "doc.text", docID: doc.doc))
+            results.append(GlobalSearchResult(id: "doc-\(doc.library)-\(doc.doc)", category: .document,
+                                              title: doc.displayTitle, subtitle: doc.filename,
+                                              icon: "doc.text", document: doc.id))
         }
 
         return Array(results.prefix(limit))
@@ -1856,7 +1869,7 @@ final class AppModel {
             .appendingPathComponent("doctopus-scan-\(UUID().uuidString)", isDirectory: true)
         try? FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
         var urls: [URL] = []
-        let stamp = ISO8601DateFormatter.filenameSafe.string(from: Date())
+        let stamp = DateFormatter.filenameSafe.string(from: Date())
         for (i, item) in items.enumerated() {
             let name = items.count == 1 ? "Scan \(stamp).\(item.ext)" : "Scan \(stamp) \(i + 1).\(item.ext)"
             let url = tmp.appendingPathComponent(name)
@@ -1878,7 +1891,9 @@ enum ByteFormat {
     static func string(_ bytes: Int64) -> String { formatter.string(fromByteCount: bytes) }
 }
 
-extension ISO8601DateFormatter {
+extension DateFormatter {
+    /// `2026-01-14 10.22.03` — a timestamp that is legal in a filename on every
+    /// filesystem, which the ISO spelling with its colons is not.
     static let filenameSafe: DateFormatter = {
         let f = DateFormatter()
         f.locale = Locale(identifier: "en_US_POSIX")

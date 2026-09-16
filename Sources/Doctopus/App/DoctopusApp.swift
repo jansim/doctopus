@@ -41,7 +41,6 @@ enum Main {
     private static func runCheck(path: String) {
         let url = URL(fileURLWithPath: path)
         print("Verifying library at \(url.path)...")
-        let sema = DispatchSemaphore(value: 0)
         Task {
             do {
                 let report = try await LibraryVerifier.verify(library: url)
@@ -63,7 +62,9 @@ enum Main {
                 exit(1)
             }
         }
-        sema.wait()
+        // Every path above exits; this only keeps the process alive until one
+        // of them does.
+        dispatchMain()
     }
 }
 

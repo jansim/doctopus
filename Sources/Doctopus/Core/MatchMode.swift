@@ -148,13 +148,6 @@ enum PatternMatcher {
         return false
     }
 
-    /// 1 minus the normalised Levenshtein distance.
-    static func similarity(_ a: String, _ b: String) -> Double {
-        let longest = max(a.count, b.count)
-        guard longest > 0 else { return 1 }
-        return 1 - Double(distance(Array(a), Array(b))) / Double(longest)
-    }
-
     /// Levenshtein, two rows at a time.
     static func distance(_ a: [Character], _ b: [Character]) -> Int {
         if a.isEmpty { return b.count }

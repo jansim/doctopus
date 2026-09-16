@@ -134,7 +134,7 @@ enum Optimizer {
         return jpeg
     }
 
-    static func fileSize(_ url: URL) -> Int64 {
+    private static func fileSize(_ url: URL) -> Int64 {
         (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize).flatMap(Int64.init) ?? 0
     }
 }

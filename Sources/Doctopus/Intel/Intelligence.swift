@@ -213,9 +213,6 @@ actor Intelligence {
         excerptLimit = settings.llmExcerptLimit
     }
 
-    var isEnabled: Bool { backend != .off }
-    var activeBackend: LLMBackend { backend }
-
     /// Cheap — both backends cache what they last concluded.
     func status() async -> LLMStatus {
         switch backend {

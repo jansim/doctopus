@@ -216,57 +216,8 @@ enum SearchDateParser {
         let lower = trimmed.lowercased()
         let cal = DayDate.calendar
 
-        // Relative keywords
-        if lower == "today" {
-            let start = DayDate.startOfDay(now)
-            let end = cal.date(byAdding: .day, value: 1, to: start)?.addingTimeInterval(-1)
-            return (start, end)
-        }
-        if lower == "yesterday" {
-            guard let start = cal.date(byAdding: .day, value: -1, to: DayDate.startOfDay(now)) else { return nil }
-            let end = cal.date(byAdding: .day, value: 1, to: start)?.addingTimeInterval(-1)
-            return (start, end)
-        }
-        if lower == "this week" {
-            guard let interval = cal.dateInterval(of: .weekOfYear, for: now) else { return nil }
-            return (interval.start, interval.end.addingTimeInterval(-1))
-        }
-        if lower == "last week" || lower == "previous week" {
-            guard let thisWeekStart = cal.dateInterval(of: .weekOfYear, for: now)?.start,
-                  let prevStart = cal.date(byAdding: .weekOfYear, value: -1, to: thisWeekStart) else { return nil }
-            let end = thisWeekStart.addingTimeInterval(-1)
-            return (prevStart, end)
-        }
-        if lower == "this month" {
-            guard let interval = cal.dateInterval(of: .month, for: now) else { return nil }
-            return (interval.start, interval.end.addingTimeInterval(-1))
-        }
-        if lower == "last month" || lower == "previous month" {
-            guard let thisMonthStart = cal.dateInterval(of: .month, for: now)?.start,
-                  let prevStart = cal.date(byAdding: .month, value: -1, to: thisMonthStart) else { return nil }
-            let end = thisMonthStart.addingTimeInterval(-1)
-            return (prevStart, end)
-        }
-        if lower == "this year" {
-            guard let interval = cal.dateInterval(of: .year, for: now) else { return nil }
-            return (interval.start, interval.end.addingTimeInterval(-1))
-        }
-        if lower == "last year" || lower == "previous year" {
-            guard let thisYearStart = cal.dateInterval(of: .year, for: now)?.start,
-                  let prevStart = cal.date(byAdding: .year, value: -1, to: thisYearStart) else { return nil }
-            let end = thisYearStart.addingTimeInterval(-1)
-            return (prevStart, end)
-        }
-        if lower == "this quarter" {
-            guard let interval = cal.dateInterval(of: .quarter, for: now) else { return nil }
-            return (interval.start, interval.end.addingTimeInterval(-1))
-        }
-        if lower == "last quarter" || lower == "previous quarter" {
-            guard let thisQStart = cal.dateInterval(of: .quarter, for: now)?.start,
-                  let prevStart = cal.date(byAdding: .quarter, value: -1, to: thisQStart) else { return nil }
-            let end = thisQStart.addingTimeInterval(-1)
-            return (prevStart, end)
-        }
+        // Relative keywords: "today", "yesterday", and "this"/"last" plus a unit.
+        if let range = relative(lower, now: now) { return range }
 
         // Range syntax: "A to B" or "A..B"
         let parts: [String]
@@ -314,5 +265,36 @@ enum SearchDateParser {
         }
 
         return nil
+    }
+
+    /// The calendar unit each keyword spans. Every relative range is the same
+    /// two questions — which unit, and this one or the one before it — so they
+    /// are asked once here rather than spelled out per keyword.
+    private static let units: [String: Calendar.Component] = [
+        "week": .weekOfYear, "month": .month, "quarter": .quarter, "year": .year,
+    ]
+
+    private static func relative(_ keyword: String, now: Date) -> (start: Date?, end: Date?)? {
+        let unit: Calendar.Component
+        let previous: Bool
+        switch keyword {
+        case "today":
+            (unit, previous) = (.day, false)
+        case "yesterday":
+            (unit, previous) = (.day, true)
+        default:
+            let words = keyword.split(separator: " ")
+            guard words.count == 2, let named = units[String(words[1])] else { return nil }
+            switch words[0] {
+            case "this": (unit, previous) = (named, false)
+            case "last", "previous": (unit, previous) = (named, true)
+            default: return nil
+            }
+        }
+        let cal = DayDate.calendar
+        guard let current = cal.dateInterval(of: unit, for: now) else { return nil }
+        guard previous else { return (current.start, current.end.addingTimeInterval(-1)) }
+        guard let start = cal.date(byAdding: unit, value: -1, to: current.start) else { return nil }
+        return (start, current.start.addingTimeInterval(-1))
     }
 }
