@@ -83,6 +83,9 @@ enum SelfTest {
                                                    sort: .added, ascending: false)) ?? []
         print("CHECKS")
         Check.that("documents indexed", stats.total > 0, "\(stats.total)")
+        let page1 = (try? await store.listDocuments(selection: .all, query: SearchQuery(""), sort: .added, ascending: false, limit: 3, offset: 0)) ?? []
+        let page2 = (try? await store.listDocuments(selection: .all, query: SearchQuery(""), sort: .added, ascending: false, limit: 3, offset: 3)) ?? []
+        Check.that("paging returns distinct slices", page1.count == 3 && page2.count == 3 && Set(page1.map(\.doc)).isDisjoint(with: Set(page2.map(\.doc))))
         var sources: Set<String> = []
         var textless: [String] = []
         for row in rows {
@@ -119,18 +122,18 @@ enum SelfTest {
         }
 
         print("\nSEARCH")
-        for probe in ["rechnung", "insurance polic", "type:Invoice", "\"net pay\""] {
+        for probe in ["rechnung", "insurance polic", "type:Invoice", "\"net pay\"", "rechnung OR kontoauszug", "-type:Invoice", "date:2026", "date:2026-02"] {
             let hits = (try? await store.listDocuments(selection: .all, query: SearchQuery(probe),
                                                        sort: .relevance, ascending: false)) ?? []
             Check.that("search \(probe) finds something", !hits.isEmpty, "\(hits.count) hit(s)")
         }
-        for probe in ["rechnung", "insurance polic", "kontoauszug", "steuer", "type:Invoice", "is:pending", "\"net pay\""] {
+        for probe in ["rechnung", "insurance polic", "kontoauszug", "steuer", "type:Invoice", "is:pending", "\"net pay\"", "rechnung OR kontoauszug", "-type:Invoice", "date:2026", "date:2026-02"] {
             let hits = (try? await store.listDocuments(selection: .all, query: SearchQuery(probe),
                                                        sort: .relevance, ascending: false)) ?? []
             let names = hits.prefix(3).map(\.filename).joined(separator: ", ")
-            print("  \(probe.padded(22)) → \(hits.count) hit\(hits.count == 1 ? "" : "s")\(hits.isEmpty ? "" : ": \(names)")")
+            print("  \(probe.padded(24)) → \(hits.count) hit\(hits.count == 1 ? "" : "s")\(hits.isEmpty ? "" : ": \(names)")")
             if let snippet = hits.first?.snippet {
-                print("  \("".padded(22))   …\(snippet.replacingOccurrences(of: "\n", with: " "))…")
+                print("  \("".padded(24))   …\(snippet.replacingOccurrences(of: "\n", with: " "))…")
             }
         }
 
@@ -153,6 +156,11 @@ enum SelfTest {
                                      ext: row.url.pathExtension)
             print("  \(row.filename.padded(38)) → \(Naming.render(Naming.defaultTemplate, ctx))")
         }
+        let fallbackCtx = Naming.Context(date: nil, correspondent: nil, title: "..", docType: nil,
+                                         language: nil, counter: nil, originalStem: ".hidden", ext: "pdf")
+        let renderedDefault = Naming.render("{correspondent|Unknown}_{title}", fallbackCtx)
+        Check.that("template conditional fallback renders default", renderedDefault.hasPrefix("Unknown"))
+        Check.that("path safety cleans invalid or hidden stems", !renderedDefault.hasPrefix(".") && !renderedDefault.contains(".."))
 
         print("\nROUTING (dry run against starter rules)")
         let router = Router(rules: (try? await store.rules()) ?? [], threshold: settings.routingThreshold,
@@ -205,6 +213,32 @@ enum SelfTest {
             print("  \(payslip.filename) → \(decision.destination?.path.replacingOccurrences(of: root.path + "/", with: "") ?? "(stays put)") [\(decision.rule)]")
             Check.that("routing follows the edited rule", decision.rule == "Edited"
                        && decision.destination?.path.contains("/Edited/") == true)
+
+            // Tag union across multiple matching rules
+            let ruleA = Rule(id: 0, name: "RuleA", pattern: "gehaltsabrechnung", field: "filename",
+                             destination: "A/{year}", tagNames: "tagA, commonTag", weight: 0.9, enabled: true, priority: 100)
+            let ruleB = Rule(id: 0, name: "RuleB", pattern: "februar", field: "filename",
+                             destination: "B/{year}", tagNames: "tagB, commonTag", weight: 0.8, enabled: true, priority: 90)
+            let unionDecision = Router(rules: [ruleA, ruleB], threshold: 0.5,
+                                       derivedTemplate: "", root: root, deriveWhenNoRule: false)
+                .evaluate(text: text, filename: payslip.filename, findings: findings, insight: nil,
+                          currentDirectory: payslip.url.deletingLastPathComponent())
+            Check.that("matching rules combine tags as a union",
+                       unionDecision.tags.contains("tagA") && unionDecision.tags.contains("tagB") && unionDecision.tags.count == 3)
+
+            // Metadata assignment via rule apply-to-existing
+            let assignRule = Rule(id: 0, name: "SetPayroll", pattern: "gehaltsabrechnung", field: "filename",
+                                  destination: "", tagNames: "payroll", weight: 0.9, enabled: true, priority: 100,
+                                  setCorrespondent: "Acme HR", setDocType: "Payslip")
+            let savedAssignID = (try? await store.upsertRule(assignRule)) ?? 0
+            let applyResult = (try? await store.applyRuleToExisting(ruleID: savedAssignID)) ?? Store.RuleApplyResult()
+            Check.that("rule can assign metadata and tags to existing documents",
+                       applyResult.matched > 0 && applyResult.tagged > 0)
+            try? await store.deleteRule(savedAssignID)
+            if let payrollTag = try? await store.tagID(named: "payroll") {
+                try? await store.deleteTag(payrollTag)
+            }
+
             _ = try? await store.upsertRule(original)
             try? await store.reorderRules(((try? await store.rules()) ?? [])
                 .sorted { $0.priority > $1.priority }.map(\.id))
@@ -219,6 +253,22 @@ enum SelfTest {
                   + "sidebar=\(field.showInSidebar ? "y" : "n") list=\(field.showInList ? "y" : "n") "
                   + "values=\(count)")
         }
+
+        print("\nSAVED VIEWS (SMART FOLDERS)")
+        let sv = SavedView(id: 0, name: "Invoices 2026", icon: "doc.text",
+                           query: "type:Invoice date:2026", sortKey: "docDate", ascending: false,
+                           viewMode: "List", position: 0)
+        let savedVID = (try? await store.upsertSavedView(sv)) ?? 0
+        let svList = (try? await store.savedViews()) ?? []
+        Check.that("saved view is persisted", svList.contains { $0.id == savedVID && $0.name == "Invoices 2026" })
+        if let foundSV = svList.first(where: { $0.id == savedVID }) {
+            let hits = (try? await store.listDocuments(selection: .savedView(id: foundSV.id, query: foundSV.query),
+                                                       query: SearchQuery(foundSV.query), sort: .added, ascending: false)) ?? []
+            Check.that("saved view query returns matching documents", !hits.isEmpty)
+        }
+        try? await store.deleteSavedView(savedVID)
+        let svAfter = (try? await store.savedViews()) ?? []
+        Check.that("saved view can be deleted", !svAfter.contains { $0.id == savedVID })
 
         print("\nRENAME + MERGE")
         if let typeField = fields.first(where: { $0.key == "doc_type" }) {
@@ -364,8 +414,9 @@ enum SelfTest {
         print("\nIMPORT (a file from outside the library)")
         let outside = FileManager.default.temporaryDirectory
             .appendingPathComponent("doctopus-import-\(UUID().uuidString).pdf")
-        if let sample = rows.first, let data = try? Data(contentsOf: sample.url),
-           (try? data.write(to: outside)) != nil {
+        if let sample = rows.first, var data = try? Data(contentsOf: sample.url) {
+            data.append(Data("\n% unique-\(UUID().uuidString)\n".utf8))
+            try? data.write(to: outside)
             // No auto-routing: routing has its own dry run above, and this
             // should not scatter folders through the fixture library.
             var quiet = settings
@@ -381,6 +432,12 @@ enum SelfTest {
             // import copies, and the original stays where the user left it.
             Check.that("importing copies and leaves the original alone",
                        FileManager.default.fileExists(atPath: outside.path) && copied != nil)
+
+            // Re-importing the same bytes must be detected as a duplicate and skipped
+            let dupResult = await indexer.importFiles([outside], into: root.appendingPathComponent("Inbox"))
+            Check.that("re-importing a byte-identical document is skipped as duplicate",
+                       dupResult.imported == 0 && dupResult.duplicates == 1)
+
             if let copied { try? FileManager.default.removeItem(at: copied.url) }
             try? FileManager.default.removeItem(at: outside)
         }
@@ -393,8 +450,10 @@ enum SelfTest {
         let tag = UUID().uuidString.prefix(6)
         let top = folder.appendingPathComponent("top-\(tag).pdf")
         let nested = deeper.appendingPathComponent("nested-\(tag).pdf")
-        if rows.count >= 2, let one = try? Data(contentsOf: rows[0].url),
-           let two = try? Data(contentsOf: rows[1].url) {
+        if rows.count >= 2, var one = try? Data(contentsOf: rows[0].url),
+           var two = try? Data(contentsOf: rows[1].url) {
+            one.append(Data("\n% unique-top-\(tag)\n".utf8))
+            two.append(Data("\n% unique-nested-\(tag)\n".utf8))
             try? one.write(to: top)
             try? two.write(to: nested)
             // Neither is a document: one is not a type Doctopus reads, the
@@ -986,6 +1045,18 @@ enum SelfTest {
                        (detailed?.history.count ?? 0) > 0)
             Check.that("history is newest first",
                        zip(kept, kept.dropFirst()).allSatisfy { $0.at >= $1.at })
+
+            // Test undo of file move
+            let origPath = subject.path
+            let movedTarget = root.appendingPathComponent("Work/undotest-\(subject.filename)")
+            if (try? FileManager.default.moveItem(at: subject.url, to: movedTarget)) != nil {
+                try? await store.updatePath(subject.doc, to: movedTarget.path)
+                try? await store.logProcessing(docID: subject.doc, action: "moved", detail: "test move",
+                                               confidence: nil, rule: nil, from: origPath, to: movedTarget.path, approved: true)
+                let undone = try? await store.undoLastEvent()
+                Check.that("undo restores moved file to previous path",
+                           undone != nil && FileManager.default.fileExists(atPath: origPath))
+            }
         }
 
         print("\nSEARCH INDEX")
@@ -1071,6 +1142,10 @@ enum SelfTest {
         Check.that("a library from a newer Doctopus is refused, with a reason",
                    refused?.contains("format version") == true)
         try? FileManager.default.removeItem(at: future.deletingLastPathComponent())
+
+        print("\nSANITY CHECK / VERIFICATION")
+        let healthyReport = (try? await LibraryVerifier.verify(store: store)) ?? VerificationReport()
+        Check.that("verification of healthy library reports zero errors", healthyReport.errorsCount == 0)
 
         print("\nCONTENT HASHES")
         if let sample = rows.first, let detail = try? await store.detail(sample.doc),
@@ -1183,9 +1258,10 @@ enum SelfTest {
 
         /// A copy of a fixture from outside the library, under a chosen name.
         func stage(_ name: String) -> URL? {
-            guard let sample = neutral else { return nil }
+            guard let sample = neutral, var data = try? Data(contentsOf: sample.url) else { return nil }
+            data.append(Data("\n% unique-\(UUID().uuidString)\n".utf8))
             let url = fm.temporaryDirectory.appendingPathComponent("\(UUID().uuidString)-\(name).pdf")
-            return (try? fm.copyItem(at: sample.url, to: url)) != nil ? url : nil
+            return (try? data.write(to: url)) != nil ? url : nil
         }
         func imported(_ name: String) async -> DocumentRow? {
             ((try? await store.listDocuments(selection: .all, query: SearchQuery(""),

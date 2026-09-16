@@ -80,4 +80,28 @@ enum FileScanner {
         }
         return hasher.finalize().map { String(format: "%02x", $0) }.joined()
     }
+
+    /// Prunes empty directories climbing up from `dir` towards (and stopping before) `root`.
+    /// Leaves `.doctopus` and the library root intact.
+    static func pruneEmptyDirectories(startingFrom dir: URL, upTo root: URL) {
+        let fm = FileManager.default
+        let rootStandardized = root.standardizedFileURL.path
+        var current = dir.standardizedFileURL
+        while current.path != rootStandardized && current.path.hasPrefix(rootStandardized + "/") {
+            guard let contents = try? fm.contentsOfDirectory(atPath: current.path) else { break }
+            let visible = contents.filter { $0 != ".DS_Store" && !$0.hasSuffix(".doctopus") && !$0.hasPrefix(".") }
+            if visible.isEmpty {
+                let dsStore = current.appendingPathComponent(".DS_Store")
+                if fm.fileExists(atPath: dsStore.path) { try? fm.removeItem(at: dsStore) }
+                do {
+                    try fm.removeItem(at: current)
+                    current = current.deletingLastPathComponent()
+                } catch {
+                    break
+                }
+            } else {
+                break
+            }
+        }
+    }
 }

@@ -36,11 +36,22 @@ enum Naming {
             if ch == "{" { inToken = true; token = "" }
             else if ch == "}" && inToken {
                 inToken = false
-                out += value(for: token, ctx)
+                out += resolveToken(token, ctx)
             } else if inToken { token.append(ch) }
             else { out.append(ch) }
         }
         return tidy(out, ext: ctx.ext, fallback: ctx.originalStem)
+    }
+
+    private static func resolveToken(_ token: String, _ ctx: Context) -> String {
+        let orParts = token.split(separator: "|", maxSplits: 1).map(String.init)
+        let mainToken = orParts[0].trimmingCharacters(in: .whitespaces)
+        let defaultValue = orParts.count > 1 ? orParts[1].trimmingCharacters(in: .whitespaces) : ""
+        let val = value(for: mainToken, ctx)
+        if val.isEmpty {
+            return sanitize(defaultValue)
+        }
+        return val
     }
 
     private static func value(for token: String, _ ctx: Context) -> String {
@@ -78,6 +89,10 @@ enum Naming {
         let illegal = CharacterSet(charactersIn: "/\\:*?\"<>|\n\r\t")
         var out = s.components(separatedBy: illegal).joined(separator: " ")
         out = out.replacingOccurrences(of: "  ", with: " ").trimmingCharacters(in: .whitespaces)
+        while out.hasPrefix(".") {
+            out = String(out.dropFirst()).trimmingCharacters(in: .whitespaces)
+        }
+        if out == ".." || out == "." { out = "" }
         return String(out.prefix(80))
     }
 
@@ -87,7 +102,20 @@ enum Naming {
         while out.contains("__") { out = out.replacingOccurrences(of: "__", with: "_") }
         while out.contains("--") { out = out.replacingOccurrences(of: "--", with: "-") }
         out = out.trimmingCharacters(in: CharacterSet(charactersIn: " _-."))
-        if out.isEmpty { out = fallback }
+        // Never allow leading dot, '..', or hidden filenames
+        while out.hasPrefix(".") {
+            out = String(out.dropFirst()).trimmingCharacters(in: CharacterSet(charactersIn: " _-."))
+        }
+        if out.isEmpty || out == "." || out == ".." {
+            out = sanitize(fallback).trimmingCharacters(in: CharacterSet(charactersIn: " _-."))
+        }
+        if out.isEmpty || out == "." || out == ".." {
+            out = "Document"
+        }
+        // Cap filename stem length to prevent path length overflow (>1024 bytes)
+        if out.count > 180 {
+            out = String(out.prefix(180)).trimmingCharacters(in: CharacterSet(charactersIn: " _-."))
+        }
         return ext.isEmpty ? out : "\(out).\(ext)"
     }
 
@@ -99,11 +127,16 @@ enum Naming {
         let stem = candidate.deletingPathExtension().lastPathComponent
         let ext = candidate.pathExtension
         var n = 2
-        repeat {
+        while fm.fileExists(atPath: candidate.path) && n < 1000 {
             let name = ext.isEmpty ? "\(stem) \(n)" : "\(stem) \(n).\(ext)"
             candidate = directory.appendingPathComponent(name)
             n += 1
-        } while fm.fileExists(atPath: candidate.path) && n < 1000
+        }
+        if fm.fileExists(atPath: candidate.path) {
+            let suffix = UUID().uuidString.prefix(8)
+            let name = ext.isEmpty ? "\(stem) \(suffix)" : "\(stem) \(suffix).\(ext)"
+            candidate = directory.appendingPathComponent(name)
+        }
         return candidate
     }
 }

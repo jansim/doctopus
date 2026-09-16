@@ -93,6 +93,8 @@ final class AppModel {
     // Sidebar data
     var folders: [FolderNode] = []
     var tags: [Tag] = []
+    /// Pinned smart folders / saved queries.
+    var savedViews: [SavedView] = []
     /// The Finder's own tags across the library. Distinct from `tags`, which
     /// are Doctopus's — the two systems are deliberately kept apart.
     var finderTags: [Facet] = []
@@ -485,6 +487,7 @@ final class AppModel {
             var folders: [FolderNode] = []
             var tags: [Tag] = []
             var fields: [Field] = []
+            var allSavedViews: [SavedView] = []
             var finderTags: [Facet] = []
             var facets: [String: [Facet]] = [:]
             var queue: [ProcessingEntry] = []
@@ -500,17 +503,20 @@ final class AppModel {
                 async let labels = (try? await store.finderTagLabels()) ?? [:]
                 async let q = (try? await store.processingQueue()) ?? []
                 async let s = (try? await store.stats()) ?? Store.Stats()
+                async let svList = (try? await store.savedViews()) ?? []
 
-                let (t, tg, fs, ftg, lbl, qq, ss) = await (tree, tagList, fieldList, finder, labels, q, s)
+                let (t, tg, fs, ftg, lbl, qq, ss, svs) = await (tree, tagList, fieldList, finder, labels, q, s, svList)
                 var facetMap: [String: [Facet]] = [:]
                 for field in fs { facetMap[field.key] = (try? await store.facets(field: field)) ?? [] }
 
                 let libID = lib.id
                 let stampedTags = tg.map { var x = $0; x.library = libID; return x }
                 let stampedFields = fs.map { var x = $0; x.library = libID; return x }
+                let stampedSavedViews = svs.map { var x = $0; x.library = libID; return x }
                 lib.folders = t
                 lib.tags = stampedTags
                 lib.fields = stampedFields
+                lib.savedViews = stampedSavedViews
                 lib.finderTags = ftg
                 lib.facets = facetMap
                 lib.queue = qq
@@ -519,6 +525,7 @@ final class AppModel {
                 folders += t
                 tags += stampedTags
                 fields += stampedFields
+                allSavedViews += stampedSavedViews
                 finderTags = Self.mergeFacets(finderTags, ftg)
                 for (k, v) in facetMap { facets[k] = Self.mergeFacets(facets[k] ?? [], v) }
                 queue += qq
@@ -532,12 +539,15 @@ final class AppModel {
             guard !Task.isCancelled else { return }
             self.folders = folders
             self.tags = tags
+            self.savedViews = allSavedViews
             self.finderTags = finderTags
             self.fields = Self.mergeFields(fields)
             self.facets = facets
             self.queue = queue
             self.stats = stats
-            self.reloadDocuments()
+            // A passive refresh (e.g. a Finder change) must not snap an
+            // expanded "Load More" list back down to the first page.
+            self.reloadDocuments(resetPaging: false)
         }
     }
 
@@ -585,18 +595,27 @@ final class AppModel {
     /// How many rows the centre pane holds at once. Each library is queried for
     /// this many, so the merge always has enough to fill the window whichever
     /// library the top of the list comes from.
-    private static let listLimit = 500
+    private static let pageBatchSize = 500
+    private var currentLimit = 500
+    var hasMoreDocuments = false
 
-    func reloadDocuments() {
+    func loadMore() {
+        guard hasMoreDocuments else { return }
+        currentLimit += Self.pageBatchSize
+        reloadDocuments(resetPaging: false)
+    }
+
+    func reloadDocuments(resetPaging: Bool = true) {
+        if resetPaging { currentLimit = Self.pageBatchSize }
         let sel = selection, text = searchText, sortField = sort, asc = sortAscending
         let keys = Set(fields.map(\.key))
         let libs = librariesInScope(for: sel)
-        guard !libs.isEmpty else { documents = []; selectedIDs = []; detail = nil; return }
+        guard !libs.isEmpty else { documents = []; selectedIDs = []; detail = nil; hasMoreDocuments = false; return }
         reloadDocsTask?.cancel()
         reloadDocsTask = Task { [weak self] in
             guard let self else { return }
             let query = SearchQuery(text, fieldKeys: keys)
-            let limit = Self.listLimit
+            let limit = self.currentLimit
 
             // Each library answers in parallel and keeps its own order; the
             // merge below is what turns them into one list.
@@ -622,6 +641,7 @@ final class AppModel {
             let rows = Self.merge((0..<libs.count).map { byIndex[$0] ?? [] },
                                   sort: sortField, ascending: asc, limit: limit)
             self.documents = rows
+            self.hasMoreDocuments = rows.count >= limit
             // Drop selections that no longer exist so the inspector cannot go stale.
             let live = Set(rows.map(\.id))
             let kept = self.selectedIDs.intersection(live)
@@ -774,6 +794,73 @@ final class AppModel {
         }
     }
     func cancelIndexing() { Task { for lib in libraries { await lib.indexer.cancel() } } }
+
+    func undo() {
+        guard let lib = activeLibrary else { return }
+        Task {
+            if let undone = try? await lib.store.undoLastEvent() {
+                refreshAll()
+                notify("Undid \(undone.action) for “\(undone.filename)”.", .success)
+            } else {
+                notify("Nothing to undo.", .info)
+            }
+        }
+    }
+
+    func verifyLibrary() {
+        guard let lib = activeLibrary else { return }
+        Task {
+            do {
+                let report = try await LibraryVerifier.verify(store: lib.store)
+                if report.isClean {
+                    notify("Library “\(lib.displayName)” is healthy with 0 errors.", .success)
+                } else {
+                    notify("Library verification found \(report.errorsCount) error(s) and \(report.warningsCount) warning(s).", .warning)
+                }
+            } catch {
+                errorMessage = "Could not verify library: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    // MARK: - Smart Folders / Saved Views
+
+    func saveCurrentSearchAsSmartFolder(name: String, icon: String = "line.3.horizontal.decrease.circle") {
+        guard let lib = activeLibrary else { return }
+        Task {
+            let sv = SavedView(id: 0, name: name, icon: icon, query: searchText,
+                               sortKey: sort.storageKey, ascending: sortAscending,
+                               viewMode: viewMode.rawValue, position: Int64(savedViews.count * 10))
+            _ = try? await lib.store.upsertSavedView(sv)
+            refreshAll()
+            notify("Saved smart folder “\(name)”.", .success)
+        }
+    }
+
+    func deleteSavedView(_ sv: SavedView) {
+        guard let lib = library(sv.library) ?? activeLibrary else { return }
+        Task {
+            try? await lib.store.deleteSavedView(sv.id)
+            if case .savedView(let id, _) = selection, id == sv.id {
+                selection = .all
+            }
+            refreshAll()
+            notify("Deleted smart folder “\(sv.name)”.", .info)
+        }
+    }
+
+    func selectSavedView(_ sv: SavedView) {
+        selection = .savedView(id: sv.id, query: sv.query)
+        searchText = sv.query
+        if let sk = sv.sortKey, let sortField = SortField(storageKey: sk) {
+            sort = sortField
+            sortAscending = sv.ascending
+        }
+        if let vm = sv.viewMode, let mode = ViewMode(rawValue: vm) {
+            viewMode = mode
+        }
+        reloadDocuments()
+    }
 
     // MARK: - Document actions
 
@@ -973,6 +1060,7 @@ final class AppModel {
                         // and history rather than as something brand new.
                         try? await lib.store.softDelete(row.doc,
                                                         trashPath: (landed as URL?)?.path)
+                        FileScanner.pruneEmptyDirectories(startingFrom: row.url.deletingLastPathComponent(), upTo: lib.store.root)
                         trashed += 1
                     } catch {
                         failed.append(row.filename)
@@ -1575,7 +1663,11 @@ final class AppModel {
         Task {
             let result = await lib.indexer.importFiles(urls, into: dest, movingSource: movingSource,
                                                        route: chosen == nil)
-            if result.imported == 0, result.alreadyInLibrary == 0, result.failed == 0 {
+            if result.imported == 0, result.duplicates > 0, result.alreadyInLibrary == 0, result.failed == 0 {
+                notify(result.duplicates == 1
+                       ? "Skipped “\(result.duplicateNames.first ?? "file")” — already in library."
+                       : "Skipped \(result.duplicates) duplicate files already in library.", .info)
+            } else if result.imported == 0, result.alreadyInLibrary == 0, result.failed == 0 {
                 // Only a folder can come to nothing: files are filtered by type
                 // before they get this far.
                 notify(urls.count == 1

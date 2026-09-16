@@ -359,6 +359,13 @@ actor Indexer {
         // alternatives — and so an ambiguous document has its choices waiting.
         try? await store.setPathSuggestions(decision.candidates, for: id)
 
+        if let corr = decision.setCorrespondent {
+            try? await store.storeMetadata(Store.MetadataPatch(docID: id, correspondent: corr, source: "rule"))
+        }
+        if let docType = decision.setDocType {
+            try? await store.storeMetadata(Store.MetadataPatch(docID: id, docType: docType, source: "rule"))
+        }
+
         for tag in decision.tags {
             if decision.tagsFromRule {
                 if let tagID = try? await store.tagID(named: tag) {
@@ -382,6 +389,8 @@ actor Indexer {
             let target = Naming.uniqueURL(in: destination, filename: url.lastPathComponent)
             try FileManager.default.moveItem(at: url, to: target)
             try? await store.updatePath(id, to: target.path)
+            let oldDir = URL(fileURLWithPath: from).deletingLastPathComponent()
+            FileScanner.pruneEmptyDirectories(startingFrom: oldDir, upTo: store.root)
             url = target
             try? await store.logProcessing(docID: id, action: "routed", detail: decision.explanation,
                                            confidence: decision.confidence, rule: decision.rule,
@@ -566,6 +575,9 @@ actor Indexer {
         var routed = 0
         /// Files that were already inside the library and were only indexed.
         var alreadyInLibrary = 0
+        /// Files skipped because their byte-identical copy is already in the library.
+        var duplicates = 0
+        var duplicateNames: [String] = []
         var failed = 0
     }
 
@@ -600,6 +612,20 @@ actor Indexer {
                       let r = try? await store.upsertDocument(facts) else { summary.failed += 1; continue }
                 summary.alreadyInLibrary += 1
                 if r.changed { inPlace.append((r.id, path)) }
+                continue
+            }
+            // Pre-flight duplicate check
+            if let sourceHash = FileScanner.hash(url),
+               let dup = try? await store.findDuplicate(hash: sourceHash) {
+                summary.duplicates += 1
+                summary.duplicateNames.append(url.lastPathComponent)
+                _ = dup
+                // `movingSource` files are the app's own scratch copies (e.g. a
+                // scan staged in the temp directory); the move is skipped, so
+                // this is the only chance to clean it up instead of leaking it.
+                // A plain import's source is the user's own file and is never
+                // touched.
+                if movingSource { try? FileManager.default.removeItem(at: url) }
                 continue
             }
             do {
@@ -660,6 +686,7 @@ actor Indexer {
             do {
                 try FileManager.default.moveItem(at: url, to: target)
                 try? await store.updatePath(id, to: target.path)
+                FileScanner.pruneEmptyDirectories(startingFrom: url.deletingLastPathComponent(), upTo: store.root)
                 try? await store.logProcessing(docID: id, action: "renamed", detail: newName,
                                                confidence: nil, rule: template,
                                                from: url.path, to: target.path, approved: true)
@@ -683,6 +710,7 @@ actor Indexer {
             do {
                 try FileManager.default.moveItem(at: url, to: target)
                 try? await store.updatePath(id, to: target.path)
+                FileScanner.pruneEmptyDirectories(startingFrom: url.deletingLastPathComponent(), upTo: store.root)
                 try? await store.logProcessing(docID: id, action: "moved", detail: destination.lastPathComponent,
                                                confidence: nil, rule: nil, from: path, to: target.path, approved: true)
                 await syncAliases(docID: id, target: target)

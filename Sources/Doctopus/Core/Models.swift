@@ -358,6 +358,22 @@ struct Rule: Identifiable, Hashable, Sendable {
     /// the pattern happens to contain a bracket.
     var mode: MatchMode = .anyWord
     var caseInsensitive: Bool = true
+    var setCorrespondent: String?
+    var setDocType: String?
+    var setFields: String?
+}
+
+/// A pinned, saved search query with custom sort and presentation.
+struct SavedView: Identifiable, Hashable, Sendable {
+    var id: Int64
+    var name: String
+    var icon: String = "line.3.horizontal.decrease.circle"
+    var query: String
+    var sortKey: String?
+    var ascending: Bool = false
+    var viewMode: String?
+    var position: Int64 = 0
+    var library: LibraryID = ""
 }
 
 /// A node in the physical directory tree shown in the sidebar.
@@ -384,6 +400,7 @@ enum Selection: Hashable, Sendable {
     case finderTag(String)
     /// A field value facet: (field key, value). Matched across every open library.
     case field(String, String)
+    case savedView(id: Int64, query: String)
     case untagged
     case needsReview
     /// Documents moved to the Trash: the row is kept so the file can be put

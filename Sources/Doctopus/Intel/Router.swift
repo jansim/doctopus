@@ -42,6 +42,9 @@ struct Router: Sendable {
         var candidates: [Candidate] = []
         /// True when the best candidates were too close to call.
         var ambiguous = false
+        var setCorrespondent: String?
+        var setDocType: String?
+        var setFields: String?
 
         var shouldMove: Bool { destination != nil }
     }
@@ -105,6 +108,20 @@ struct Router: Sendable {
                           candidates: candidates, currentDirectory: currentDirectory)
         }
 
+        // Destination is winner-takes-all; tags are a union of all matching rules.
+        var unionTags: [String] = []
+        var seenTags = Set<String>()
+        for m in matched {
+            for tag in ruleTags(m.rule) {
+                if seenTags.insert(tag.lowercased()).inserted {
+                    unionTags.append(tag)
+                }
+            }
+        }
+        let setCorr = matched.compactMap(\.rule.setCorrespondent).first { !$0.isEmpty }
+        let setType = matched.compactMap(\.rule.setDocType).first { !$0.isEmpty }
+        let setFields = matched.compactMap(\.rule.setFields).first { !$0.isEmpty }
+
         // The first matching rule is the user's own choice of winner, unless a
         // later one — pointing somewhere else — fits about as well.
         let rival = matched.dropFirst()
@@ -117,17 +134,21 @@ struct Router: Sendable {
             candidates = Self.deduplicated([rival] + candidates)
         }
         return decide(best: first.candidate, runnerUp: ambiguous ? rival : nil,
-                      tags: ruleTags(first.rule), tagsFromRule: true,
+                      tags: unionTags, tagsFromRule: true,
+                      setCorrespondent: setCorr, setDocType: setType, setFields: setFields,
                       candidates: candidates, currentDirectory: currentDirectory)
     }
 
     /// Turns the best candidate into a move — or, when it is not a clear
     /// enough call, into a document that stays put with its candidates.
     private func decide(best: Candidate, runnerUp: Candidate?, tags: [String], tagsFromRule: Bool,
+                        setCorrespondent: String? = nil, setDocType: String? = nil, setFields: String? = nil,
                         candidates: [Candidate], currentDirectory: URL) -> Decision {
         var decision = Decision(destination: nil, confidence: best.confidence, rule: best.rule,
                                 tags: tags, tagsFromRule: tagsFromRule, explanation: best.explanation,
-                                candidates: candidates)
+                                candidates: candidates, ambiguous: false,
+                                setCorrespondent: setCorrespondent, setDocType: setDocType,
+                                setFields: setFields)
         if let runnerUp {
             decision.ambiguous = true
             decision.explanation = "“\(best.rule)” (\(pct(best.confidence))) and “\(runnerUp.rule)” (\(pct(runnerUp.confidence))) fit equally well — left for you to choose"

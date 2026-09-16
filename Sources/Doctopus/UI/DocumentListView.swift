@@ -627,6 +627,11 @@ private struct ResultsBar: View {
                 if !model.selectedIDs.isEmpty {
                     Text("· \(model.selectedIDs.count) selected")
                 }
+                if model.hasMoreDocuments {
+                    Button("Load More…") { model.loadMore() }
+                        .buttonStyle(.borderless)
+                        .font(.caption)
+                }
                 Spacer()
                 if model.stats.pending > 0 {
                     Label("\(model.stats.pending) pending OCR", systemImage: "clock")

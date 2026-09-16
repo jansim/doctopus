@@ -2,7 +2,7 @@ import Foundation
 
 /// Versioned schema. Migrations are append-only: bump `current` and add a case.
 enum Schema {
-    static let current = 16
+    static let current = 17
 
     static func migrate(_ db: Database) throws {
         let version = try db.first("PRAGMA user_version") { Int($0.int(0)) } ?? 0
@@ -22,6 +22,7 @@ enum Schema {
         if version < 14 { try v14(db) }
         if version < 15 { try v15(db) }
         if version < 16 { try v16(db) }
+        if version < 17 { try v17(db) }
         try db.exec("PRAGMA user_version=\(current)")
     }
 
@@ -35,6 +36,27 @@ enum Schema {
             [.text(table), .text(column)]) { $0.int(0) } ?? 0
         guard present == 0 else { return }
         try db.exec("ALTER TABLE \(table) ADD COLUMN \(column) \(declaration)")
+    }
+
+    /// Rule metadata assignment and saved views.
+    private static func v17(_ db: Database) throws {
+        try addColumn(db, table: "rules", column: "set_correspondent", declaration: "TEXT")
+        try addColumn(db, table: "rules", column: "set_doc_type", declaration: "TEXT")
+        try addColumn(db, table: "rules", column: "set_fields", declaration: "TEXT")
+
+        try db.exec("""
+        CREATE TABLE IF NOT EXISTS saved_views (
+            id        INTEGER PRIMARY KEY,
+            name      TEXT NOT NULL,
+            icon      TEXT NOT NULL DEFAULT 'line.3.horizontal.decrease.circle',
+            query     TEXT NOT NULL,
+            sort_key  TEXT,
+            ascending INTEGER NOT NULL DEFAULT 0,
+            view_mode TEXT,
+            position  INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_saved_views_pos ON saved_views(position, name);
+        """)
     }
 
     /// Correspondents and document types become rows.

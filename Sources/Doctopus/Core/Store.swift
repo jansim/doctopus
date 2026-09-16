@@ -352,6 +352,24 @@ actor Store {
             """, [.text(hash), .text(hash), .int(docID)]) { $0.int(0) }
     }
 
+    struct DuplicateMatch: Sendable {
+        var docID: Int64
+        var filename: String
+        var path: String
+    }
+
+    /// Finds any existing non-deleted document that matches `hash` either on disk
+    /// or in its pre-optimized original form.
+    func findDuplicate(hash: String) throws -> DuplicateMatch? {
+        try db.first("""
+            SELECT id, filename, path FROM documents
+            WHERE (hash = ? OR original_hash = ?) AND missing = 0 AND deleted_at IS NULL
+            LIMIT 1
+            """, [.text(hash), .text(hash)]) {
+            DuplicateMatch(docID: $0.int(0), filename: $0.string(1), path: absPath($0.string(2)))
+        }
+    }
+
     func documentIDsNeedingOCR(limit: Int = 5000) throws -> [(id: Int64, path: String, ext: String)] {
         try db.map("""
             SELECT id, path, ext FROM documents
@@ -914,19 +932,151 @@ actor Store {
         try db.first("SELECT COUNT(*) FROM processing WHERE status=0") { Int($0.int(0)) } ?? 0
     }
 
+    // MARK: - Verification queries
+
+    struct VerificationDocInfo: Sendable {
+        var id: Int64
+        var path: String
+        var filename: String
+        var hash: String?
+        var ocrState: OCRState
+    }
+
+    func verificationDocumentInfos() throws -> [VerificationDocInfo] {
+        try db.map("""
+            SELECT id, path, filename, hash, ocr_state
+            FROM documents WHERE deleted_at IS NULL
+            """) {
+            VerificationDocInfo(id: $0.int(0), path: absPath($0.string(1)), filename: $0.string(2),
+                                hash: $0.stringOrNil(3),
+                                ocrState: OCRState(rawValue: $0.int(4)) ?? .pending)
+        }
+    }
+
+    func allAliasRecords() throws -> [(id: Int64, docID: Int64, path: String)] {
+        try db.map("SELECT id, doc_id, path FROM aliases") { ($0.int(0), $0.int(1), absPath($0.string(2))) }
+    }
+
+    func orphanedSuggestionsCount() throws -> Int {
+        try db.first("SELECT COUNT(*) FROM tag_suggestions WHERE doc_id NOT IN (SELECT id FROM documents)") {
+            Int($0.int(0))
+        } ?? 0
+    }
+
+    func orphanedIconsCount() throws -> Int {
+        try db.first("SELECT COUNT(*) FROM value_icons WHERE field_id NOT IN (SELECT id FROM fields)") {
+            Int($0.int(0))
+        } ?? 0
+    }
+
+    func orphanedFTSCount() throws -> Int {
+        try db.first("SELECT COUNT(*) FROM doc_fts WHERE rowid NOT IN (SELECT id FROM documents)") {
+            Int($0.int(0))
+        } ?? 0
+    }
+
+    // MARK: - Undo
+
+    /// Reverts the most recent undoable file event (such as a move, rename, or routing).
+    func undoLastEvent() async throws -> (action: String, filename: String)? {
+        let fm = FileManager.default
+        // Skips (and discards) events whose target file has since moved
+        // outside Doctopus, so one stale event can't permanently block undo
+        // of everything older than it.
+        while true {
+            guard let last = try db.first("""
+                SELECT id, doc_id, action, from_path, to_path, detail
+                FROM events
+                WHERE action IN ('moved', 'renamed', 'routed')
+                  AND from_path IS NOT NULL AND to_path IS NOT NULL
+                ORDER BY at DESC, id DESC LIMIT 1
+                """, [], { (id: $0.int(0), docID: $0.int(1), action: $0.string(2),
+                            from: absPath($0.string(3)), to: absPath($0.string(4)), detail: $0.stringOrNil(5)) }) else {
+                return nil
+            }
+
+            guard fm.fileExists(atPath: last.to) else {
+                try db.run("DELETE FROM events WHERE id=?", [.int(last.id)])
+                continue
+            }
+
+            let targetDir = URL(fileURLWithPath: last.from).deletingLastPathComponent()
+            try fm.createDirectory(at: targetDir, withIntermediateDirectories: true)
+            let targetURL = Naming.uniqueURL(in: targetDir, filename: URL(fileURLWithPath: last.from).lastPathComponent)
+
+            try fm.moveItem(at: URL(fileURLWithPath: last.to), to: targetURL)
+            try updatePath(last.docID, to: targetURL.path)
+            FileScanner.pruneEmptyDirectories(startingFrom: URL(fileURLWithPath: last.to).deletingLastPathComponent(), upTo: root)
+
+            try db.run("DELETE FROM events WHERE id=?", [.int(last.id)])
+
+            let filename = targetURL.lastPathComponent
+            return (last.action, filename)
+        }
+    }
+
+    // MARK: - Saved Views
+
+    func savedViews() throws -> [SavedView] {
+        try db.map("""
+            SELECT id, name, icon, query, sort_key, ascending, view_mode, position
+            FROM saved_views ORDER BY position, id
+            """) {
+            SavedView(id: $0.int(0), name: $0.string(1),
+                      icon: $0.stringOrNil(2) ?? "line.3.horizontal.decrease.circle",
+                      query: $0.string(3), sortKey: $0.stringOrNil(4),
+                      ascending: $0.bool(5), viewMode: $0.stringOrNil(6),
+                      position: $0.int(7))
+        }
+    }
+
+    @discardableResult
+    func upsertSavedView(_ sv: SavedView) throws -> Int64 {
+        if sv.id > 0 {
+            try db.run("""
+                UPDATE saved_views SET name=?, icon=?, query=?, sort_key=?, ascending=?,
+                                       view_mode=?, position=?
+                WHERE id=?
+                """, [.text(sv.name), .text(sv.icon), .text(sv.query), .text(sv.sortKey),
+                      .bool(sv.ascending), .text(sv.viewMode), .int(sv.position), .int(sv.id)])
+            return sv.id
+        }
+        return try db.run("""
+            INSERT INTO saved_views(name, icon, query, sort_key, ascending, view_mode, position)
+            VALUES(?,?,?,?,?,?,?)
+            """, [.text(sv.name), .text(sv.icon), .text(sv.query), .text(sv.sortKey),
+                  .bool(sv.ascending), .text(sv.viewMode), .int(sv.position)])
+    }
+
+    func deleteSavedView(_ id: Int64) throws {
+        try db.run("DELETE FROM saved_views WHERE id=?", [.int(id)])
+    }
+
+    func reorderSavedViews(_ ids: [Int64]) throws {
+        try db.transaction {
+            for (index, id) in ids.enumerated() {
+                try db.run("UPDATE saved_views SET position=? WHERE id=?",
+                           [.int(Int64(index * 10)), .int(id)])
+            }
+        }
+    }
+
     // MARK: - Rules
 
     func rules() throws -> [Rule] {
         try db.map("""
             SELECT id, name, pattern, field, destination, tag_names, weight, enabled, priority,
-                   match_mode, match_insensitive
+                   match_mode, match_insensitive, set_correspondent, set_doc_type, set_fields
             FROM rules ORDER BY priority DESC, id
             """) {
             Rule(id: $0.int(0), name: $0.string(1), pattern: $0.string(2), field: $0.string(3),
                  destination: $0.string(4), tagNames: $0.stringOrNil(5), weight: $0.double(6),
                  enabled: $0.bool(7), priority: $0.int(8),
                  mode: MatchMode(rawValue: $0.int(9)) ?? .anyWord,
-                 caseInsensitive: $0.bool(10))
+                 caseInsensitive: $0.bool(10),
+                 setCorrespondent: $0.stringOrNil(11),
+                 setDocType: $0.stringOrNil(12),
+                 setFields: $0.stringOrNil(13))
         }
     }
 
@@ -935,20 +1085,23 @@ actor Store {
         if r.id > 0 {
             try db.run("""
                 UPDATE rules SET name=?, pattern=?, field=?, destination=?, tag_names=?,
-                                 weight=?, enabled=?, priority=?, match_mode=?, match_insensitive=?
+                                 weight=?, enabled=?, priority=?, match_mode=?, match_insensitive=?,
+                                 set_correspondent=?, set_doc_type=?, set_fields=?
                 WHERE id=?
                 """, [.text(r.name), .text(r.pattern), .text(r.field), .text(r.destination),
                       .text(r.tagNames), .double(r.weight), .bool(r.enabled), .int(r.priority),
-                      .int(r.mode.rawValue), .bool(r.caseInsensitive), .int(r.id)])
+                      .int(r.mode.rawValue), .bool(r.caseInsensitive),
+                      .text(r.setCorrespondent), .text(r.setDocType), .text(r.setFields), .int(r.id)])
             return r.id
         }
         return try db.run("""
             INSERT INTO rules(name, pattern, field, destination, tag_names, weight, enabled, priority,
-                              match_mode, match_insensitive)
-            VALUES(?,?,?,?,?,?,?,?,?,?)
+                              match_mode, match_insensitive, set_correspondent, set_doc_type, set_fields)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
             """, [.text(r.name), .text(r.pattern), .text(r.field), .text(r.destination),
                   .text(r.tagNames), .double(r.weight), .bool(r.enabled), .int(r.priority),
-                  .int(r.mode.rawValue), .bool(r.caseInsensitive)])
+                  .int(r.mode.rawValue), .bool(r.caseInsensitive),
+                  .text(r.setCorrespondent), .text(r.setDocType), .text(r.setFields)])
     }
 
     func deleteRule(_ id: Int64) throws {
@@ -974,6 +1127,100 @@ actor Store {
         var text: String
         var correspondent: String?
         var docType: String?
+    }
+
+    struct RuleApplyResult: Sendable {
+        var matched: Int = 0
+        var moved: Int = 0
+        var tagged: Int = 0
+        var metadataUpdated: Int = 0
+    }
+
+    /// Applies a rule to all matching documents currently in the library.
+    func applyRuleToExisting(ruleID: Int64) async throws -> RuleApplyResult {
+        let allRules = try rules()
+        guard let rule = allRules.first(where: { $0.id == ruleID }) else { return RuleApplyResult() }
+
+        let docs = try db.map("""
+            SELECT d.id, d.path, d.filename, d.created_at, m.doc_date, ec.name, et.name,
+                   (SELECT f.body FROM doc_fts f WHERE f.rowid = d.id)
+            FROM documents d
+            LEFT JOIN metadata m ON m.doc_id = d.id
+            LEFT JOIN entities ec ON ec.id = m.correspondent_id
+            LEFT JOIN entities et ON et.id = m.doc_type_id
+            WHERE d.missing=0 AND d.deleted_at IS NULL
+            """) {
+            (id: $0.int(0), path: absPath($0.string(1)), filename: $0.string(2),
+             created: Date(timeIntervalSince1970: $0.double(3)),
+             docDate: $0.date(4), correspondent: $0.stringOrNil(5),
+             docType: $0.stringOrNil(6), text: $0.stringOrNil(7) ?? "")
+        }
+
+        var result = RuleApplyResult()
+        let router = Router(rules: [rule], threshold: 0.0, derivedTemplate: "", root: root, deriveWhenNoRule: false)
+
+        for doc in docs {
+            let subject = Router.subject(for: rule.field, text: doc.text, filename: doc.filename,
+                                         correspondent: doc.correspondent, docType: doc.docType)
+            guard Router.matches(rule, in: subject) else { continue }
+            result.matched += 1
+
+            // Documents already processed above must count even if a later
+            // one fails, so one bad row can't discard the whole batch's
+            // progress — the caller only ever sees `try?`'s empty fallback.
+            do {
+                // 1. Assign tags
+                if let tagNames = rule.tagNames {
+                    let tags = tagNames.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+                    for tag in tags {
+                        let tid = try tagID(named: tag)
+                        try assign(tag: tid, to: doc.id, auto: true)
+                    }
+                    if !tags.isEmpty { result.tagged += 1 }
+                }
+
+                // 2. Assign metadata
+                var patch = Store.MetadataPatch(docID: doc.id)
+                var updatedMeta = false
+                if let corr = rule.setCorrespondent, !corr.isEmpty {
+                    patch.correspondent = corr
+                    updatedMeta = true
+                }
+                if let dtype = rule.setDocType, !dtype.isEmpty {
+                    patch.docType = dtype
+                    updatedMeta = true
+                }
+                if updatedMeta {
+                    try storeMetadata(patch)
+                    result.metadataUpdated += 1
+                }
+
+                // 3. Move if destination template specified
+                let destStr = rule.destination.trimmingCharacters(in: .whitespaces)
+                if !destStr.isEmpty {
+                    let destURL = router.expand(destStr, correspondent: patch.correspondent ?? doc.correspondent,
+                                                docType: patch.docType ?? doc.docType, date: doc.docDate ?? doc.created)
+                    if router.isInsideLibrary(destURL) {
+                        let currentDir = URL(fileURLWithPath: doc.path).deletingLastPathComponent()
+                        if currentDir.standardizedFileURL != destURL.standardizedFileURL {
+                            try? FileManager.default.createDirectory(at: destURL, withIntermediateDirectories: true)
+                            let target = Naming.uniqueURL(in: destURL, filename: doc.filename)
+                            if (try? FileManager.default.moveItem(at: URL(fileURLWithPath: doc.path), to: target)) != nil {
+                                try updatePath(doc.id, to: target.path)
+                                FileScanner.pruneEmptyDirectories(startingFrom: currentDir, upTo: root)
+                                try logProcessing(docID: doc.id, action: "routed", detail: "Applied rule “\(rule.name)”",
+                                                  confidence: rule.weight, rule: rule.name,
+                                                  from: doc.path, to: target.path, approved: true)
+                                result.moved += 1
+                            }
+                        }
+                    }
+                }
+            } catch {
+                continue
+            }
+        }
+        return result
     }
 
     /// The most recent documents, as rule samples. `doc_fts` is keyed by

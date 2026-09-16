@@ -359,7 +359,7 @@ enum UITest {
         var copies: [URL] = []
         for row in model.documents where ["scan 003.pdf", "IMG_4821.pdf"].contains(row.filename) {
             let copy = staging.appendingPathComponent("review-" + row.filename)
-            if (try? fm.copyItem(at: row.url, to: copy)) != nil { copies.append(copy) }
+            if copyAsNew(row.url, to: copy) { copies.append(copy) }
         }
         model.selection = .all
         model.importFiles(copies, into: nil)
@@ -587,7 +587,7 @@ enum UITest {
         defer { try? fm.removeItem(at: folder) }
         let tag = String(UUID().uuidString.prefix(6))
         for (i, row) in model.documents.prefix(2).enumerated() {
-            try? fm.copyItem(at: row.url, to: (i == 0 ? folder : nested)
+            copyAsNew(row.url, to: (i == 0 ? folder : nested)
                 .appendingPathComponent("dropped-\(tag)-\(i).pdf"))
         }
 
@@ -614,6 +614,15 @@ enum UITest {
     }
 
     // MARK: - Harness
+
+    /// Copies a document with a trailing PDF comment, so an import sees new
+    /// bytes rather than skipping a duplicate of what is already in the library.
+    @discardableResult
+    private static func copyAsNew(_ source: URL, to target: URL) -> Bool {
+        guard var data = try? Data(contentsOf: source) else { return false }
+        data.append(Data("\n% unique-\(UUID().uuidString)\n".utf8))
+        return (try? data.write(to: target)) != nil
+    }
 
     private static func dropTarget(in view: NSView) -> NSView? {
         if !view.registeredDraggedTypes.isEmpty { return view }
