@@ -176,6 +176,18 @@ final class AppModel {
             // Settings follow the selection unless the Settings window has
             // pinned a library of its own.
             if settingsLibraryID == nil { adoptSettings(of: activeLibrary) }
+            // A smart folder *is* its query, and the sidebar's List binding
+            // assigns `selection` directly, so adopting the query has to happen
+            // here — anywhere else and only the callers that remember to route
+            // through it would filter at all.
+            if case .savedView(let id, let query) = selection {
+                searchText = query
+                if let sv = savedViews.first(where: { $0.id == id }) { adoptSavedViewSettings(sv) }
+            } else if case .savedView = oldValue {
+                // The text was put there by the smart folder, not typed, so it
+                // leaves with it rather than silently filtering the next place.
+                searchText = ""
+            }
             reloadDocuments()
         }
     }
@@ -793,6 +805,12 @@ final class AppModel {
         d.row.library = libID
         for i in d.tags.indices { d.tags[i].library = libID }
         for i in d.row.tags.indices { d.row.tags[i].library = libID }
+        // Similar documents are rows the inspector can navigate to, so they
+        // need their library as much as the subject does.
+        for i in d.similarDocuments.indices {
+            d.similarDocuments[i].library = libID
+            for j in d.similarDocuments[i].tags.indices { d.similarDocuments[i].tags[j].library = libID }
+        }
         return d
     }
 
@@ -949,8 +967,12 @@ final class AppModel {
     }
 
     func selectSavedView(_ sv: SavedView) {
+        // The query, sort and view mode are adopted by `selection`'s observer,
+        // which every path into a smart folder goes through.
         selection = .savedView(id: sv.id, query: sv.query)
-        searchText = sv.query
+    }
+
+    private func adoptSavedViewSettings(_ sv: SavedView) {
         if let sk = sv.sortKey, let sortField = SortField(storageKey: sk) {
             sort = sortField
             sortAscending = sv.ascending
@@ -958,7 +980,6 @@ final class AppModel {
         if let vm = sv.viewMode, let mode = ViewMode(rawValue: vm) {
             viewMode = mode
         }
-        reloadDocuments()
     }
 
     // MARK: - URL Schemes & Shortcuts

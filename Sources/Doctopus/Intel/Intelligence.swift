@@ -52,6 +52,62 @@ enum LLMBackend: String, Codable, CaseIterable, Sendable, Identifiable {
     }
 }
 
+/// `metadata.source` is written as `backend[:model][:vN]`. Everything that has
+/// to read it back — the inspector, the review panel, the history line — goes
+/// through here, so adding another component to the string never leaves a
+/// call site quietly matching on a prefix that no longer exists.
+enum MetadataSource: Equatable {
+    case onDevice(model: String?)
+    case remote(model: String?)
+    case heuristics
+
+    init(_ raw: String) {
+        var parts = raw.split(separator: ":").map(String.init)
+        let backend = parts.isEmpty ? "" : parts.removeFirst()
+        // A trailing `vN` is the prompt version, not part of the model name.
+        if let last = parts.last, last.hasPrefix("v"), last.dropFirst().allSatisfy(\.isNumber) {
+            parts.removeLast()
+        }
+        let model = parts.joined(separator: ":").nilIfBlank
+        switch backend {
+        case "llm": self = .onDevice(model: model)
+        case "remote": self = .remote(model: model)
+        default: self = .heuristics
+        }
+    }
+
+    var model: String? {
+        switch self {
+        case .onDevice(let m), .remote(let m): return m
+        case .heuristics: return nil
+        }
+    }
+
+    /// Sentence-initial, for a label of its own.
+    var label: String {
+        switch self {
+        case .onDevice: return "On-device model"
+        case .remote: return "API model"
+        case .heuristics: return "Heuristics"
+        }
+    }
+
+    /// The same name mid-sentence, where only the acronym stays upper-case.
+    var inlineLabel: String {
+        switch self {
+        case .onDevice: return "on-device model"
+        case .remote: return "API model"
+        case .heuristics: return "heuristics"
+        }
+    }
+
+    /// The label plus the model that produced it, where one was recorded.
+    var detailedLabel: String {
+        guard let model else { return label }
+        return "\(label) (\(model))"
+    }
+}
+
 /// The task itself, shared by both backends.
 ///
 /// Asking the two models different questions would make their answers

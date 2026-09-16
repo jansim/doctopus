@@ -182,11 +182,10 @@ struct RuleEditor: View {
             rule.name = rule.name.nilIfBlank ?? "Untitled Rule"
             rule.pattern = rule.pattern.trimmingCharacters(in: .whitespaces)
             rule.destination = rule.destination.trimmingCharacters(in: .whitespaces)
-            if let savedID = try? await library.store.upsertRule(rule) {
-                draft.id = savedID
-                let res = (try? await library.store.applyRuleToExisting(ruleID: savedID)) ?? Store.RuleApplyResult()
-                applyStatus = "Applied to \(res.matched) document\(res.matched == 1 ? "" : "s") (\(res.moved) moved, \(res.tagged) tagged)."
-            }
+            // Applied from the draft rather than a saved copy: the rule is only
+            // written to the library when the user presses Add Rule / Save.
+            let res = (try? await library.store.applyRuleToExisting(rule)) ?? Store.RuleApplyResult()
+            applyStatus = "Applied to \(res.matched) document\(res.matched == 1 ? "" : "s") (\(res.moved) moved, \(res.tagged) tagged)."
             applying = false
         }
     }

@@ -601,7 +601,10 @@ enum SelfTest {
                 print("  \(d.row.filename.padded(40)) \(d.metadataSource ?? "—")  \(d.row.summary ?? "no summary")")
             }
             Check.that("what the API returned is stored as its own source",
-                       !enriched.isEmpty && enriched.allSatisfy { $0.metadataSource == "remote" && $0.row.summary != nil })
+                       !enriched.isEmpty && enriched.allSatisfy {
+                           if case .remote = MetadataSource($0.metadataSource ?? "") { return $0.row.summary != nil }
+                           return false
+                       })
         }
 
         print("\nURL SCHEMES & SHORTCUTS")
@@ -1403,6 +1406,52 @@ enum SelfTest {
         Check.that("removing an alias never deletes a real file in its place",
                    !removed && fm.fileExists(atPath: impostor.path))
         try? fm.removeItem(at: impostor)
+
+        // 9. Pruning an emptied folder never takes a hidden file with it.
+        // `removeItem` is recursive, so a folder still holding a dot-file is
+        // not empty however little the Finder shows in it.
+        let keepDir = root.appendingPathComponent("Work/prune-check", isDirectory: true)
+        try? fm.createDirectory(at: keepDir, withIntermediateDirectories: true)
+        let hidden = keepDir.appendingPathComponent(".notes.md")
+        try? Data("not the pruner's to delete".utf8).write(to: hidden)
+        FileScanner.pruneEmptyDirectories(startingFrom: keepDir, upTo: root)
+        Check.that("pruning leaves a folder that still holds a hidden file",
+                   fm.fileExists(atPath: hidden.path))
+        try? fm.removeItem(at: keepDir)
+
+        // …and one holding nothing but a .DS_Store really does go.
+        let goneDir = root.appendingPathComponent("Work/prune-empty", isDirectory: true)
+        try? fm.createDirectory(at: goneDir, withIntermediateDirectories: true)
+        try? Data().write(to: goneDir.appendingPathComponent(".DS_Store"))
+        FileScanner.pruneEmptyDirectories(startingFrom: goneDir, upTo: root)
+        Check.that("…and prunes one holding nothing but a .DS_Store",
+                   !fm.fileExists(atPath: goneDir.path))
+
+        print("\nHALF-TYPED SEARCHES")
+        // FTS5 rejects a dangling operator outright, and the throw would blank
+        // the whole list — so every state the field passes through on the way
+        // to a real query has to stay runnable.
+        for partial in ["rechnung and", "and", "not", "or kontoauszug", "(rechnung or",
+                        "rechnung )", "(", "rechnung and or kontoauszug"] {
+            let hits = try? await store.listDocuments(selection: .all, query: SearchQuery(partial),
+                                                      sort: .added, ascending: false)
+            Check.that("“\(partial)” is still a query the list can run", hits != nil,
+                       SearchQuery(partial).ftsExpression ?? "no expression")
+        }
+
+        print("\nMETADATA SOURCE")
+        // The string carries a prompt version, and may carry a model name with
+        // colons of its own (`llama3:8b`), so it is never matched whole.
+        Check.that("an on-device analysis is labelled as one",
+                   MetadataSource("llm:v\(LLMPrompt.promptVersion)").label == "On-device model")
+        Check.that("an API analysis is labelled as one, whatever its version",
+                   MetadataSource("remote:v9").label == "API model")
+        Check.that("a model name is read back out of the source",
+                   MetadataSource("remote:llama3:8b:v2").model == "llama3:8b")
+        Check.that("a source with no model names none",
+                   MetadataSource("remote:v2").model == nil)
+        Check.that("anything else is heuristics",
+                   MetadataSource("heuristic").label == "Heuristics")
 
         for id in ruleIDs { try? await store.deleteRule(id) }
         await indexer.update(settings: settings)

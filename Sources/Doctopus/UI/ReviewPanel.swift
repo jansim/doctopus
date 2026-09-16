@@ -240,11 +240,7 @@ private struct GeneratedInfoEditor: View {
     }
 
     private func sourceLabel(_ s: String) -> String {
-        switch s {
-        case "llm": return "on-device model"
-        case "remote": return "API model"
-        default: return "heuristics"
-        }
+        MetadataSource(s).inlineLabel
     }
 }
 
