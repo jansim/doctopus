@@ -56,11 +56,6 @@ final class FileWatcher {
         stream = nil
     }
 
-    /// Suppresses events caused by our own writes (optimization, renames).
-    private var muted = 0
-    func mute() { queue.sync { muted += 1 } }
-    func unmute() { queue.asyncAfter(deadline: .now() + 1.0) { self.muted = max(0, self.muted - 1) } }
-
     private func enqueue(_ paths: [String]) {
         pending.formUnion(paths)
         debounce?.cancel()
@@ -68,7 +63,7 @@ final class FileWatcher {
             guard let self else { return }
             let batch = self.pending
             self.pending.removeAll(keepingCapacity: true)
-            guard self.muted == 0, !batch.isEmpty else { return }
+            guard !batch.isEmpty else { return }
             self.onChange(Array(batch))
         }
         debounce = work

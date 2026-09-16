@@ -51,9 +51,11 @@ enum DocumentAnalyzer {
                         options: Options = .default) -> Findings {
         var f = Findings()
 
+        let pdfInfo = pdfAttributes(url)
+
         // Date: OCR text > embedded document metadata > EXIF > filename > filesystem.
         var candidates = datesInText(text, source: "ocr", options: options)
-        if let d = embeddedDate(url) {
+        if let d = embeddedDate(pdfInfo) {
             candidates += [DateCandidate(date: DayDate.startOfDay(d), source: "pdf", labelled: false)]
         }
         if let d = exifDate(url) {
@@ -78,7 +80,7 @@ enum DocumentAnalyzer {
             ?? documentType(text)
         f.correspondent = matchingEntity(in: text, rules: options.rules(for: "correspondent"))
             ?? correspondent(text: text, known: knownCorrespondents)
-            ?? embeddedAuthor(url)
+            ?? embeddedAuthor(pdfInfo)
         f.amount = amount(in: text)
         f.title = title(url: url, text: text, type: f.docType, correspondent: f.correspondent)
 
@@ -259,18 +261,17 @@ enum DocumentAnalyzer {
         return date
     }
 
-    private static func embeddedDate(_ url: URL) -> Date? {
-        guard url.pathExtension.lowercased() == "pdf",
-              let doc = PDFDocument(url: url),
-              let attrs = doc.documentAttributes else { return nil }
-        return attrs[PDFDocumentAttribute.creationDateAttribute] as? Date
+    private static func pdfAttributes(_ url: URL) -> [AnyHashable: Any]? {
+        guard url.pathExtension.lowercased() == "pdf" else { return nil }
+        return PDFDocument(url: url)?.documentAttributes
     }
 
-    private static func embeddedAuthor(_ url: URL) -> String? {
-        guard url.pathExtension.lowercased() == "pdf",
-              let doc = PDFDocument(url: url),
-              let attrs = doc.documentAttributes else { return nil }
-        let author = attrs[PDFDocumentAttribute.authorAttribute] as? String
+    private static func embeddedDate(_ attributes: [AnyHashable: Any]?) -> Date? {
+        attributes?[PDFDocumentAttribute.creationDateAttribute] as? Date
+    }
+
+    private static func embeddedAuthor(_ attributes: [AnyHashable: Any]?) -> String? {
+        let author = attributes?[PDFDocumentAttribute.authorAttribute] as? String
         return author?.nilIfBlank.flatMap { $0.count < 60 ? $0 : nil }
     }
 

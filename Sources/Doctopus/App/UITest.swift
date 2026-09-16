@@ -514,6 +514,18 @@ enum UITest {
         Check.that("every row knows which library it came from",
                    Set(model.documents.map(\.library)).count == 2)
 
+        // Both libraries hold the same fixture, so one title names a document
+        // in each. A search result has to carry the library its document is
+        // in: a row id on its own opens whichever library is active, which is
+        // the wrong document as often as not.
+        if let sample = model.documents.first {
+            let hits = model.globalSearch(text: sample.displayTitle, limit: 50).compactMap(\.document)
+            let named = Set(hits.map(\.library))
+            Check.that("a search result names the library its document is in",
+                       hits.contains(sample.id) && named.count == 2,
+                       "\(hits.count) hit(s) across \(named.count) of 2 libraries")
+        }
+
         // Rows arrive already sorted per library; the merge is what has to keep
         // them in order once they are one list.
         func ascendingByName() -> Bool {

@@ -521,8 +521,7 @@ actor Store {
 
     /// User edits overwrite unconditionally (including clearing a field).
     func overwriteMetadataField(_ docID: Int64, column: String, value: String?) throws {
-        let allowed = ["title", "correspondent", "doc_type", "language", "summary", "intent", "amount"]
-        guard allowed.contains(column) else { return }
+        guard Store.editableColumns.contains(column) else { return }
         try db.run("INSERT OR IGNORE INTO metadata(doc_id) VALUES(?)", [.int(docID)])
         // A taxonomy value is a row; typing a new name into the inspector makes
         // one, exactly as picking an existing name reuses it.
@@ -768,11 +767,6 @@ actor Store {
         }
     }
 
-    /// Tags whose documents should be mirrored to disk as Finder aliases.
-    func mirroringTags(for docID: Int64) throws -> [Tag] {
-        try tags(for: docID).filter { $0.mirrors }
-    }
-
     // MARK: - Aliases
 
     /// `path` is the absolute location of the alias file.
@@ -789,10 +783,6 @@ actor Store {
 
     func deleteAlias(id: Int64) throws {
         try db.run("DELETE FROM aliases WHERE id=?", [.int(id)])
-    }
-
-    func allAliasPaths() throws -> Set<String> {
-        Set(try db.map("SELECT path FROM aliases") { absPath($0.string(0)) })
     }
 
     // MARK: - History and the processing queue
@@ -918,18 +908,6 @@ actor Store {
     /// capped queue used to throw away.
     func eventCount() throws -> Int {
         try db.first("SELECT COUNT(*) FROM events") { Int($0.int(0)) } ?? 0
-    }
-
-    func setProcessingApproved(_ id: Int64, _ approved: Bool) throws {
-        try db.run("UPDATE processing SET status=? WHERE id=?", [.bool(approved), .int(id)])
-        let owner = try db.first("SELECT doc_id FROM processing WHERE id=?", [.int(id)], { $0.int(0) })
-        if let docID = owner {
-            try db.run("UPDATE documents SET approved=? WHERE id=?", [.bool(approved), .int(docID)])
-        }
-    }
-
-    func pendingReviewCount() throws -> Int {
-        try db.first("SELECT COUNT(*) FROM processing WHERE status=0") { Int($0.int(0)) } ?? 0
     }
 
     // MARK: - Classifier Training Data
@@ -1180,21 +1158,12 @@ actor Store {
         try db.run("DELETE FROM saved_views WHERE id=?", [.int(id)])
     }
 
-    func reorderSavedViews(_ ids: [Int64]) throws {
-        try db.transaction {
-            for (index, id) in ids.enumerated() {
-                try db.run("UPDATE saved_views SET position=? WHERE id=?",
-                           [.int(Int64(index * 10)), .int(id)])
-            }
-        }
-    }
-
     // MARK: - Rules
 
     func rules() throws -> [Rule] {
         try db.map("""
             SELECT id, name, pattern, field, destination, tag_names, weight, enabled, priority,
-                   match_mode, match_insensitive, set_correspondent, set_doc_type, set_fields
+                   match_mode, match_insensitive, set_correspondent, set_doc_type
             FROM rules ORDER BY priority DESC, id
             """) {
             Rule(id: $0.int(0), name: $0.string(1), pattern: $0.string(2), field: $0.string(3),
@@ -1203,8 +1172,7 @@ actor Store {
                  mode: MatchMode(rawValue: $0.int(9)) ?? .anyWord,
                  caseInsensitive: $0.bool(10),
                  setCorrespondent: $0.stringOrNil(11),
-                 setDocType: $0.stringOrNil(12),
-                 setFields: $0.stringOrNil(13))
+                 setDocType: $0.stringOrNil(12))
         }
     }
 
@@ -1214,22 +1182,22 @@ actor Store {
             try db.run("""
                 UPDATE rules SET name=?, pattern=?, field=?, destination=?, tag_names=?,
                                  weight=?, enabled=?, priority=?, match_mode=?, match_insensitive=?,
-                                 set_correspondent=?, set_doc_type=?, set_fields=?
+                                 set_correspondent=?, set_doc_type=?
                 WHERE id=?
                 """, [.text(r.name), .text(r.pattern), .text(r.field), .text(r.destination),
                       .text(r.tagNames), .double(r.weight), .bool(r.enabled), .int(r.priority),
                       .int(r.mode.rawValue), .bool(r.caseInsensitive),
-                      .text(r.setCorrespondent), .text(r.setDocType), .text(r.setFields), .int(r.id)])
+                      .text(r.setCorrespondent), .text(r.setDocType), .int(r.id)])
             return r.id
         }
         return try db.run("""
             INSERT INTO rules(name, pattern, field, destination, tag_names, weight, enabled, priority,
-                              match_mode, match_insensitive, set_correspondent, set_doc_type, set_fields)
-            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+                              match_mode, match_insensitive, set_correspondent, set_doc_type)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
             """, [.text(r.name), .text(r.pattern), .text(r.field), .text(r.destination),
                   .text(r.tagNames), .double(r.weight), .bool(r.enabled), .int(r.priority),
                   .int(r.mode.rawValue), .bool(r.caseInsensitive),
-                  .text(r.setCorrespondent), .text(r.setDocType), .text(r.setFields)])
+                  .text(r.setCorrespondent), .text(r.setDocType)])
     }
 
     func deleteRule(_ id: Int64) throws {

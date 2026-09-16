@@ -50,8 +50,6 @@ enum FinderTags {
         return parsed
     }
 
-    static func read(_ url: URL) -> [String] { entries(url).map(\.name) }
-
     private static func names(_ url: URL) -> [String] {
         ((try? url.resourceValues(forKeys: [.tagNamesKey]))?.tagNames) ?? []
     }
