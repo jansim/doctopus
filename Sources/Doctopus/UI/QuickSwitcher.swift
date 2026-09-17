@@ -105,18 +105,18 @@ struct QuickSwitcherSheet: View {
     private func activate(_ item: GlobalSearchResult) {
         switch item.category {
         case .document:
-            if let docID = item.docID, let lib = model.activeLibrary {
+            if let document = item.document {
                 model.selection = .all
-                model.selectedIDs = [DocumentRef(library: lib.id, doc: docID)]
+                model.selectedIDs = [document]
             }
         case .tag:
             if let tagRef = item.tagRef {
                 model.selection = .tag(tagRef)
             }
-        case .correspondent:
-            model.selection = .field("correspondent", item.title)
-        case .docType:
-            model.selection = .field("doc_type", item.title)
+        case .correspondent, .docType:
+            if let key = item.fieldKey {
+                model.selection = .field(key, item.title)
+            }
         case .folder:
             if let path = item.path {
                 model.selection = .folder(path)

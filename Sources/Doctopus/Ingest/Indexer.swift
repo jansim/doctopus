@@ -131,8 +131,7 @@ actor Indexer {
 
             // A file appearing at a new path with a known hash is a Finder move.
             if let hash = FileScanner.hash(url),
-               let movedID = try? await store.relinkByHash(hash: hash, newPath: path) {
-                _ = movedID
+               (try? await store.relinkByHash(hash: hash, newPath: path)) != nil {
                 touched = true
                 continue
             }
@@ -236,25 +235,7 @@ actor Indexer {
         // Optimize for it.
         var optimized: Optimizer.Result?
         if isImport && settings.optimizeOnImport {
-            var savedOriginal: String?
-            if let preHash = FileScanner.hash(url),
-               (try? await store.saveOriginalFile(for: id, from: url, hash: preHash)) == true {
-                savedOriginal = preHash
-            }
-            optimized = try? Optimizer.optimize(url: url, options: settings.optimizerOptions)
-            if optimized == nil, let savedOriginal {
-                await store.discardOriginalFile(hash: savedOriginal, ext: url.pathExtension)
-            }
-            if let optimized {
-                try? await store.setSizes(id, size: optimized.newSize, originalSize: optimized.originalSize)
-                try? await store.logProcessing(
-                    docID: id, action: "optimized",
-                    detail: String(format: "%.0f%% smaller (%d page%@ rasterized)",
-                                   optimized.savings * 100, optimized.pagesRasterized,
-                                   optimized.pagesRasterized == 1 ? "" : "s"),
-                    confidence: nil, rule: nil, from: nil, to: nil, approved: true)
-                if let hash = FileScanner.hash(url) { try? await store.setHash(id, hash) }
-            }
+            optimized = await optimizeFile(id: id, url: url)
         }
 
         // 2. Text.
@@ -735,10 +716,9 @@ actor Indexer {
             }
             // Pre-flight duplicate check
             if let sourceHash = FileScanner.hash(url),
-               let dup = try? await store.findDuplicate(hash: sourceHash) {
+               (try? await store.findDuplicate(hash: sourceHash)) != nil {
                 summary.duplicates += 1
                 summary.duplicateNames.append(url.lastPathComponent)
-                _ = dup
                 // `movingSource` files are the app's own scratch copies (e.g. a
                 // scan staged in the temp directory); the move is skipped, so
                 // this is the only chance to clean it up instead of leaking it.
@@ -844,26 +824,34 @@ actor Indexer {
         var count = 0
         var saved: Int64 = 0
         for id in ids {
-            guard let path = try? await store.documentPath(id) else { continue }
-            let url = URL(fileURLWithPath: path)
-            var savedOriginal: String?
-            if let preHash = FileScanner.hash(url),
-               (try? await store.saveOriginalFile(for: id, from: url, hash: preHash)) == true {
-                savedOriginal = preHash
-            }
-            guard let result = try? Optimizer.optimize(url: url, options: settings.optimizerOptions) else {
-                if let savedOriginal { await store.discardOriginalFile(hash: savedOriginal, ext: url.pathExtension) }
-                continue
-            }
-            try? await store.setSizes(id, size: result.newSize, originalSize: result.originalSize)
-            try? await store.logProcessing(docID: id, action: "optimized",
-                                           detail: String(format: "%.0f%% smaller", result.savings * 100),
-                                           confidence: nil, rule: nil, from: nil, to: nil, approved: true)
+            guard let path = try? await store.documentPath(id),
+                  let result = await optimizeFile(id: id, url: URL(fileURLWithPath: path)) else { continue }
             count += 1
             saved += result.originalSize - result.newSize
         }
         onDataChanged()
         return (count, saved)
+    }
+
+    private func optimizeFile(id: Int64, url: URL) async -> Optimizer.Result? {
+        var savedOriginal: String?
+        if let preHash = FileScanner.hash(url),
+           (try? await store.saveOriginalFile(for: id, from: url, hash: preHash)) == true {
+            savedOriginal = preHash
+        }
+        guard let result = try? Optimizer.optimize(url: url, options: settings.optimizerOptions) else {
+            if let savedOriginal { await store.discardOriginalFile(hash: savedOriginal, ext: url.pathExtension) }
+            return nil
+        }
+        try? await store.setSizes(id, size: result.newSize, originalSize: result.originalSize)
+        try? await store.logProcessing(
+            docID: id, action: "optimized",
+            detail: String(format: "%.0f%% smaller (%d page%@ rasterized)",
+                           result.savings * 100, result.pagesRasterized,
+                           result.pagesRasterized == 1 ? "" : "s"),
+            confidence: nil, rule: nil, from: nil, to: nil, approved: true)
+        if let hash = FileScanner.hash(url) { try? await store.setHash(id, hash) }
+        return result
     }
 
     func revertOptimization(ids: [Int64]) async -> Int {

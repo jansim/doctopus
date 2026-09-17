@@ -183,22 +183,7 @@ private struct DetailInspector: View {
             } else {
                 FlowLayout(spacing: 5) {
                     ForEach(detail.tags) { tag in
-                        let color = TagColor.color(tag.color)
-                        HStack(spacing: 4) {
-                            Image(systemName: "tag")
-                                .font(.system(size: 9))
-                                .foregroundStyle(color)
-                            Text(tag.name).font(.caption)
-                            Button {
-                                model.removeTag(tag, from: [row])
-                            } label: {
-                                Image(systemName: "xmark").font(.system(size: 7, weight: .bold))
-                            }
-                            .buttonStyle(.plain)
-                        }
-                        .padding(.horizontal, 7).padding(.vertical, 3)
-                        .background(color.opacity(0.16), in: Capsule())
-                        .overlay(Capsule().strokeBorder(color.opacity(0.45)))
+                        TagChip(tag: tag) { model.removeTag(tag, from: [row]) }
                     }
                 }
             }
@@ -220,25 +205,10 @@ private struct DetailInspector: View {
         Section2("Suggested Tags") {
             FlowLayout(spacing: 5) {
                 ForEach(detail.tagSuggestions) { suggestion in
-                    let color = suggestionColor(suggestion.name)
-                    HStack(spacing: 4) {
-                        Image(systemName: "sparkles")
-                            .font(.system(size: 9))
-                            .foregroundStyle(color)
-                        Text(suggestion.name).font(.caption)
-                        Button {
-                            model.discardTagSuggestion(suggestion, for: row)
-                        } label: {
-                            Image(systemName: "xmark").font(.system(size: 7, weight: .bold))
-                        }
-                        .buttonStyle(.plain)
-                    }
-                    .padding(.horizontal, 7).padding(.vertical, 3)
-                    .background(color.opacity(0.10), in: Capsule())
-                    .overlay(Capsule().strokeBorder(color.opacity(0.5), style: StrokeStyle(lineWidth: 1, dash: [3, 2])))
-                    .contentShape(Capsule())
-                    .onTapGesture { model.acceptTagSuggestion(suggestion, for: row) }
-                    .help("Click to accept “\(suggestion.name)”, or dismiss it with ×")
+                    TagSuggestionChip(
+                        suggestion: suggestion, color: suggestionColor(suggestion.name),
+                        onAccept: { model.acceptTagSuggestion(suggestion, for: row) },
+                        onDiscard: { model.discardTagSuggestion(suggestion, for: row) })
                 }
             }
         }
@@ -756,22 +726,23 @@ private struct FieldValueRow: View {
 /// em dash so a blank row still looks like a row.
 struct EditableRow: View {
     let label: String
-    @State private var draft: String
-    private let committed: String
+    let value: String
     let onCommit: (String?) -> Void
+    @State private var draft: String
 
     init(_ label: String, value: String, onCommit: @escaping (String?) -> Void) {
         self.label = label
-        self.committed = value
-        self._draft = State(initialValue: value)
+        self.value = value
         self.onCommit = onCommit
+        self._draft = State(initialValue: value)
     }
 
     var body: some View {
         InfoRow(label, alignment: .center) {
             TextField("", text: $draft, prompt: Text("—"))
                 .textFieldStyle(.plain)
-                .onSubmit { if draft != committed { onCommit(draft) } }
+                .onSubmit { if draft != value { onCommit(draft) } }
+                .onChange(of: value) { old, new in if draft == old { draft = new } }
         }
     }
 }

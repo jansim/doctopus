@@ -17,9 +17,9 @@ struct GlobalSearchResult: Identifiable, Sendable {
     var title: String
     var subtitle: String?
     var icon: String
-    var docID: Int64?
+    var document: DocumentRef?
     var path: String?
-    var entityID: Int64?
+    var fieldKey: String?
     var tagRef: TagRef?
     var savedViewID: Int64?
 }
@@ -913,11 +913,16 @@ final class AppModel {
         }
 
         // 3. Correspondents & Types
-        for (fieldKey, facetList) in facets {
-            let cat: GlobalSearchResult.Category = fieldKey == "doc_type" ? .docType : .correspondent
-            let iconName = fieldKey == "doc_type" ? "doc.on.doc" : "person.2"
-            for f in facetList where f.value.lowercased().contains(query) {
-                results.append(GlobalSearchResult(id: "facet-\(fieldKey)-\(f.value)", category: cat, title: f.value, subtitle: "\(f.count) document(s)", icon: f.icon ?? iconName, path: fieldKey))
+        let taxonomies: [(key: String, category: GlobalSearchResult.Category, icon: String)] = [
+            ("correspondent", .correspondent, "person.2"),
+            ("doc_type", .docType, "doc.on.doc"),
+        ]
+        for taxonomy in taxonomies {
+            for f in facets[taxonomy.key] ?? [] where f.value.lowercased().contains(query) {
+                results.append(GlobalSearchResult(id: "facet-\(taxonomy.key)-\(f.value)",
+                                                  category: taxonomy.category, title: f.value,
+                                                  subtitle: "\(f.count) document(s)",
+                                                  icon: f.icon ?? taxonomy.icon, fieldKey: taxonomy.key))
             }
         }
 
@@ -934,7 +939,9 @@ final class AppModel {
 
         // 5. Documents
         for doc in documents where doc.displayTitle.lowercased().contains(query) || doc.filename.lowercased().contains(query) {
-            results.append(GlobalSearchResult(id: "doc-\(doc.doc)", category: .document, title: doc.displayTitle, subtitle: doc.filename, icon: "doc.text", docID: doc.doc))
+            results.append(GlobalSearchResult(id: "doc-\(doc.library)-\(doc.doc)", category: .document,
+                                              title: doc.displayTitle, subtitle: doc.filename,
+                                              icon: "doc.text", document: doc.id))
         }
 
         return Array(results.prefix(limit))
@@ -1894,7 +1901,7 @@ final class AppModel {
             .appendingPathComponent("doctopus-scan-\(UUID().uuidString)", isDirectory: true)
         try? FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
         var urls: [URL] = []
-        let stamp = ISO8601DateFormatter.filenameSafe.string(from: Date())
+        let stamp = DateFormatter.filenameSafe.string(from: Date())
         for (i, item) in items.enumerated() {
             let name = items.count == 1 ? "Scan \(stamp).\(item.ext)" : "Scan \(stamp) \(i + 1).\(item.ext)"
             let url = tmp.appendingPathComponent(name)
@@ -1916,7 +1923,8 @@ enum ByteFormat {
     static func string(_ bytes: Int64) -> String { formatter.string(fromByteCount: bytes) }
 }
 
-extension ISO8601DateFormatter {
+extension DateFormatter {
+    /// Timestamp formatted safely for filenames (e.g. `2026-01-14 10.22.03`).
     static let filenameSafe: DateFormatter = {
         let f = DateFormatter()
         f.locale = Locale(identifier: "en_US_POSIX")

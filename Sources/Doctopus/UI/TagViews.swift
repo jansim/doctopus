@@ -72,3 +72,72 @@ struct FinderTagChips: View {
         }
     }
 }
+
+/// One of Doctopus's tags as an editable token.
+struct TagChip: View {
+    let tag: Tag
+    var compact = false
+    let onRemove: () -> Void
+
+    var body: some View {
+        let color = TagColor.color(tag.color)
+        ChipBody(compact: compact) {
+            Image(systemName: "tag")
+                .font(.system(size: compact ? 8 : 9))
+                .foregroundStyle(color)
+            Text(tag.name).font(.caption)
+            RemoveButton(help: "Remove “\(tag.name)”", action: onRemove)
+        }
+        .background(color.opacity(0.16), in: Capsule())
+        .overlay(Capsule().strokeBorder(color.opacity(0.45)))
+    }
+}
+
+/// A tag the model proposed, displayed with a dashed border until accepted.
+struct TagSuggestionChip: View {
+    let suggestion: TagSuggestion
+    var color: Color = .secondary
+    var compact = false
+    let onAccept: () -> Void
+    let onDiscard: () -> Void
+
+    var body: some View {
+        ChipBody(compact: compact) {
+            Image(systemName: "sparkles")
+                .font(.system(size: compact ? 8 : 9))
+                .foregroundStyle(color)
+            Text(suggestion.name).font(.caption)
+            RemoveButton(help: "Dismiss “\(suggestion.name)”", action: onDiscard)
+        }
+        .background(color.opacity(compact ? 0.08 : 0.10), in: Capsule())
+        .overlay(Capsule().strokeBorder(color.opacity(0.5),
+                                        style: StrokeStyle(lineWidth: 1, dash: [3, 2])))
+        .contentShape(Capsule())
+        .onTapGesture(perform: onAccept)
+        .help("Click to accept “\(suggestion.name)”, or dismiss it with ×")
+    }
+}
+
+private struct ChipBody<Content: View>: View {
+    let compact: Bool
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        HStack(spacing: compact ? 3 : 4) { content }
+            .padding(.horizontal, compact ? 6 : 7)
+            .padding(.vertical, compact ? 2 : 3)
+    }
+}
+
+private struct RemoveButton: View {
+    let help: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "xmark").font(.system(size: 7, weight: .bold))
+        }
+        .buttonStyle(.plain)
+        .help(help)
+    }
+}

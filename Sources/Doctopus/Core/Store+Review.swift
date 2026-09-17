@@ -131,35 +131,14 @@ extension Store {
             """, [.text(matchExpr), .int(docID), .int(Int64(limit))]) { $0.int(0) }
         guard !similarIDs.isEmpty else { return [] }
 
-        var rows: [DocumentRow] = []
-        for id in similarIDs {
-            if let row = try db.first("""
-                SELECT d.id, d.path, d.directory, d.filename, d.ext, d.size, d.original_size,
-                       d.created_at, d.mtime, d.ocr_state, d.page_count, d.approved, d.missing,
-                       m.title, ec.name, et.name, m.language, m.doc_date, m.summary
-                FROM documents d
-                LEFT JOIN metadata m ON m.doc_id = d.id
-                LEFT JOIN entities ec ON ec.id = m.correspondent_id
-                LEFT JOIN entities et ON et.id = m.doc_type_id
-                WHERE d.id=? AND d.missing=0 AND d.deleted_at IS NULL
-                """, [.int(id)], { r in
-                DocumentRow(
-                    doc: r.int(0), path: absPath(r.string(1)), directory: absPath(r.string(2)),
-                    filename: r.string(3), ext: r.string(4), size: r.int(5),
-                    originalSize: r.intOrNil(6),
-                    createdAt: Date(timeIntervalSince1970: r.double(7)),
-                    mtime: Date(timeIntervalSince1970: r.double(8)),
-                    ocrState: OCRState(rawValue: r.int(9)) ?? .pending,
-                    pageCount: r.intOrNil(10).map(Int.init), approved: r.bool(11),
-                    missing: r.bool(12),
-                    title: r.stringOrNil(13), correspondent: r.stringOrNil(14),
-                    docType: r.stringOrNil(15), language: r.stringOrNil(16),
-                    docDate: r.date(17), summary: r.stringOrNil(18))
-            }) {
-                rows.append(row)
-            }
-        }
-        return rows
+        let placeholders = similarIDs.map { _ in "?" }.joined(separator: ",")
+        let rows = try db.map("""
+            SELECT \(Store.rowColumns)
+            \(Store.rowTables)
+            WHERE d.id IN (\(placeholders)) AND d.missing=0 AND d.deleted_at IS NULL
+            """, similarIDs.map { Database.Value.int($0) }) { documentRow($0) }
+        let byID = Dictionary(rows.map { ($0.doc, $0) }, uniquingKeysWith: { a, _ in a })
+        return similarIDs.compactMap { byID[$0] }
     }
 
     /// The folders a document has been filed in as an alias by hand — its

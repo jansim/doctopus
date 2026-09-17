@@ -7,7 +7,7 @@ import Foundation
 /// same mechanism Finder's "Make Alias" uses — they survive the target moving.
 enum AliasManager {
 
-    /// Directory that holds mirrored tag folders, e.g. `<root>/.Tags/Invoices/`.
+    /// Directory that holds mirrored tag folders, e.g. `<root>/Tags/Invoices/`.
     static func tagFolder(root: URL, tag: Tag) -> URL {
         if let custom = tag.folder?.nilIfBlank {
             return URL(fileURLWithPath: (custom as NSString).expandingTildeInPath)

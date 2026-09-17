@@ -176,11 +176,11 @@ extension FieldType {
 /// to, sorting — goes through here, so the same library reads the same on two
 /// Macs in two timezones.
 enum DayDate {
-    static var calendar: Calendar {
+    static let calendar: Calendar = {
         var c = Calendar(identifier: .gregorian)
         c.timeZone = TimeZone(secondsFromGMT: 0)!
         return c
-    }
+    }()
 
     static func startOfDay(_ date: Date) -> Date {
         calendar.startOfDay(for: date)

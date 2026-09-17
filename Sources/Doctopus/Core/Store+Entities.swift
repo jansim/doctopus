@@ -16,6 +16,12 @@ extension Store {
         "doc_type": "doc_type_id",
     ]
 
+    /// The `metadata` columns a built-in field can be backed by.
+    static let fieldColumns: Set<String> = ["correspondent", "doc_type", "language", "amount", "intent"]
+
+    /// Those, plus the `metadata` columns that are edited directly rather than through a field.
+    static let editableColumns: Set<String> = fieldColumns.union(["title", "summary"])
+
     nonisolated static func entityColumn(for builtin: String?) -> String? {
         builtin.flatMap { entityColumns[$0] }
     }
@@ -128,10 +134,6 @@ extension Store {
 
     func setEntityIcon(_ id: Int64, icon: String?) throws {
         try db.run("UPDATE entities SET icon=? WHERE id=?", [.text(icon?.nilIfBlank), .int(id)])
-    }
-
-    func setEntityColor(_ id: Int64, color: Int64) throws {
-        try db.run("UPDATE entities SET color=? WHERE id=?", [.int(color), .int(id)])
     }
 
     /// Gives a value a pattern that identifies it. This is the cheapest

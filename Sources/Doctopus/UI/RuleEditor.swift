@@ -282,14 +282,19 @@ struct RuleEditor: View {
         }
     }
 
-    /// Expanded by the router itself against a made-up document, so tokens,
-    /// empty values and absolute paths all come out the way they will for real.
+    private var previewRouter: Router {
+        Router(rules: [], threshold: threshold, derivedTemplate: "",
+               root: library.root, deriveWhenNoRule: false)
+    }
+
+    private var destinationURL: URL? {
+        guard draft.destination.nilIfBlank != nil else { return nil }
+        return previewRouter.expand(draft.destination, correspondent: "Acme Corp",
+                                    docType: "Invoice", date: Date())
+    }
+
     private var destinationPreview: String {
-        guard draft.destination.nilIfBlank != nil else { return "—" }
-        let router = Router(rules: [], threshold: threshold, derivedTemplate: "",
-                            root: library.root, deriveWhenNoRule: false)
-        let url = router.expand(draft.destination, correspondent: "Acme Corp",
-                                docType: "Invoice", date: Date())
+        guard let url = destinationURL else { return "—" }
         let rootPath = library.root.path
         if url.path == rootPath { return "\(library.displayName) (the library folder itself)" }
         if url.path.hasPrefix(rootPath + "/") {
@@ -299,11 +304,8 @@ struct RuleEditor: View {
     }
 
     private var destinationLeavesLibrary: Bool {
-        guard draft.destination.nilIfBlank != nil else { return false }
-        let router = Router(rules: [], threshold: threshold, derivedTemplate: "",
-                            root: library.root, deriveWhenNoRule: false)
-        return !router.isInsideLibrary(router.expand(draft.destination, correspondent: "Acme Corp",
-                                                     docType: "Invoice", date: Date()))
+        guard let url = destinationURL else { return false }
+        return !previewRouter.isInsideLibrary(url)
     }
 
     private var confidenceExplanation: String {

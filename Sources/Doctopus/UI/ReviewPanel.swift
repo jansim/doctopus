@@ -193,39 +193,15 @@ private struct GeneratedInfoEditor: View {
         VStack(alignment: .leading, spacing: 5) {
             FlowLayout(spacing: 4) {
                 ForEach(detail.tags) { tag in
-                    let color = TagColor.color(tag.color)
-                    HStack(spacing: 3) {
-                        Image(systemName: "tag").font(.system(size: 8)).foregroundStyle(color)
-                        Text(tag.name).font(.caption)
-                        Button { model.removeTag(tag, from: [row]) } label: {
-                            Image(systemName: "xmark").font(.system(size: 7, weight: .bold))
-                        }
-                        .buttonStyle(.plain)
-                        .help("Remove “\(tag.name)”")
-                    }
-                    .padding(.horizontal, 6).padding(.vertical, 2)
-                    .background(color.opacity(0.16), in: Capsule())
-                    .overlay(Capsule().strokeBorder(color.opacity(0.45)))
+                    TagChip(tag: tag, compact: true) { model.removeTag(tag, from: [row]) }
                 }
                 // Suggestions sit alongside, dashed, so accepting one is a
                 // click away rather than a trip to the inspector.
                 ForEach(detail.tagSuggestions) { suggestion in
-                    HStack(spacing: 3) {
-                        Image(systemName: "sparkles").font(.system(size: 8)).foregroundStyle(.secondary)
-                        Text(suggestion.name).font(.caption)
-                        Button { model.discardTagSuggestion(suggestion, for: row) } label: {
-                            Image(systemName: "xmark").font(.system(size: 7, weight: .bold))
-                        }
-                        .buttonStyle(.plain)
-                        .help("Dismiss “\(suggestion.name)”")
-                    }
-                    .padding(.horizontal, 6).padding(.vertical, 2)
-                    .background(Color.secondary.opacity(0.08), in: Capsule())
-                    .overlay(Capsule().strokeBorder(Color.secondary.opacity(0.5),
-                                                    style: StrokeStyle(lineWidth: 1, dash: [3, 2])))
-                    .contentShape(Capsule())
-                    .onTapGesture { model.acceptTagSuggestion(suggestion, for: row) }
-                    .help("Click to accept “\(suggestion.name)”")
+                    TagSuggestionChip(
+                        suggestion: suggestion, compact: true,
+                        onAccept: { model.acceptTagSuggestion(suggestion, for: row) },
+                        onDiscard: { model.discardTagSuggestion(suggestion, for: row) })
                 }
             }
             TextField("Add tag", text: $tagInput)

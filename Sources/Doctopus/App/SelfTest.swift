@@ -260,6 +260,33 @@ enum SelfTest {
                   + "values=\(count)")
         }
 
+        // A built-in field's value has to reach the list as well as the
+        // inspector. They fold their values separately, and a column whose
+        // value only the inspector knew about shows an em dash for every
+        // document and sorts as if it were empty.
+        if let subject = rows.first,
+           let amount = fields.first(where: { $0.builtinColumn == "amount" }),
+           let intent = fields.first(where: { $0.builtinColumn == "intent" }) {
+            try? await store.setFieldValue(docID: subject.doc, field: amount, value: "€49,90")
+            try? await store.setFieldValue(docID: subject.doc, field: intent, value: "pay")
+            let listed = ((try? await store.listDocuments(
+                selection: .all, query: SearchQuery(""), sort: .added, ascending: false)) ?? [])
+                .first { $0.doc == subject.doc }
+            let inspected = try? await store.detail(subject.doc)
+            print("  in the list             \(listed?.values["amount"] ?? "—") / \(listed?.values["intent"] ?? "—")")
+            Check.that("a built-in field's value reaches the list, not only the inspector",
+                       listed?.values["amount"] == "€49,90" && listed?.values["intent"] == "pay",
+                       "\(listed?.values["amount"] ?? "—"), \(listed?.values["intent"] ?? "—")")
+            let disagreed = fields.filter { $0.isBuiltin }
+                .filter { listed?.values[$0.key] != inspected?.row.values[$0.key] }
+            Check.that("…and the two agree about every built-in field",
+                       disagreed.isEmpty, disagreed.map(\.key).joined(separator: ", "))
+            // Put it back as it was, so the sections below see the library the
+            // fixture describes.
+            try? await store.setFieldValue(docID: subject.doc, field: amount, value: nil)
+            try? await store.setFieldValue(docID: subject.doc, field: intent, value: nil)
+        }
+
         print("\nSAVED VIEWS (SMART FOLDERS)")
         let sv = SavedView(id: 0, name: "Invoices 2026", icon: "doc.text",
                            query: "type:Invoice date:2026", sortKey: "docDate", ascending: false,
@@ -473,10 +500,13 @@ enum SelfTest {
 
             let undone = try? await store.undoLastEvent()
             let back = ((try? await store.aliases(for: doc.doc)) ?? []).filter { $0.tagID == nil }
+            // `&&` takes its right side as a non-async autoclosure, so anything
+            // awaited has to be in hand before the check, not inside it.
+            let stillHome = (try? await store.documentPath(doc.doc)) ?? ""
             Check.that("undoing a deleted alias writes the alias again, and nothing else",
                        undone?.action == "unfiled"
                            && back.contains(where: { AliasManager.isAlias(URL(fileURLWithPath: $0.path)) })
-                           && (try? await store.documentPath(doc.doc)) == doc.path,
+                           && stillHome == doc.path,
                        undone?.action ?? "nothing to undo")
 
             for alias in back {

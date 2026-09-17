@@ -29,7 +29,7 @@ final class QuickLookController: NSObject, @preconcurrency QLPreviewPanelDataSou
         show(urls: urls, startingAt: url)
     }
 
-    func show(urls: [URL], startingAt url: URL? = nil) {
+    private func show(urls: [URL], startingAt url: URL? = nil) {
         let existing = urls.filter { FileManager.default.fileExists(atPath: $0.path) }
         guard !existing.isEmpty else { return }
         self.urls = existing
@@ -45,11 +45,6 @@ final class QuickLookController: NSObject, @preconcurrency QLPreviewPanelDataSou
             panel.makeKeyAndOrderFront(nil)
             panel.currentPreviewItemIndex = startIndex
         }
-    }
-
-    func close() {
-        guard isOpen else { return }
-        QLPreviewPanel.shared().orderOut(nil)
     }
 
     // MARK: - QLPreviewPanelDataSource

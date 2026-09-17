@@ -96,7 +96,14 @@ struct QueueInfo: Hashable, Sendable {
     var rule: String?
     var approved: Bool
 
-    var icon: String {
+    var icon: String { DocumentAction.icon(action) }
+}
+
+/// How one of the pipeline's actions is shown. The queue, the inspector's
+/// History and the review all name the same `events.action` strings, so the
+/// icon and the wording live here rather than in each of them.
+enum DocumentAction {
+    static func icon(_ action: String) -> String {
         switch action {
         case "routed": return "arrow.triangle.branch"
         case "optimized": return "arrow.down.circle"
@@ -107,6 +114,21 @@ struct QueueInfo: Hashable, Sendable {
         case "imported": return "tray.and.arrow.down"
         case "analyzed": return "sparkles"
         default: return "doc.text.magnifyingglass"
+        }
+    }
+
+    static func label(_ action: String) -> String {
+        switch action {
+        case "routed": return "Filed"
+        case "optimized": return "Optimized"
+        case "renamed": return "Renamed"
+        case "moved": return "Moved"
+        case "promoted": return "Kept elsewhere"
+        case "unfiled": return "Unfiled"
+        case "imported": return "Imported"
+        case "analyzed": return "Analyzed"
+        case "indexed": return "Indexed"
+        default: return action.capitalized
         }
     }
 }
@@ -311,34 +333,8 @@ struct HistoryEvent: Identifiable, Hashable, Sendable {
     var fromPath: String?
     var toPath: String?
 
-    var icon: String {
-        switch action {
-        case "routed": return "arrow.triangle.branch"
-        case "optimized": return "arrow.down.circle"
-        case "renamed": return "character.cursor.ibeam"
-        case "moved": return "folder"
-        case "promoted": return "arrow.up.doc"
-        case "unfiled": return "folder.badge.minus"
-        case "imported": return "tray.and.arrow.down"
-        case "analyzed": return "sparkles"
-        default: return "doc.text.magnifyingglass"
-        }
-    }
-
-    var label: String {
-        switch action {
-        case "routed": return "Filed"
-        case "optimized": return "Optimized"
-        case "renamed": return "Renamed"
-        case "moved": return "Moved"
-        case "promoted": return "Kept elsewhere"
-        case "unfiled": return "Unfiled"
-        case "imported": return "Imported"
-        case "analyzed": return "Analyzed"
-        case "indexed": return "Indexed"
-        default: return action.capitalized
-        }
-    }
+    var icon: String { DocumentAction.icon(action) }
+    var label: String { DocumentAction.label(action) }
 
     /// "Inbox → Finances/Invoices/2026", when the event moved the file.
     func move(relativeTo root: String) -> String? {
@@ -368,7 +364,6 @@ struct Rule: Identifiable, Hashable, Sendable {
     var caseInsensitive: Bool = true
     var setCorrespondent: String?
     var setDocType: String?
-    var setFields: String?
 }
 
 /// A pinned, saved search query with custom sort and presentation.

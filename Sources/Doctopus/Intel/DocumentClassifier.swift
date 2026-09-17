@@ -69,176 +69,102 @@ actor DocumentClassifier {
             return tokens.isEmpty ? nil : (doc: $0, tokens: tokens)
         }
 
-        // 1. Train Correspondent Model
-        var corrModel = Model()
-        var corrVocab = Set<String>()
-        for (doc, tokens) in corpus {
-            guard let c = doc.correspondent?.nilIfBlank else { continue }
-            corrModel.totalDocuments += 1
-            var stats = corrModel.classes[c] ?? ClassStats()
-            stats.documentCount += 1
-            for token in tokens {
-                stats.wordCounts[token, default: 0] += 1
-                stats.totalWords += 1
-                corrVocab.insert(token)
-            }
-            corrModel.classes[c] = stats
-        }
-        corrModel.vocabularySize = corrVocab.count
-        correspondentModel = corrModel.classes.count >= 2 ? corrModel : nil
-
-        // 2. Train DocType Model
-        var typeModel = Model()
-        var typeVocab = Set<String>()
-        for (doc, tokens) in corpus {
-            guard let t = doc.docType?.nilIfBlank else { continue }
-            typeModel.totalDocuments += 1
-            var stats = typeModel.classes[t] ?? ClassStats()
-            stats.documentCount += 1
-            for token in tokens {
-                stats.wordCounts[token, default: 0] += 1
-                stats.totalWords += 1
-                typeVocab.insert(token)
-            }
-            typeModel.classes[t] = stats
-        }
-        typeModel.vocabularySize = typeVocab.count
-        docTypeModel = typeModel.classes.count >= 2 ? typeModel : nil
-
-        // 3. Train Multi-Label Tag Models
-        var allTags = Set<String>()
-        for doc in docs { for tag in doc.tags { allTags.insert(tag) } }
+        correspondentModel = Self.choosing(Self.fit(corpus, label: { $0.correspondent?.nilIfBlank }))
+        docTypeModel = Self.choosing(Self.fit(corpus, label: { $0.docType?.nilIfBlank }))
 
         var tModels: [String: Model] = [:]
-        for tag in allTags {
-            var tagModel = Model()
-            var tagVocab = Set<String>()
-            var posCount = 0
-            var negCount = 0
-
-            for (doc, tokens) in corpus {
-                let isPos = doc.tags.contains(tag)
-                let label = isPos ? "pos" : "neg"
-                if isPos { posCount += 1 } else { negCount += 1 }
-                tagModel.totalDocuments += 1
-
-                var stats = tagModel.classes[label] ?? ClassStats()
-                stats.documentCount += 1
-                for token in tokens {
-                    stats.wordCounts[token, default: 0] += 1
-                    stats.totalWords += 1
-                    tagVocab.insert(token)
-                }
-                tagModel.classes[label] = stats
-            }
-            tagModel.vocabularySize = tagVocab.count
-            if posCount >= 2 && negCount >= 1 {
-                tModels[tag] = tagModel
-            }
+        for tag in Set(docs.flatMap(\.tags)) {
+            guard let model = Self.fit(corpus, label: { $0.tags.contains(tag) ? "pos" : "neg" }),
+                  (model.classes["pos"]?.documentCount ?? 0) >= 2,
+                  (model.classes["neg"]?.documentCount ?? 0) >= 1
+            else { continue }
+            tModels[tag] = model
         }
         tagModels = tModels.isEmpty ? nil : tModels
     }
 
+    private static func choosing(_ model: Model?) -> Model? {
+        (model?.classes.count ?? 0) >= 2 ? model : nil
+    }
+
+    /// Counts one model's classes over the corpus.
+    private static func fit(_ corpus: [(doc: TrainingDoc, tokens: [String])],
+                            label: (TrainingDoc) -> String?) -> Model? {
+        var model = Model()
+        var vocabulary = Set<String>()
+        for (doc, tokens) in corpus {
+            guard let label = label(doc) else { continue }
+            model.totalDocuments += 1
+            var stats = model.classes[label] ?? ClassStats()
+            stats.documentCount += 1
+            for token in tokens {
+                stats.wordCounts[token, default: 0] += 1
+                stats.totalWords += 1
+                vocabulary.insert(token)
+            }
+            model.classes[label] = stats
+        }
+        guard model.totalDocuments > 0 else { return nil }
+        model.vocabularySize = vocabulary.count
+        return model
+    }
+
     func predictCorrespondent(text: String) -> Prediction? {
-        guard let model = correspondentModel else { return nil }
-        return predict(text: text, model: model)
+        correspondentModel.flatMap { predict(tokenize(text), $0) }
     }
 
     func predictDocType(text: String) -> Prediction? {
-        guard let model = docTypeModel else { return nil }
-        return predict(text: text, model: model)
+        docTypeModel.flatMap { predict(tokenize(text), $0) }
     }
 
+    /// Every tag whose own model says yes.
     func predictTags(text: String) -> [Prediction] {
         guard let tagModels else { return [] }
-        var out: [Prediction] = []
-        for (tag, model) in tagModels {
-            if let pred = predictBinary(text: text, model: model), pred.confidence >= confidenceThreshold {
-                out.append(Prediction(label: tag, confidence: pred.confidence))
+        let tokens = tokenize(text)
+        return tagModels
+            .compactMap { tag, model in
+                guard let pred = predict(tokens, model), pred.label == "pos" else { return nil }
+                return Prediction(label: tag, confidence: pred.confidence)
             }
-        }
-        return out.sorted { $0.confidence > $1.confidence }
+            .sorted { $0.confidence > $1.confidence }
     }
 
     // MARK: - Probability scoring
 
-    private func predict(text: String, model: Model) -> Prediction? {
-        let tokens = tokenize(text)
-        guard !tokens.isEmpty, !model.classes.isEmpty else { return nil }
-
+    /// The likeliest class, when it clears the confidence threshold.
+    private func predict(_ tokens: [String], _ model: Model) -> Prediction? {
+        guard !tokens.isEmpty, model.totalDocuments > 0 else { return nil }
         let totalDocs = Double(model.totalDocuments)
         let vocabSize = Double(max(1, model.vocabularySize))
-        var logScores: [(classLabel: String, score: Double)] = []
 
-        for (className, stats) in model.classes {
-            guard stats.documentCount > 0 else { continue }
+        var logScores: [(label: String, score: Double)] = []
+        for (label, stats) in model.classes where stats.documentCount > 0 {
             var logProb = log(Double(stats.documentCount) / totalDocs)
             let totalWordsInClass = Double(stats.totalWords) + vocabSize
-
             for token in tokens {
                 let count = Double(stats.wordCounts[token] ?? 0)
                 logProb += log((count + 1.0) / totalWordsInClass)
             }
-            logScores.append((className, logProb))
+            logScores.append((label, logProb))
         }
+        guard let maxLog = logScores.map(\.score).max() else { return nil }
 
-        guard !logScores.isEmpty else { return nil }
-
-        let maxLog = logScores.map(\.score).max() ?? 0
-        let expScores = logScores.map { ($0.classLabel, exp($0.score - maxLog)) }
-        let sumExp = expScores.map(\.1).reduce(0, +)
-        guard sumExp > 0 else { return nil }
-
-        let probs = expScores.map { ($0.0, $0.1 / sumExp) }
-            .sorted { $0.1 > $1.1 }
-
-        if let best = probs.first, best.1 >= confidenceThreshold {
-            return Prediction(label: best.0, confidence: best.1)
-        }
-        return nil
+        let weights = logScores.map { ($0.label, exp($0.score - maxLog)) }
+        let sum = weights.reduce(0) { $0 + $1.1 }
+        guard sum > 0, let best = weights.max(by: { $0.1 < $1.1 }) else { return nil }
+        let probability = best.1 / sum
+        guard probability >= confidenceThreshold else { return nil }
+        return Prediction(label: best.0, confidence: probability)
     }
 
-    private func predictBinary(text: String, model: Model) -> Prediction? {
-        guard let posStats = model.classes["pos"], let negStats = model.classes["neg"],
-              posStats.documentCount > 0, negStats.documentCount > 0 else { return nil }
-
-        let tokens = tokenize(text)
-        guard !tokens.isEmpty else { return nil }
-
-        let totalDocs = Double(model.totalDocuments)
-        let vocabSize = Double(max(1, model.vocabularySize))
-
-        var posLog = log(Double(posStats.documentCount) / totalDocs)
-        var negLog = log(Double(negStats.documentCount) / totalDocs)
-
-        let posTotalWords = Double(posStats.totalWords) + vocabSize
-        let negTotalWords = Double(negStats.totalWords) + vocabSize
-
-        for token in tokens {
-            let posCount = Double(posStats.wordCounts[token] ?? 0)
-            let negCount = Double(negStats.wordCounts[token] ?? 0)
-            posLog += log((posCount + 1.0) / posTotalWords)
-            negLog += log((negCount + 1.0) / negTotalWords)
-        }
-
-        let maxLog = max(posLog, negLog)
-        let posExp = exp(posLog - maxLog)
-        let negExp = exp(negLog - maxLog)
-        let probPos = posExp / (posExp + negExp)
-
-        if probPos >= confidenceThreshold {
-            return Prediction(label: "pos", confidence: probPos)
-        }
-        return nil
-    }
+    private static let stopWords: Set<String> = [
+        "the", "and", "for", "with", "this", "that", "from", "are", "was",
+        "der", "die", "das", "und", "für", "fuer", "mit", "von", "ist", "ein", "eine",
+    ]
 
     private func tokenize(_ text: String) -> [String] {
-        let stopWords: Set<String> = [
-            "the", "and", "for", "with", "this", "that", "from", "are", "was",
-            "der", "die", "das", "und", "für", "fuer", "mit", "von", "ist", "ein", "eine"
-        ]
-        return text.lowercased()
+        text.lowercased()
             .components(separatedBy: CharacterSet.alphanumerics.inverted)
-            .filter { $0.count >= 3 && !stopWords.contains($0) }
+            .filter { $0.count >= 3 && !Self.stopWords.contains($0) }
     }
 }

@@ -196,8 +196,7 @@ extension Store {
                        [.int(field.fieldID), .text(old)])
         }
         if let column = field.builtinColumn {
-            let allowed = ["correspondent", "doc_type", "language", "amount", "intent"]
-            guard allowed.contains(column) else { return 0 }
+            guard Store.fieldColumns.contains(column) else { return 0 }
             // A taxonomy value is one row, so renaming it is one UPDATE — and
             // renaming it onto another is a merge rather than two spellings
             // that happen to have become the same string.
@@ -237,8 +236,7 @@ extension Store {
     func deleteFieldValue(field: Field, value: String) throws {
         try db.run("DELETE FROM value_icons WHERE field_id=? AND value=?", [.int(field.fieldID), .text(value)])
         if let column = field.builtinColumn {
-            let allowed = ["correspondent", "doc_type", "language", "amount", "intent"]
-            guard allowed.contains(column) else { return }
+            guard Store.fieldColumns.contains(column) else { return }
             if Store.entityColumns[column] != nil {
                 guard let id = try existingEntityID(named: value, builtin: column) else { return }
                 try deleteEntity(id, column: column)
