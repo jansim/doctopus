@@ -144,9 +144,7 @@ enum UITest {
                    landed && elapsed < NSEvent.doubleClickInterval * 0.6,
                    "\(Int(elapsed * 1000)) ms, interval \(Int(NSEvent.doubleClickInterval * 1000)) ms")
 
-        // Which leaves telling a double-click apart to the tap handler: a
-        // double-click hands the document to the app that owns it, the way
-        // Finder does, and leaves Quick Look to Space.
+        // Which leaves telling a double-click apart to the tap handler.
         model.selectedIDs = []
         let handedOver = URLRecorder()
         AppModel.opener = { handedOver.urls.append($0) }
@@ -783,9 +781,6 @@ private final class SyntheticDrag: NSObject, NSDraggingInfo {
                                 using block: (NSDraggingItem, Int, UnsafeMutablePointer<ObjCBool>) -> Void) {}
 }
 
-/// Somewhere for a stubbed `AppModel.opener` to leave what it was asked to
-/// open, so the check can look afterwards instead of a fixture being handed to
-/// Preview in front of whoever is running the checks.
 private final class URLRecorder {
     var urls: [URL] = []
 }

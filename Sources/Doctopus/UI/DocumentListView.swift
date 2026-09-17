@@ -286,8 +286,6 @@ private struct DocumentTableView: View {
             DocumentMenu(rows: model.documents.filter { ids.contains($0.id) },
                          renameSheet: $renameSheet, tagSheet: $tagSheet, filingRow: $filingRow)
         } primaryAction: { ids in
-            // Double-click (or Return) opens the documents in their own apps,
-            // the way Finder does; Quick Look stays on Space.
             model.open(model.documents.filter { ids.contains($0.id) })
         }
     }
@@ -412,12 +410,9 @@ private struct DocumentGalleryView: View {
     }
 
     /// The first click of a double-click has already selected the cell by the
-    /// time the second arrives, so the second only has to open it — in the
-    /// app that owns the file, the way Finder does.
+    /// time the second arrives, so the second only has to open it.
     private func click(_ row: DocumentRow) {
         if (NSApp.currentEvent?.clickCount ?? 1) >= 2 {
-            // Everything selected, since a ⌘-click can have gathered more
-            // than the cell under the mouse.
             model.open(model.selectedIDs.contains(row.id) ? model.selectedRows : [row])
         } else {
             select(row)
