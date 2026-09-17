@@ -245,8 +245,8 @@ enum UITest {
                    stored.viewMode == .gallery && stored.galleryThumbnailSize == 190,
                    "\(stored.viewMode.rawValue) at \(Int(stored.galleryThumbnailSize))")
 
-        // The app-wide keys are not written into the blob at all now, at a
-        // default or otherwise, so an API key cannot travel inside a folder.
+        // The app-wide keys never reach the blob, so an API key cannot travel
+        // inside a folder somebody shares.
         let blob = await settledRaw(model, AppSettings.storageKey)
         let appWideKeys = ["remoteAPIKey", "viewMode"].filter { blob?.contains($0) == true }
         Check.that("a library's own copy carries no app-wide settings",
@@ -258,30 +258,20 @@ enum UITest {
         Check.that("what the blob holds is the library's own half", inLibrary != nil,
                    inLibrary == nil ? "nothing stored" : "stored")
 
-        // Regression: the settings decoded key by key or not at all, and `load`
-        // swallowed the failure — so the first release to add a setting reset
-        // every one the user had already chosen.
+        // Adding a setting must not reset the ones already stored, so a blob
+        // written before it existed fills the rest in from its defaults.
         let partial = AppWideSettings.decoded(
             from: Data(#"{"viewMode":"Gallery","galleryThumbnailSize":190}"#.utf8))
-        Check.that("app-wide settings stored by an older version still load",
-                   partial?.viewMode == .gallery && partial?.galleryThumbnailSize == 190
-                       && partial?.remoteEndpoint == AppWideSettings().remoteEndpoint,
-                   partial == nil ? "decode failed outright" : "decoded")
+        Check.that("a blob missing app-wide keys keeps the ones it has",
+                   partial.viewMode == .gallery && partial.galleryThumbnailSize == 190
+                       && partial.remoteEndpoint == AppWideSettings().remoteEndpoint,
+                   "\(partial.viewMode.rawValue) at \(Int(partial.galleryThumbnailSize))")
 
         let partialLibrary = LibrarySettings.decoded(from: Data(#"{"routingThreshold":0.9}"#.utf8))
-        Check.that("library settings stored by an older version still load",
-                   partialLibrary?.routingThreshold == 0.9
-                       && partialLibrary?.namingTemplate == LibrarySettings().namingTemplate,
-                   partialLibrary == nil ? "decode failed outright" : "decoded")
-
-        // The on-device model used to be a plain on/off switch. Someone who
-        // turned it off meant it, so the choice survives the move to a picker
-        // rather than silently coming back on.
-        let off = AppWideSettings.decoded(from: Data(#"{"useOnDeviceModel":false}"#.utf8))
-        let on = AppWideSettings.decoded(from: Data(#"{"useOnDeviceModel":true}"#.utf8))
-        Check.that("an older on/off model setting becomes a backend choice",
-                   off?.llmBackend == .off && on?.llmBackend == .onDevice,
-                   "\(off?.llmBackend.rawValue ?? "nil") / \(on?.llmBackend.rawValue ?? "nil")")
+        Check.that("a blob missing library keys keeps the ones it has",
+                   partialLibrary.routingThreshold == 0.9
+                       && partialLibrary.namingTemplate == LibrarySettings().namingTemplate,
+                   "threshold \(partialLibrary.routingThreshold)")
 
         model.viewMode = .list
         model.setSort(.docDate, ascending: false)

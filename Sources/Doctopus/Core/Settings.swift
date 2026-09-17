@@ -1,33 +1,23 @@
 import Foundation
 
-/// Settings loaded from JSON an older version wrote, which may be missing a key
-/// because the release that wrote it did not have the setting yet. Decoding
-/// throws on the first missing key and every caller here turns that into
-/// defaults, so without `decoded(from:)` each added setting would reset all the
-/// others. Merging is what keeps a setting declared in one place — the trade is
-/// that a value of the wrong *type* costs the whole struct, not the one field.
+/// Settings persisted as a JSON blob, where a stored blob may be missing a key
+/// because it was written before that setting existed.
 protocol StoredSettings: Codable {
     init()
-    /// Rewrites what an older version wrote, before it is decoded.
-    static func migrate(_ json: inout [String: Any])
 }
 
 extension StoredSettings {
-    static func migrate(_ json: inout [String: Any]) {}
-
-    /// Decodes `data`, taking every key it does not carry from a fresh `Self`.
-    /// `nil` means nothing readable was stored at all.
-    static func decoded(from data: Data) -> Self? {
-        guard var stored = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+    /// Decodes `data`, taking every key it does not carry from a fresh `Self`,
+    /// so that adding a setting does not reset the ones already stored.
+    static func decoded(from data: Data) -> Self {
+        guard let stored = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
               let defaults = try? JSONEncoder().encode(Self()),
               var merged = (try? JSONSerialization.jsonObject(with: defaults)) as? [String: Any]
-        else { return nil }
-        Self.migrate(&stored)
-        // A null was never really written; let the default win.
-        merged.merge(stored.filter { !($0.value is NSNull) }) { _, written in written }
+        else { return Self() }
+        merged.merge(stored) { _, written in written }
         guard let data = try? JSONSerialization.data(withJSONObject: merged),
               let decoded = try? JSONDecoder().decode(Self.self, from: data)
-        else { return nil }
+        else { return Self() }
         return decoded
     }
 }
@@ -74,14 +64,6 @@ struct AppWideSettings: StoredSettings, Sendable, Equatable {
         if ocrConcurrency > 0 { return min(ocrConcurrency, 16) }
         return max(2, min(6, ProcessInfo.processInfo.activeProcessorCount - 2))
     }
-
-    /// `useOnDeviceModel` was a single on/off switch before there was more than
-    /// one backend to choose between. Someone who turned it off meant it.
-    static func migrate(_ json: inout [String: Any]) {
-        if json["llmBackend"] == nil, let onDevice = json["useOnDeviceModel"] as? Bool {
-            json["llmBackend"] = (onDevice ? LLMBackend.onDevice : LLMBackend.off).rawValue
-        }
-    }
 }
 
 /// The half that belongs to the library: how its documents are named, routed
@@ -95,8 +77,7 @@ struct LibrarySettings: StoredSettings, Sendable, Equatable {
     var deriveWhenNoRule = true
     /// Imports and scans only. There is deliberately no setting to rewrite
     /// files already in the library while indexing: those are the user's, and
-    /// Optimize in the context menu is the way to ask for it. An older library
-    /// may still carry `optimizeExisting` in its settings; it is ignored.
+    /// Optimize in the context menu is the way to ask for it.
     var optimizeOnImport = true
     /// When a model-proposed tag exactly matches one already in the library,
     /// assign it directly instead of leaving it for the user to accept.
@@ -150,20 +131,9 @@ struct AppSettings: Sendable, Equatable {
     /// The library's own settings, with the app-wide half laid over the top.
     @MainActor
     static func load(from store: Store) async -> AppSettings {
-        var settings = AppSettings()
-        if let raw = try? await store.setting(storageKey) {
-            let data = Data(raw.utf8)
-            settings.library = LibrarySettings.decoded(from: data) ?? LibrarySettings()
-            // The app-wide half used to be written into the library blob along
-            // with everything else. The first library opened after the split
-            // hands its copy over rather than letting a configured endpoint
-            // quietly reset.
-            if !Preferences.hasAppWide, let inherited = AppWideSettings.decoded(from: data) {
-                Preferences.appWide = inherited
-            }
-        }
-        settings.appWide = Preferences.appWide
-        return settings
+        let raw = (try? await store.setting(storageKey)) ?? ""
+        return AppSettings(library: LibrarySettings.decoded(from: Data(raw.utf8)),
+                           appWide: Preferences.appWide)
     }
 
     /// Each half goes where it belongs. Only the library's own settings reach
