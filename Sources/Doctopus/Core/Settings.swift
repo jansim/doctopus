@@ -1,23 +1,14 @@
 import Foundation
 
-/// Settings read back from JSON an older version wrote, where a key may be
-/// missing simply because the release that wrote it did not have the setting
-/// yet.
-///
-/// `decoded(from:)` fills those gaps from a fresh value rather than failing.
-/// The synthesized `init(from:)` throws on the first key it cannot find, and
-/// every caller here turns a throw into defaults — so without this, each
-/// release that adds a setting would silently reset all the others, view mode
-/// and thumbnail size included.
-///
-/// Merging onto the defaults rather than hand-writing a decoder per field is
-/// what keeps a setting declared in exactly one place: its property. The trade
-/// is that a stored value of the wrong *type* costs the whole struct rather
-/// than the one field — adding a setting is routine, changing a setting's type
-/// is not.
+/// Settings loaded from JSON an older version wrote, which may be missing a key
+/// because the release that wrote it did not have the setting yet. Decoding
+/// throws on the first missing key and every caller here turns that into
+/// defaults, so without `decoded(from:)` each added setting would reset all the
+/// others. Merging is what keeps a setting declared in one place — the trade is
+/// that a value of the wrong *type* costs the whole struct, not the one field.
 protocol StoredSettings: Codable {
     init()
-    /// A chance to rewrite what an older version wrote before it is decoded.
+    /// Rewrites what an older version wrote, before it is decoded.
     static func migrate(_ json: inout [String: Any])
 }
 
@@ -25,15 +16,14 @@ extension StoredSettings {
     static func migrate(_ json: inout [String: Any]) {}
 
     /// Decodes `data`, taking every key it does not carry from a fresh `Self`.
-    /// `nil` means there was nothing readable stored, as opposed to nothing
-    /// left to fill in — the caller decides what to put in its place.
+    /// `nil` means nothing readable was stored at all.
     static func decoded(from data: Data) -> Self? {
         guard var stored = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
               let defaults = try? JSONEncoder().encode(Self()),
               var merged = (try? JSONSerialization.jsonObject(with: defaults)) as? [String: Any]
         else { return nil }
         Self.migrate(&stored)
-        // A null is a value that was never really written; let the default win.
+        // A null was never really written; let the default win.
         merged.merge(stored.filter { !($0.value is NSNull) }) { _, written in written }
         guard let data = try? JSONSerialization.data(withJSONObject: merged),
               let decoded = try? JSONDecoder().decode(Self.self, from: data)
@@ -85,11 +75,9 @@ struct AppWideSettings: StoredSettings, Sendable, Equatable {
         return max(2, min(6, ProcessInfo.processInfo.activeProcessorCount - 2))
     }
 
+    /// `useOnDeviceModel` was a single on/off switch before there was more than
+    /// one backend to choose between. Someone who turned it off meant it.
     static func migrate(_ json: inout [String: Any]) {
-        // `useOnDeviceModel` was a single on/off switch before there was more
-        // than one backend to choose between. Someone who turned it off meant
-        // it, so their setting is carried over rather than reset to the new
-        // default. A library written before the split still holds the key.
         if json["llmBackend"] == nil, let onDevice = json["useOnDeviceModel"] as? Bool {
             json["llmBackend"] = (onDevice ? LLMBackend.onDevice : LLMBackend.off).rawValue
         }
@@ -134,16 +122,12 @@ struct LibrarySettings: StoredSettings, Sendable, Equatable {
 /// Everything the pipeline needs to know, as one immutable snapshot the UI can
 /// hand to background work.
 ///
-/// It spans both halves of the configuration, and each setting is declared
-/// once — in the half that decides where it is written. Reading one goes
-/// through whichever half holds it without naming it, so `settings.targetDPI`
-/// and `settings.scanDestination` both work and the pipeline never has to know
-/// which is which.
+/// It spans both halves, each setting declared once in the half that decides
+/// where it is written. Reading one goes through whichever half holds it
+/// without naming it, so the pipeline never has to know which is which.
 @dynamicMemberLookup
 struct AppSettings: Sendable, Equatable {
-    /// Written to this library's own `settings` table.
     var library = LibrarySettings()
-    /// Written to `UserDefaults`, and shared by every open library.
     var appWide = AppWideSettings()
 
     subscript<T>(dynamicMember keyPath: WritableKeyPath<LibrarySettings, T>) -> T {
@@ -156,8 +140,6 @@ struct AppSettings: Sendable, Equatable {
         set { appWide[keyPath: keyPath] = newValue }
     }
 
-    // Derived values live with the settings they are derived from; these reach
-    // them the same way the stored ones are reached.
     var ignoredDays: Set<String> { library.ignoredDays }
     var optimizerOptions: Optimizer.Options { appWide.optimizerOptions }
     var remoteConfig: RemoteLLMConfig { appWide.remoteConfig }
@@ -184,9 +166,8 @@ struct AppSettings: Sendable, Equatable {
         return settings
     }
 
-    /// Each half goes where it belongs. Only the library's own settings are
-    /// ever written to the blob, so no library ends up holding somebody's
-    /// endpoint — or their API key.
+    /// Each half goes where it belongs. Only the library's own settings reach
+    /// the blob, so no library ends up holding somebody's API key.
     @MainActor
     func save(to store: Store) async {
         Preferences.appWide = appWide

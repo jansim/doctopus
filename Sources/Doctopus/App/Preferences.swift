@@ -24,8 +24,6 @@ enum Preferences {
     static var appWide: AppWideSettings {
         get {
             guard let raw = defaults.string(forKey: Key.appWide) else { return AppWideSettings() }
-            // Decoded key by key, so that adding an app-wide setting does not
-            // reset the ones already written here.
             return AppWideSettings.decoded(from: Data(raw.utf8)) ?? AppWideSettings()
         }
         set {

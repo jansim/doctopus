@@ -245,9 +245,8 @@ enum UITest {
                    stored.viewMode == .gallery && stored.galleryThumbnailSize == 190,
                    "\(stored.viewMode.rawValue) at \(Int(stored.galleryThumbnailSize))")
 
-        // The blob holds the library's own settings only. The app-wide keys are
-        // not written into it at all now, at a default value or otherwise, so
-        // an API key cannot travel inside a folder somebody shares.
+        // The app-wide keys are not written into the blob at all now, at a
+        // default or otherwise, so an API key cannot travel inside a folder.
         let blob = await settledRaw(model, AppSettings.storageKey)
         Check.that("a library's own copy carries no app-wide settings",
                    blob.map { !$0.contains("remoteAPIKey") && !$0.contains("viewMode") } ?? false,
@@ -259,8 +258,7 @@ enum UITest {
 
         // Regression: the settings decoded key by key or not at all, and `load`
         // swallowed the failure — so the first release to add a setting reset
-        // every one the user had already chosen. Either half now takes a key it
-        // cannot find from its default and keeps the rest.
+        // every one the user had already chosen.
         let partial = AppWideSettings.decoded(
             from: Data(#"{"viewMode":"Gallery","galleryThumbnailSize":190}"#.utf8))
         Check.that("app-wide settings stored by an older version still load",
@@ -454,9 +452,8 @@ enum UITest {
         return last
     }
 
-    /// The stored value for `key` exactly as it was written, once it satisfies
-    /// `until` — for the checks that are about what reached the store rather
-    /// than about what it decodes to.
+    /// The stored value for `key` as written, for checks about what reached the
+    /// store rather than about what it decodes to.
     private static func settledRaw(_ model: AppModel, _ key: String,
                                    until: (String) -> Bool = { _ in true }) async -> String? {
         var last: String?
