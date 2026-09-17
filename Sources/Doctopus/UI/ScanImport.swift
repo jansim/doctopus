@@ -21,6 +21,93 @@ struct ScanDevice: Identifiable, Hashable, Sendable {
     var options: [ScanOption]
 }
 
+/// A run of back-to-back captures from one device: fire, the user scans and
+/// submits on the device, the capture lands, fire again — until they stop.
+/// Each round is one document, which is what suits the router; the multi-page
+/// case is already the device's own scanner, which returns a single PDF.
+///
+/// The bookkeeping lives here, apart from the menu firing, so every transition
+/// can be checked without a device in the room — see `--selftest`.
+struct ScanSession: Equatable, Sendable {
+    /// Why a run is not currently asking for captures. A paused run keeps its
+    /// device, its destination and its count, so carrying on is one click.
+    enum Pause: Equatable, Sendable {
+        /// Doctopus stopped being the active app. A capture is handed to the
+        /// key window's first responder, so one fired now would have nowhere
+        /// to land.
+        case lostFocus
+        /// Nothing came back in time. Cancelling on the device sends no signal
+        /// at all, so a long silence is the only thing there is to read.
+        case timedOut
+        /// A capture arrived and none of it could be read.
+        case failed
+        /// The device stopped offering the action, usually by going out of range.
+        case deviceGone
+
+        /// Short enough for the toolbar.
+        var summary: String {
+            switch self {
+            case .deviceGone: return "Device gone"
+            default: return "Paused"
+            }
+        }
+
+        var detail: String {
+            switch self {
+            case .lostFocus:
+                return "Paused because Doctopus is not the active app — a scan has nowhere to land. Click Resume to carry on."
+            case .timedOut:
+                return "Nothing arrived from the device, so the scan was probably cancelled there. Click Resume to ask again."
+            case .failed:
+                return "The last capture could not be read. Click Resume to try again."
+            case .deviceGone:
+                return "The device is no longer offering that. Bring it back in range and click Resume."
+            }
+        }
+
+        /// Whether a capture landing while paused means the run can carry on by
+        /// itself. Everything here has plainly resolved itself by the time
+        /// something arrives — except losing focus, where the user is off in
+        /// another app and the next capture is not ours to start.
+        var isResolvedByDelivery: Bool { self != .lostFocus }
+    }
+
+    /// Named rather than held by menu position: the system rebuilds that
+    /// submenu as devices come and go, so a run going for any length of time
+    /// has to find its entry again every round.
+    var device: String
+    var action: String
+    /// Pinned for the whole run, since `pendingDestination` is consumed by
+    /// each delivery.
+    var destination: URL?
+    /// Documents received so far.
+    var count: Int = 0
+    var paused: Pause? = nil
+
+    var isRunning: Bool { paused == nil }
+
+    mutating func received(_ documents: Int) {
+        count += documents
+        if paused?.isResolvedByDelivery == true { paused = nil }
+    }
+
+    mutating func suspend(_ reason: Pause) { paused = reason }
+    mutating func resume() { paused = nil }
+
+    /// What the toolbar reads.
+    var label: String {
+        let scanned = count == 1 ? "1 document" : "\(count) documents"
+        guard let reason = paused else {
+            return count == 0 ? "Waiting for the first scan…" : "Scanning · \(scanned)"
+        }
+        return count == 0 ? reason.summary : "\(reason.summary) · \(scanned)"
+    }
+
+    var help: String {
+        paused?.detail ?? "“\(action)” on \(device), one document after another. Each is filed as it arrives."
+    }
+}
+
 /// Continuity Camera bridge.
 ///
 /// The mechanism is a single `NSMenuItem` carrying
@@ -102,20 +189,36 @@ final class ScanCoordinator: NSObject {
         return devices.filter { !$0.options.isEmpty }
     }
 
-    /// Starts a capture, pinning where the result must land.
-    func scan(_ option: ScanOption, into destination: URL?) {
-        guard let live = deviceItem?.submenu else { return }
+    /// Starts a capture, pinning where the result must land. `false` when the
+    /// row has gone from the menu, which a continuous run needs to hear about
+    /// — nothing else comes back to say the capture never started.
+    @discardableResult
+    func scan(_ option: ScanOption, into destination: URL?) -> Bool {
+        guard let live = deviceItem?.submenu else { return false }
         // The system rebuilds this menu as devices come and go, so confirm the
         // row is still the one the user picked before firing it.
         var index = option.index
         if index >= live.numberOfItems || live.items[index].title != option.title {
             guard let found = live.items.firstIndex(where: {
                 $0.title == option.title && $0.representedObject != nil
-            }) else { return }
+            }) else { return false }
             index = found
         }
         pendingDestination = destination
         live.performActionForItem(at: index)
+        return true
+    }
+
+    /// Starts a capture named by device and action rather than by menu
+    /// position, which is what a continuous run has to do: between one round
+    /// and the next the submenu may have been rebuilt, or the device may have
+    /// left the room entirely.
+    @discardableResult
+    func scan(device: String, action: String, into destination: URL?) -> Bool {
+        guard let match = devices().first(where: { $0.name == device }),
+              let option = match.options.first(where: { $0.title == action })
+        else { return false }
+        return scan(option, into: destination)
     }
 
     /// What the app takes from a capture: PDF for document scans, and still
@@ -219,6 +322,7 @@ extension View {
 /// The device entries, mirrored into a SwiftUI menu. Rebuilt every time the
 /// enclosing menu opens, so it always reflects what is actually in range.
 struct ScanMenu: View {
+    @Environment(AppModel.self) private var model
     /// Where the capture lands. `nil` follows the sidebar selection.
     var destination: URL?
 
@@ -235,9 +339,57 @@ struct ScanMenu: View {
                                 ScanCoordinator.shared.scan(option, into: destination)
                             }
                         }
+                        // The same actions again, each starting a run that
+                        // asks for the next document as soon as one lands.
+                        // Offered per action rather than guessing which entry
+                        // is the document scanner: those titles are the
+                        // system's, and localized.
+                        Menu("Continuously") {
+                            ForEach(device.options) { option in
+                                Button(option.title) {
+                                    model.startContinuousScan(device: device.name,
+                                                              action: option.title,
+                                                              into: destination)
+                                }
+                            }
+                        }
                     }
                 }
             }
         }
+    }
+}
+
+/// A continuous run, in the toolbar: what has come in so far, a way to stop,
+/// and — since a run pauses the moment Doctopus stops being the active app —
+/// a way to pick it back up.
+struct ScanSessionStatus: View {
+    @Environment(AppModel.self) private var model
+    let session: ScanSession
+
+    var body: some View {
+        HStack(spacing: 8) {
+            if session.isRunning {
+                ProgressView()
+                    .progressViewStyle(.circular)
+                    .controlSize(.small)
+            } else {
+                Image(systemName: "pause.circle.fill")
+                    .foregroundStyle(.secondary)
+            }
+            Text(session.label)
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+            if !session.isRunning {
+                Button("Resume") { model.resumeContinuousScan() }
+                    .controlSize(.small)
+            }
+            Button { model.stopContinuousScan() } label: {
+                Image(systemName: "xmark.circle.fill")
+            }
+            .buttonStyle(.borderless)
+            .help("Stop scanning")
+        }
+        .help(session.help)
     }
 }

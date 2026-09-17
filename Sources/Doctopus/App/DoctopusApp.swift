@@ -78,8 +78,11 @@ struct DoctopusApp: App {
                     delegate.model = model
                     ScanCoordinator.shared.onScan = { items, destination in
                         model.importScanned(items, into: destination)
+                        // A continuous run counts what arrived and asks for
+                        // the next document; a one-off scan ends here.
+                        model.scanDelivered(items.count)
                     }
-                    ScanCoordinator.shared.onScanFailed = { model.errorMessage = $0 }
+                    ScanCoordinator.shared.onScanFailed = { model.scanFailed($0) }
                     await model.bootstrap()
                 }
         }
@@ -171,6 +174,19 @@ struct DoctopusCommands: Commands {
                 .keyboardShortcut("o", modifiers: [.command, .shift])
             Button("Import Files…") { importPanel() }
                 .keyboardShortcut("i", modifiers: [.command])
+            // Continuous scanning is started from the Import menu, where the
+            // device and what to capture are picked. This is for getting back
+            // to a run that paused — which happens when Doctopus is not the
+            // app in front, so the toolbar button may not be what is in view.
+            if let session = model.scanSession {
+                if session.isRunning {
+                    Button("Stop Continuous Scanning") { model.stopContinuousScan() }
+                        .keyboardShortcut("s", modifiers: [.command, .option])
+                } else {
+                    Button("Resume Continuous Scanning") { model.resumeContinuousScan() }
+                        .keyboardShortcut("s", modifiers: [.command, .option])
+                }
+            }
         }
 
         CommandGroup(after: .toolbar) {
