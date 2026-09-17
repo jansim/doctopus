@@ -245,28 +245,40 @@ enum UITest {
                    stored.viewMode == .gallery && stored.galleryThumbnailSize == 190,
                    "\(stored.viewMode.rawValue) at \(Int(stored.galleryThumbnailSize))")
 
-        let inLibrary: AppSettings? = await settled(model, AppSettings.storageKey)
+        // The blob holds the library's own settings only. The app-wide keys are
+        // not written into it at all now, at a default value or otherwise, so
+        // an API key cannot travel inside a folder somebody shares.
+        let blob = await settledRaw(model, AppSettings.storageKey)
         Check.that("a library's own copy carries no app-wide settings",
-                   inLibrary?.viewMode == AppSettings().viewMode && inLibrary?.remoteAPIKey == "",
-                   inLibrary.map { "library blob says \($0.viewMode.rawValue)" } ?? "nothing stored")
+                   blob.map { !$0.contains("remoteAPIKey") && !$0.contains("viewMode") } ?? false,
+                   blob == nil ? "nothing stored" : "the library blob still names one")
 
-        // Regression: `AppSettings` decoded key by key or not at all, and `load`
+        let inLibrary: LibrarySettings? = await settled(model, AppSettings.storageKey)
+        Check.that("what the blob holds is the library's own half", inLibrary != nil,
+                   inLibrary == nil ? "nothing stored" : "stored")
+
+        // Regression: the settings decoded key by key or not at all, and `load`
         // swallowed the failure — so the first release to add a setting reset
-        // every one the user had already chosen.
-        let partial = #"{"viewMode":"Gallery","galleryThumbnailSize":190}"#
-        let decoded = try? JSONDecoder().decode(AppSettings.self, from: Data(partial.utf8))
-        Check.that("settings stored by an older version still load",
-                   decoded?.viewMode == .gallery && decoded?.galleryThumbnailSize == 190
-                       && decoded?.namingTemplate == AppSettings().namingTemplate,
-                   decoded == nil ? "decode failed outright" : "decoded")
+        // every one the user had already chosen. Either half now takes a key it
+        // cannot find from its default and keeps the rest.
+        let partial = AppWideSettings.decoded(
+            from: Data(#"{"viewMode":"Gallery","galleryThumbnailSize":190}"#.utf8))
+        Check.that("app-wide settings stored by an older version still load",
+                   partial?.viewMode == .gallery && partial?.galleryThumbnailSize == 190
+                       && partial?.remoteEndpoint == AppWideSettings().remoteEndpoint,
+                   partial == nil ? "decode failed outright" : "decoded")
+
+        let partialLibrary = LibrarySettings.decoded(from: Data(#"{"routingThreshold":0.9}"#.utf8))
+        Check.that("library settings stored by an older version still load",
+                   partialLibrary?.routingThreshold == 0.9
+                       && partialLibrary?.namingTemplate == LibrarySettings().namingTemplate,
+                   partialLibrary == nil ? "decode failed outright" : "decoded")
 
         // The on-device model used to be a plain on/off switch. Someone who
         // turned it off meant it, so the choice survives the move to a picker
         // rather than silently coming back on.
-        let legacyOff = #"{"useOnDeviceModel":false}"#
-        let legacyOn = #"{"useOnDeviceModel":true}"#
-        let off = try? JSONDecoder().decode(AppSettings.self, from: Data(legacyOff.utf8))
-        let on = try? JSONDecoder().decode(AppSettings.self, from: Data(legacyOn.utf8))
+        let off = AppWideSettings.decoded(from: Data(#"{"useOnDeviceModel":false}"#.utf8))
+        let on = AppWideSettings.decoded(from: Data(#"{"useOnDeviceModel":true}"#.utf8))
         Check.that("an older on/off model setting becomes a backend choice",
                    off?.llmBackend == .off && on?.llmBackend == .onDevice,
                    "\(off?.llmBackend.rawValue ?? "nil") / \(on?.llmBackend.rawValue ?? "nil")")
@@ -434,6 +446,20 @@ enum UITest {
     private static func settled<T: Decodable>(_ model: AppModel, _ key: String,
                                               until: (T) -> Bool = { _ in true }) async -> T? {
         var last: T?
+        _ = await settledRaw(model, key) { raw in
+            guard let decoded = try? JSONDecoder().decode(T.self, from: Data(raw.utf8)) else { return false }
+            last = decoded
+            return until(decoded)
+        }
+        return last
+    }
+
+    /// The stored value for `key` exactly as it was written, once it satisfies
+    /// `until` — for the checks that are about what reached the store rather
+    /// than about what it decodes to.
+    private static func settledRaw(_ model: AppModel, _ key: String,
+                                   until: (String) -> Bool = { _ in true }) async -> String? {
+        var last: String?
         for _ in 0..<20 {
             // Column/collapsed/sort state lives in UserDefaults now; the settings
             // blob still lives in the library's database.
@@ -441,10 +467,9 @@ enum UITest {
             if raw == nil, let store = model.activeLibrary?.store {
                 raw = (try? await store.setting(key)) ?? nil
             }
-            if let raw, let data = raw.data(using: .utf8),
-               let decoded = try? JSONDecoder().decode(T.self, from: data) {
-                last = decoded
-                if until(decoded) { return decoded }
+            if let raw {
+                last = raw
+                if until(raw) { return raw }
             }
             try? await Task.sleep(for: .milliseconds(200))
         }

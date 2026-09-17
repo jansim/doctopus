@@ -23,10 +23,10 @@ enum Preferences {
     /// `AppWideSettings` for why these live out here.
     static var appWide: AppWideSettings {
         get {
-            guard let raw = defaults.string(forKey: Key.appWide),
-                  let decoded = try? JSONDecoder().decode(AppWideSettings.self, from: Data(raw.utf8))
-            else { return AppWideSettings() }
-            return decoded
+            guard let raw = defaults.string(forKey: Key.appWide) else { return AppWideSettings() }
+            // Decoded key by key, so that adding an app-wide setting does not
+            // reset the ones already written here.
+            return AppWideSettings.decoded(from: Data(raw.utf8)) ?? AppWideSettings()
         }
         set {
             guard let data = try? JSONEncoder().encode(newValue),

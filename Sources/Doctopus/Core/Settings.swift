@@ -1,5 +1,47 @@
 import Foundation
 
+/// Settings read back from JSON an older version wrote, where a key may be
+/// missing simply because the release that wrote it did not have the setting
+/// yet.
+///
+/// `decoded(from:)` fills those gaps from a fresh value rather than failing.
+/// The synthesized `init(from:)` throws on the first key it cannot find, and
+/// every caller here turns a throw into defaults — so without this, each
+/// release that adds a setting would silently reset all the others, view mode
+/// and thumbnail size included.
+///
+/// Merging onto the defaults rather than hand-writing a decoder per field is
+/// what keeps a setting declared in exactly one place: its property. The trade
+/// is that a stored value of the wrong *type* costs the whole struct rather
+/// than the one field — adding a setting is routine, changing a setting's type
+/// is not.
+protocol StoredSettings: Codable {
+    init()
+    /// A chance to rewrite what an older version wrote before it is decoded.
+    static func migrate(_ json: inout [String: Any])
+}
+
+extension StoredSettings {
+    static func migrate(_ json: inout [String: Any]) {}
+
+    /// Decodes `data`, taking every key it does not carry from a fresh `Self`.
+    /// `nil` means there was nothing readable stored, as opposed to nothing
+    /// left to fill in — the caller decides what to put in its place.
+    static func decoded(from data: Data) -> Self? {
+        guard var stored = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let defaults = try? JSONEncoder().encode(Self()),
+              var merged = (try? JSONSerialization.jsonObject(with: defaults)) as? [String: Any]
+        else { return nil }
+        Self.migrate(&stored)
+        // A null is a value that was never really written; let the default win.
+        merged.merge(stored.filter { !($0.value is NSNull) }) { _, written in written }
+        guard let data = try? JSONSerialization.data(withJSONObject: merged),
+              let decoded = try? JSONDecoder().decode(Self.self, from: data)
+        else { return nil }
+        return decoded
+    }
+}
+
 /// The half of the settings that belongs to the app rather than to any one
 /// library: which model answers the enrichment questions, how much of the
 /// machine to spend, and how documents are looked at.
@@ -8,7 +50,7 @@ import Foundation
 /// reasons: a library folder is meant to be portable and shareable, and an API
 /// key has no business travelling with one; and a choice like "gallery view" is
 /// about this Mac, not about a folder.
-struct AppWideSettings: Codable, Sendable, Equatable {
+struct AppWideSettings: StoredSettings, Sendable, Equatable {
     /// Which model answers the enrichment questions, if any.
     var llmBackend: LLMBackend = .onDevice
     var remoteEndpoint = "http://localhost:1234/v1"
@@ -25,91 +67,6 @@ struct AppWideSettings: Codable, Sendable, Equatable {
     var galleryThumbnailSize: Double = 150
     var jpegQuality: Double = 0.6
     var targetDPI: Double = 150
-}
-
-/// Everything the pipeline needs to know, as one immutable snapshot the UI can
-/// hand to background work.
-///
-/// It spans both halves of the configuration: the per-library ingest settings,
-/// persisted as a JSON blob in that library's own `settings` table, and the
-/// app-wide ones above, which are merged in on load and written back to
-/// `UserDefaults` on save. The pipeline never has to know which is which.
-struct AppSettings: Codable, Sendable, Equatable {
-    var namingTemplate: String = Naming.defaultTemplate
-    var derivedTemplate: String = "{correspondent}/{year}"
-    var routingThreshold: Double = 0.75
-    var autoRouteImports = true
-    var deriveWhenNoRule = true
-    /// Imports and scans only. There is deliberately no setting to rewrite
-    /// files already in the library while indexing: those are the user's, and
-    /// Optimize in the context menu is the way to ask for it. An older library
-    /// may still carry `optimizeExisting` in its settings; it is ignored.
-    var optimizeOnImport = true
-    /// Which model answers the enrichment questions, if any.
-    var llmBackend: LLMBackend = .onDevice
-    var remoteEndpoint = "http://localhost:1234/v1"
-    var remoteModel = ""
-    var remoteAPIKey = ""
-    var remoteTimeout: Double = 120
-    var remoteParallelRequests = 2
-    /// Characters of document text sent per request. The on-device model has a
-    /// small fixed window; a server's is whatever it was loaded with, so this
-    /// is worth turning up when the machine on the other end can take it.
-    var llmExcerptLimit = 6000
-    /// When a model-proposed tag exactly matches one already in the library,
-    /// assign it directly instead of leaving it for the user to accept.
-    var autoAcceptMatchingTagSuggestions = false
-    /// Global default for mirroring tag membership as Finder aliases.
-    var mirrorTagsAsAliases = false
-    var ocrConcurrency = 0        // 0 = auto
-    var scanDestination = "Inbox"
-    /// How to read an ambiguous numeric date like `03/04/2026`. Per library,
-    /// because it is a property of the paperwork, not of the Mac reading it.
-    var dateOrder: DateOrder = .automatic
-    /// Days that are never a document date — the date printed in a letterhead,
-    /// a form's revision date — as `yyyy-MM-dd`, comma separated.
-    var ignoredDates = ""
-    var viewMode: ViewMode = .list
-    var galleryThumbnailSize: Double = 150
-
-    var jpegQuality: Double = 0.6
-    var targetDPI: Double = 150
-
-    /// The app-wide half, projected in and out of the flat snapshot. Written by
-    /// hand rather than synthesized so adding a setting to one half is a
-    /// compile error in the other rather than a silently dropped value.
-    var appWide: AppWideSettings {
-        get {
-            AppWideSettings(
-                llmBackend: llmBackend, remoteEndpoint: remoteEndpoint, remoteModel: remoteModel,
-                remoteAPIKey: remoteAPIKey, remoteTimeout: remoteTimeout,
-                remoteParallelRequests: remoteParallelRequests, llmExcerptLimit: llmExcerptLimit,
-                ocrConcurrency: ocrConcurrency, viewMode: viewMode,
-                galleryThumbnailSize: galleryThumbnailSize,
-                jpegQuality: jpegQuality, targetDPI: targetDPI)
-        }
-        set {
-            llmBackend = newValue.llmBackend
-            remoteEndpoint = newValue.remoteEndpoint
-            remoteModel = newValue.remoteModel
-            remoteAPIKey = newValue.remoteAPIKey
-            remoteTimeout = newValue.remoteTimeout
-            remoteParallelRequests = newValue.remoteParallelRequests
-            llmExcerptLimit = newValue.llmExcerptLimit
-            ocrConcurrency = newValue.ocrConcurrency
-            viewMode = newValue.viewMode
-            galleryThumbnailSize = newValue.galleryThumbnailSize
-            jpegQuality = newValue.jpegQuality
-            targetDPI = newValue.targetDPI
-        }
-    }
-
-    /// The days the analyzer must never take as a document date.
-    var ignoredDays: Set<String> {
-        Set(ignoredDates.split(separator: ",")
-            .compactMap { $0.trimmingCharacters(in: .whitespaces).nilIfBlank }
-            .compactMap { DayDate.parse($0).map { DayDate.text($0) } })
-    }
 
     var optimizerOptions: Optimizer.Options {
         var o = Optimizer.Options()
@@ -128,117 +85,113 @@ struct AppSettings: Codable, Sendable, Equatable {
         return max(2, min(6, ProcessInfo.processInfo.activeProcessorCount - 2))
     }
 
+    static func migrate(_ json: inout [String: Any]) {
+        // `useOnDeviceModel` was a single on/off switch before there was more
+        // than one backend to choose between. Someone who turned it off meant
+        // it, so their setting is carried over rather than reset to the new
+        // default. A library written before the split still holds the key.
+        if json["llmBackend"] == nil, let onDevice = json["useOnDeviceModel"] as? Bool {
+            json["llmBackend"] = (onDevice ? LLMBackend.onDevice : LLMBackend.off).rawValue
+        }
+    }
+}
+
+/// The half that belongs to the library: how its documents are named, routed
+/// and read. Persisted as a JSON blob in that library's own `settings` table,
+/// so it travels with the folder it describes.
+struct LibrarySettings: StoredSettings, Sendable, Equatable {
+    var namingTemplate: String = Naming.defaultTemplate
+    var derivedTemplate: String = "{correspondent}/{year}"
+    var routingThreshold: Double = 0.75
+    var autoRouteImports = true
+    var deriveWhenNoRule = true
+    /// Imports and scans only. There is deliberately no setting to rewrite
+    /// files already in the library while indexing: those are the user's, and
+    /// Optimize in the context menu is the way to ask for it. An older library
+    /// may still carry `optimizeExisting` in its settings; it is ignored.
+    var optimizeOnImport = true
+    /// When a model-proposed tag exactly matches one already in the library,
+    /// assign it directly instead of leaving it for the user to accept.
+    var autoAcceptMatchingTagSuggestions = false
+    /// Global default for mirroring tag membership as Finder aliases.
+    var mirrorTagsAsAliases = false
+    var scanDestination = "Inbox"
+    /// How to read an ambiguous numeric date like `03/04/2026`. Per library,
+    /// because it is a property of the paperwork, not of the Mac reading it.
+    var dateOrder: DateOrder = .automatic
+    /// Days that are never a document date — the date printed in a letterhead,
+    /// a form's revision date — as `yyyy-MM-dd`, comma separated.
+    var ignoredDates = ""
+
+    /// The days the analyzer must never take as a document date.
+    var ignoredDays: Set<String> {
+        Set(ignoredDates.split(separator: ",")
+            .compactMap { $0.trimmingCharacters(in: .whitespaces).nilIfBlank }
+            .compactMap { DayDate.parse($0).map { DayDate.text($0) } })
+    }
+}
+
+/// Everything the pipeline needs to know, as one immutable snapshot the UI can
+/// hand to background work.
+///
+/// It spans both halves of the configuration, and each setting is declared
+/// once — in the half that decides where it is written. Reading one goes
+/// through whichever half holds it without naming it, so `settings.targetDPI`
+/// and `settings.scanDestination` both work and the pipeline never has to know
+/// which is which.
+@dynamicMemberLookup
+struct AppSettings: Sendable, Equatable {
+    /// Written to this library's own `settings` table.
+    var library = LibrarySettings()
+    /// Written to `UserDefaults`, and shared by every open library.
+    var appWide = AppWideSettings()
+
+    subscript<T>(dynamicMember keyPath: WritableKeyPath<LibrarySettings, T>) -> T {
+        get { library[keyPath: keyPath] }
+        set { library[keyPath: keyPath] = newValue }
+    }
+
+    subscript<T>(dynamicMember keyPath: WritableKeyPath<AppWideSettings, T>) -> T {
+        get { appWide[keyPath: keyPath] }
+        set { appWide[keyPath: keyPath] = newValue }
+    }
+
+    // Derived values live with the settings they are derived from; these reach
+    // them the same way the stored ones are reached.
+    var ignoredDays: Set<String> { library.ignoredDays }
+    var optimizerOptions: Optimizer.Options { appWide.optimizerOptions }
+    var remoteConfig: RemoteLLMConfig { appWide.remoteConfig }
+    var effectiveConcurrency: Int { appWide.effectiveConcurrency }
+
     static let storageKey = "app_settings_v1"
 
     /// The library's own settings, with the app-wide half laid over the top.
     @MainActor
     static func load(from store: Store) async -> AppSettings {
         var settings = AppSettings()
-        var fromLibrary = false
-        if let raw = try? await store.setting(storageKey),
-           let data = raw.data(using: .utf8),
-           let decoded = try? JSONDecoder().decode(AppSettings.self, from: data) {
-            settings = decoded
-            fromLibrary = true
-        }
-        // The app-wide half used to be written into the library blob along with
-        // everything else. The first library opened after the split hands its
-        // copy over rather than letting a configured endpoint quietly reset.
-        if !Preferences.hasAppWide, fromLibrary {
-            Preferences.appWide = settings.appWide
+        if let raw = try? await store.setting(storageKey) {
+            let data = Data(raw.utf8)
+            settings.library = LibrarySettings.decoded(from: data) ?? LibrarySettings()
+            // The app-wide half used to be written into the library blob along
+            // with everything else. The first library opened after the split
+            // hands its copy over rather than letting a configured endpoint
+            // quietly reset.
+            if !Preferences.hasAppWide, let inherited = AppWideSettings.decoded(from: data) {
+                Preferences.appWide = inherited
+            }
         }
         settings.appWide = Preferences.appWide
         return settings
     }
 
-    /// Each half goes where it belongs. The blob written to the library carries
-    /// the app-wide fields at their defaults, so no library ends up holding a
-    /// stale copy of somebody's endpoint — or their API key.
+    /// Each half goes where it belongs. Only the library's own settings are
+    /// ever written to the blob, so no library ends up holding somebody's
+    /// endpoint — or their API key.
     @MainActor
     func save(to store: Store) async {
         Preferences.appWide = appWide
-        var libraryOnly = self
-        libraryOnly.appWide = AppWideSettings()
-        guard let data = try? JSONEncoder().encode(libraryOnly),
+        guard let data = try? JSONEncoder().encode(library),
               let raw = String(data: data, encoding: .utf8) else { return }
-        try? await store.setSetting(AppSettings.storageKey, raw)
-    }
-}
-
-/// Decoded key by key, each one falling back to its default.
-///
-/// The synthesized `init(from:)` ignores the defaults above and throws on the
-/// first key it cannot find, and `load` turns any throw into a fresh
-/// `AppSettings` — so without this, every release that adds a setting silently
-/// resets all the others, view mode and thumbnail size included. Written in an
-/// extension so the memberwise initializer survives.
-extension AppSettings {
-    /// `useOnDeviceModel` was a single on/off switch before there was more than
-    /// one backend to choose between. Someone who turned it off meant it, so
-    /// their setting is carried over rather than reset to the new default.
-    private enum LegacyKeys: String, CodingKey { case useOnDeviceModel }
-
-    private static func legacyBackend(_ decoder: Decoder) -> LLMBackend? {
-        guard let legacy = try? decoder.container(keyedBy: LegacyKeys.self),
-              let wanted = try? legacy.decodeIfPresent(Bool.self, forKey: .useOnDeviceModel)
-        else { return nil }
-        return wanted ? .onDevice : .off
-    }
-
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        let d = AppSettings()
-        func value<T: Decodable>(_ key: CodingKeys, _ fallback: T) -> T {
-            ((try? container.decodeIfPresent(T.self, forKey: key)) ?? nil) ?? fallback
-        }
-        self.init(
-            namingTemplate: value(.namingTemplate, d.namingTemplate),
-            derivedTemplate: value(.derivedTemplate, d.derivedTemplate),
-            routingThreshold: value(.routingThreshold, d.routingThreshold),
-            autoRouteImports: value(.autoRouteImports, d.autoRouteImports),
-            deriveWhenNoRule: value(.deriveWhenNoRule, d.deriveWhenNoRule),
-            optimizeOnImport: value(.optimizeOnImport, d.optimizeOnImport),
-            llmBackend: value(.llmBackend, Self.legacyBackend(decoder) ?? d.llmBackend),
-            remoteEndpoint: value(.remoteEndpoint, d.remoteEndpoint),
-            remoteModel: value(.remoteModel, d.remoteModel),
-            remoteAPIKey: value(.remoteAPIKey, d.remoteAPIKey),
-            remoteTimeout: value(.remoteTimeout, d.remoteTimeout),
-            remoteParallelRequests: value(.remoteParallelRequests, d.remoteParallelRequests),
-            llmExcerptLimit: value(.llmExcerptLimit, d.llmExcerptLimit),
-            autoAcceptMatchingTagSuggestions: value(.autoAcceptMatchingTagSuggestions, d.autoAcceptMatchingTagSuggestions),
-            mirrorTagsAsAliases: value(.mirrorTagsAsAliases, d.mirrorTagsAsAliases),
-            ocrConcurrency: value(.ocrConcurrency, d.ocrConcurrency),
-            scanDestination: value(.scanDestination, d.scanDestination),
-            dateOrder: value(.dateOrder, d.dateOrder),
-            ignoredDates: value(.ignoredDates, d.ignoredDates),
-            viewMode: value(.viewMode, d.viewMode),
-            galleryThumbnailSize: value(.galleryThumbnailSize, d.galleryThumbnailSize),
-            jpegQuality: value(.jpegQuality, d.jpegQuality),
-            targetDPI: value(.targetDPI, d.targetDPI))
-    }
-}
-
-/// Decoded key by key for the same reason `AppSettings` is: a release that adds
-/// one app-wide setting must not reset the rest.
-extension AppWideSettings {
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        let d = AppWideSettings()
-        func value<T: Decodable>(_ key: CodingKeys, _ fallback: T) -> T {
-            ((try? container.decodeIfPresent(T.self, forKey: key)) ?? nil) ?? fallback
-        }
-        self.init(
-            llmBackend: value(.llmBackend, d.llmBackend),
-            remoteEndpoint: value(.remoteEndpoint, d.remoteEndpoint),
-            remoteModel: value(.remoteModel, d.remoteModel),
-            remoteAPIKey: value(.remoteAPIKey, d.remoteAPIKey),
-            remoteTimeout: value(.remoteTimeout, d.remoteTimeout),
-            remoteParallelRequests: value(.remoteParallelRequests, d.remoteParallelRequests),
-            llmExcerptLimit: value(.llmExcerptLimit, d.llmExcerptLimit),
-            ocrConcurrency: value(.ocrConcurrency, d.ocrConcurrency),
-            viewMode: value(.viewMode, d.viewMode),
-            galleryThumbnailSize: value(.galleryThumbnailSize, d.galleryThumbnailSize),
-            jpegQuality: value(.jpegQuality, d.jpegQuality),
-            targetDPI: value(.targetDPI, d.targetDPI))
+        try? await store.setSetting(Self.storageKey, raw)
     }
 }
