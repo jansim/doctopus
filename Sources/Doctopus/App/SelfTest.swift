@@ -445,8 +445,11 @@ enum SelfTest {
                        landed?.deletingLastPathComponent().standardizedFileURL
                            == second.standardizedFileURL
                            && FileManager.default.fileExists(atPath: landed?.path ?? ""))
+            // The document moves in under its own name, so it usually ends up
+            // at the alias's exact path. What says the alias is gone is that
+            // nothing standing there is one.
             Check.that("…and the alias it stood in for is gone",
-                       !FileManager.default.fileExists(atPath: created.path))
+                       !AliasManager.isAlias(URL(fileURLWithPath: created.path)))
             Check.that("…and nothing is left in the folder it was deleted from",
                        !FileManager.default.fileExists(atPath: source.path))
             Check.that("…and the registry no longer carries the promoted placement",
