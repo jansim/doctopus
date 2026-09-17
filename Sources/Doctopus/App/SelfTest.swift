@@ -1569,6 +1569,35 @@ enum SelfTest {
         Check.that("anything else is heuristics",
                    MetadataSource("heuristic").label == "Heuristics")
 
+        print("\nCONTINUOUS SCANNING")
+        // The device half cannot be checked without a device (`--scantest
+        // loop` is for that), but the bookkeeping around it can: what the
+        // counter says, and which interruptions a run comes back from by
+        // itself.
+        var session = ScanSession(device: "iPhone", action: "Scan Documents", destination: nil)
+        Check.that("a run starts with nothing scanned, and running",
+                   session.count == 0 && session.isRunning, session.label)
+        session.received(1)
+        session.received(1)
+        Check.that("each capture counts the documents it carried",
+                   session.count == 2, session.label)
+        session.suspend(.lostFocus)
+        Check.that("losing focus pauses the run and keeps the count",
+                   !session.isRunning && session.count == 2, session.label)
+        session.received(1)
+        Check.that("a capture that lands after focus went is still filed, and the run stays paused",
+                   session.count == 3 && !session.isRunning)
+        session.resume()
+        Check.that("resuming carries on from the count it had",
+                   session.isRunning && session.count == 3)
+        session.suspend(.timedOut)
+        session.received(1)
+        Check.that("a capture that arrives late un-pauses a run that had given up on it",
+                   session.isRunning && session.count == 4, session.label)
+        session.suspend(.deviceGone)
+        Check.that("a device that left says so rather than just “paused”",
+                   session.paused?.summary == "Device gone", session.label)
+
         for id in ruleIDs { try? await store.deleteRule(id) }
         await indexer.update(settings: settings)
     }

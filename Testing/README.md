@@ -32,7 +32,12 @@ afterwards.)
 
 Continuity Camera cannot be checked this way — it needs a real iPhone or iPad
 in the room. `--scantest` reports which devices the system is offering, and
-`--scantest fire` starts a capture and reports what comes back.
+`--scantest fire` starts a capture and reports what comes back. `--scantest
+loop` runs three rounds back to back and times each, which is what continuous
+scanning rests on: whether a device honours a capture asked for moments after
+it finished the last one, and how long `AppModel.scanRearm` has to wait first.
+The bookkeeping around those rounds — the counter, and which interruptions a
+run resumes from by itself — is plain enough to check in `--selftest`, and is.
 
 To try the demo library in the real app (this creates
 `Testing/DemoLibrary/library.doctopus`):

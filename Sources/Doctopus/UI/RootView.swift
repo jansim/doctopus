@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 struct RootView: View {
     @Environment(AppModel.self) private var model
@@ -50,6 +51,13 @@ struct RootView: View {
         .onReceive(NotificationCenter.default.publisher(for: .showQuickSwitcher)) { _ in
             showQuickSwitcher = true
         }
+        // A continuous scan run cannot outlive the app being in front: the
+        // capture is handed to the key window's first responder. Pausing here
+        // keeps the count and makes coming back one click, rather than waking
+        // the device for a capture that would be refused.
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in
+            model.appResignedActive()
+        }
         .onOpenURL { url in
             model.handleURL(url)
         }
@@ -90,6 +98,12 @@ struct RootView: View {
             }
             .menuIndicator(.hidden)
             .help("Add documents or folders")
+        }
+
+        ToolbarItem(placement: .navigation) {
+            if let session = model.scanSession {
+                ScanSessionStatus(session: session)
+            }
         }
 
         ToolbarItem(placement: .navigation) {
