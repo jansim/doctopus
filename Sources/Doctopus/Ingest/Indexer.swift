@@ -460,6 +460,92 @@ actor Indexer {
         }
     }
 
+    /// Hands a document's home over to the nearest folder it was also filed
+    /// in, and says where it ended up.
+    ///
+    /// A document dragged onto a second folder lives there as an alias: one
+    /// document, two places. Trashing the file would leave that placement
+    /// pointing at nothing, so deleting such a document is read as "not here
+    /// any more" rather than "gone" — the closest alias is taken away and the
+    /// document itself moved into its place. The library keeps the document
+    /// and loses exactly one of the folders it was in, which is what the
+    /// second placement was there to say in the first place.
+    ///
+    /// Only placements made by hand count. A tag mirror in `Tags/` is a view of
+    /// the library rather than a home, and promoting one would make a folder
+    /// Doctopus maintains the only copy of a document; a placement outside the
+    /// library root is passed over too, since moving the file there would take
+    /// it out of the library altogether.
+    ///
+    /// The promotion is recorded as a `promoted` event, which Undo knows how to
+    /// take apart: the document goes back where it was and the alias it stood
+    /// in for is written again, so undoing a delete leaves the library exactly
+    /// as it was before it.
+    ///
+    /// Returns nil when there is nowhere to go, and the caller deletes as it
+    /// otherwise would.
+    func promoteClosestAlias(docID: Int64) async -> URL? {
+        guard let path = try? await store.documentPath(docID) else { return nil }
+        let url = URL(fileURLWithPath: path)
+        let home = url.deletingLastPathComponent()
+        let rootPath = Store.canonical(store.root.standardizedFileURL.path)
+        let homePath = Store.canonical(home.standardizedFileURL.path)
+
+        let placements = ((try? await store.aliases(for: docID)) ?? []).filter { alias in
+            guard alias.tagID == nil else { return false }
+            let folder = Store.canonical(
+                URL(fileURLWithPath: alias.path).deletingLastPathComponent()
+                    .standardizedFileURL.path)
+            // A stale record for the folder the document itself is in now says
+            // nothing about where else it can be found.
+            guard folder != homePath else { return false }
+            return folder == rootPath || folder.hasPrefix(rootPath + "/")
+        }
+        guard !placements.isEmpty else { return nil }
+
+        // Closest first; ties go to the shallower folder and then to the
+        // alphabetically first, so the same library always promotes the same
+        // placement.
+        let ordered = placements.sorted { l, r in
+            let lf = URL(fileURLWithPath: l.path).deletingLastPathComponent()
+            let rf = URL(fileURLWithPath: r.path).deletingLastPathComponent()
+            let ld = AliasManager.distance(from: home, to: lf)
+            let rd = AliasManager.distance(from: home, to: rf)
+            if ld != rd { return ld < rd }
+            let lDepth = lf.pathComponents.count
+            let rDepth = rf.pathComponents.count
+            if lDepth != rDepth { return lDepth < rDepth }
+            return l.path < r.path
+        }
+
+        for alias in ordered {
+            let folder = URL(fileURLWithPath: alias.path).deletingLastPathComponent()
+            // Only an alias that is still ours, and still this document's, is
+            // ours to take away; anything else at that path is the user's own
+            // file, and the placement is skipped for the next one along.
+            guard AliasManager.removeAlias(at: alias.path, pointingTo: url) else { continue }
+            try? await store.deleteAlias(id: alias.id)
+            // The document keeps its own name rather than inheriting whatever
+            // the alias was uniquified into when it was filed ("Invoice 2.pdf").
+            let target = Naming.uniqueURL(in: folder, filename: url.lastPathComponent)
+            do { try FileManager.default.moveItem(at: url, to: target) }
+            catch {
+                // The placement is gone but the document is untouched, which is
+                // the safe half of this: the caller trashes it as it would have.
+                return nil
+            }
+            try? await store.updatePath(docID, to: target.path)
+            FileScanner.pruneEmptyDirectories(startingFrom: home, upTo: store.root)
+            try? await store.logProcessing(
+                docID: docID, action: "promoted",
+                detail: "Deleted from \(home.lastPathComponent); kept where it was also filed",
+                confidence: nil, rule: nil, from: path, to: target.path, approved: true)
+            await syncAliases(docID: docID, target: target)
+            return target
+        }
+        return nil
+    }
+
     // MARK: - On-demand operations
 
     /// Re-runs the pipeline for specific documents (context menu "Reprocess").

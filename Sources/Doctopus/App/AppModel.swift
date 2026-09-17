@@ -1187,29 +1187,41 @@ final class AppModel {
     /// Moves the master files to the Trash — never deletes them outright — and
     /// forgets them only once the Trash has actually taken them.
     ///
-    /// A row shown in a folder through an alias *looks* like it lives there,
-    /// but trashing it trashes the original somewhere else. That is worth a
-    /// question; an ordinary trash, which Finder does not ask about either, is
-    /// not.
+    /// Two kinds of row never reach the Trash at all:
+    ///
+    /// A row that is in the folder being viewed only as an alias *is* the
+    /// alias, and deleting it deletes exactly that — the same thing Remove
+    /// Alias does, and the same thing Finder does with an alias. The document
+    /// it points at is somewhere else and is not what was deleted.
+    ///
+    /// A document that was filed in another folder by hand moves to the
+    /// nearest of those folders, taking the place of the alias standing there,
+    /// so it leaves the folder it was deleted from without the placements it
+    /// had being left pointing at nothing. See `Indexer.promoteClosestAlias`.
     func moveToTrash(_ rows: [DocumentRow]) {
-        let viaAlias = rows.filter(\.isAliasHere)
-        if !viaAlias.isEmpty {
-            let alert = NSAlert()
-            alert.messageText = viaAlias.count == 1
-                ? "Move the original of “\(viaAlias[0].displayTitle)” to the Trash?"
-                : "Move the originals of \(viaAlias.count) aliased documents to the Trash?"
-            alert.informativeText = viaAlias.count == 1
-                ? "It is only here as an alias. The original lives in “\((viaAlias[0].directory as NSString).lastPathComponent)”, and that is what would be trashed. To take it out of this folder only, use Remove Alias instead."
-                : "They are only here as aliases, and it is their originals elsewhere that would be trashed. To take them out of this folder only, use Remove Alias instead."
-            alert.addButton(withTitle: "Move to Trash")
-            alert.addButton(withTitle: "Cancel")
-            guard alert.runModal() == .alertFirstButtonReturn else { return }
-        }
+        // `isAliasHere` is only ever set while a folder is being viewed, and
+        // that folder is the one the alias is in.
+        let viewedFolder: String?
+        if case .folder(let path) = selection { viewedFolder = path } else { viewedFolder = nil }
         Task {
             var trashed = 0
+            var rehomed: [(title: String, folder: String)] = []
+            var unfiled = 0
             var failed: [String] = []
             for (lib, rows) in grouped(rows) {
                 for row in rows {
+                    // The alias is the thing on screen, so it is the thing
+                    // deleted. Nothing else about the document changes.
+                    if row.isAliasHere, let folder = viewedFolder {
+                        unfiled += await removeAliasPlacements(of: row, in: folder, from: lib)
+                        continue
+                    }
+                    // Somewhere else to be beats the Trash.
+                    if let newHome = await lib.indexer.promoteClosestAlias(docID: row.doc) {
+                        rehomed.append((row.displayTitle,
+                                        newHome.deletingLastPathComponent().lastPathComponent))
+                        continue
+                    }
                     do {
                         var landed: NSURL?
                         try FileManager.default.trashItem(at: row.url, resultingItemURL: &landed)
@@ -1230,10 +1242,26 @@ final class AppModel {
             if !failed.isEmpty {
                 errorMessage = "Could not move \(failed.count == 1 ? "“\(failed[0])”" : "\(failed.count) files") to the Trash. \(failed.count == 1 ? "It was" : "They were") left where \(failed.count == 1 ? "it is" : "they are")."
             }
+            // A delete can end three ways at once, and one toast replaces the
+            // last, so they are said in one line rather than hiding each other.
+            var said: [String] = []
             if trashed > 0 {
-                notify(trashed == 1 && rows.count == 1 ? "Moved “\(rows[0].displayTitle)” to the Trash."
-                                                       : "Moved \(trashed) documents to the Trash.")
+                said.append(trashed == 1 && rows.count == 1
+                    ? "Moved “\(rows[0].displayTitle)” to the Trash."
+                    : "Moved \(trashed) documents to the Trash.")
             }
+            if !rehomed.isEmpty {
+                said.append(rehomed.count == 1
+                    ? "“\(rehomed[0].title)” is also filed in “\(rehomed[0].folder)”, so it moved there instead of the Trash."
+                    : "\(rehomed.count) documents are also filed in other folders, so they moved there instead of the Trash.")
+            }
+            if unfiled > 0, let folder = viewedFolder {
+                let name = (folder as NSString).lastPathComponent
+                said.append(unfiled == 1
+                    ? "Took the alias out of “\(name)”. The document itself is untouched."
+                    : "Took \(unfiled) aliases out of “\(name)”. The documents themselves are untouched.")
+            }
+            if !said.isEmpty { notify(said.joined(separator: " ")) }
         }
     }
 
@@ -1319,17 +1347,27 @@ final class AppModel {
         }
     }
 
-    /// Removes an alias placement without touching the master file.
-    func removeAlias(_ row: DocumentRow, inFolder folder: String) {
-        guard let lib = library(of: row) else { return }
-        Task {
-            for alias in ((try? await lib.store.aliases(for: row.doc)) ?? [])
-            where alias.path.hasPrefix(folder + "/") {
-                AliasManager.removeAlias(at: alias.path, pointingTo: row.url)
-                try? await lib.store.deleteAlias(id: alias.id)
-            }
-            refreshAll()
+    /// Takes a document's aliases inside `folder` away, leaving the master file
+    /// where it is, and says how many went. The registry lets go of the
+    /// placement either way: an entry whose file is no longer the alias we
+    /// wrote is a record of something that is not ours to remove.
+    ///
+    /// Each one is recorded as an `unfiled` event carrying where the alias was,
+    /// which is what lets Undo write it again.
+    private func removeAliasPlacements(of row: DocumentRow, in folder: String,
+                                       from lib: Library) async -> Int {
+        var removed = 0
+        for alias in ((try? await lib.store.aliases(for: row.doc)) ?? [])
+        where alias.path.hasPrefix(folder + "/") {
+            AliasManager.removeAlias(at: alias.path, pointingTo: row.url)
+            try? await lib.store.deleteAlias(id: alias.id)
+            try? await lib.store.logProcessing(
+                docID: row.doc, action: "unfiled",
+                detail: "No longer filed under \((folder as NSString).lastPathComponent)",
+                confidence: nil, rule: nil, from: row.path, to: alias.path, approved: true)
+            removed += 1
         }
+        return removed
     }
 
     // MARK: - Tags

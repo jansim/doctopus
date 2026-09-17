@@ -429,6 +429,95 @@ enum SelfTest {
             }
         }
 
+        // Deleting a document that is filed in a second folder by hand is not
+        // a delete at all: the nearest of those placements takes its place, so
+        // the library keeps the document and loses only the folder it was
+        // deleted from.
+        if let source = rows.first(where: { $0.directory.hasSuffix("Inbox") }),
+           let second = rows.first(where: { $0.directory.hasSuffix("Work") })?
+               .url.deletingLastPathComponent(),
+           let created = try? AliasManager.createAlias(to: source.url, in: second) {
+            try? await store.recordAlias(docID: source.doc, tagID: nil, path: created.path)
+            let landed = await indexer.promoteClosestAlias(docID: source.doc)
+            print("  deleted \(source.filename.padded(32)) → "
+                  + (landed?.deletingLastPathComponent().lastPathComponent ?? "the Trash"))
+            Check.that("deleting an aliased document promotes the alias into the document",
+                       landed?.deletingLastPathComponent().standardizedFileURL
+                           == second.standardizedFileURL
+                           && FileManager.default.fileExists(atPath: landed?.path ?? ""))
+            // The document moves in under its own name, so it usually ends up
+            // at the alias's exact path. What says the alias is gone is that
+            // nothing standing there is one.
+            Check.that("…and the alias it stood in for is gone",
+                       !AliasManager.isAlias(URL(fileURLWithPath: created.path)))
+            Check.that("…and nothing is left in the folder it was deleted from",
+                       !FileManager.default.fileExists(atPath: source.path))
+            Check.that("…and the registry no longer carries the promoted placement",
+                       !((try? await store.aliases(for: source.doc)) ?? [])
+                           .contains(where: { $0.path == created.path }))
+
+            // Undo puts the delete back whole. Returning the document without
+            // the alias would quietly unfile it from the folder it was also
+            // in, which is not what was undone.
+            let undone = try? await store.undoLastEvent()
+            let restored = (try? await store.documentPath(source.doc)) ?? ""
+            let placements = ((try? await store.aliases(for: source.doc)) ?? [])
+                .filter { $0.tagID == nil }
+            Check.that("undo returns a promoted document to the folder it was deleted from",
+                       undone?.action == "promoted" && restored == source.path,
+                       undone?.action ?? "nothing to undo")
+            Check.that("…and writes the alias it stood in for again",
+                       placements.contains(where: { alias in
+                           let at = URL(fileURLWithPath: alias.path)
+                           guard AliasManager.isAlias(at),
+                                 let points = AliasManager.resolve(at) else { return false }
+                           return Store.canonical(points.standardizedFileURL.path)
+                               == Store.canonical(URL(fileURLWithPath: restored)
+                                   .standardizedFileURL.path)
+                       }),
+                       "\(placements.count) placement(s)")
+
+            // Leave the fixture library laid out the way this section found it.
+            for alias in placements {
+                AliasManager.removeAlias(at: alias.path,
+                                         pointingTo: URL(fileURLWithPath: restored))
+                try? await store.deleteAlias(id: alias.id)
+            }
+        }
+
+        // Deleting an alias on its own is undone the other way round: nothing
+        // moved, so the alias is written again where it was.
+        if let doc = rows.first(where: { $0.directory.hasSuffix("Inbox") }),
+           let elsewhere = rows.first(where: { $0.directory.hasSuffix("Work") })?
+               .url.deletingLastPathComponent(),
+           let created = try? AliasManager.createAlias(to: doc.url, in: elsewhere) {
+            try? await store.recordAlias(docID: doc.doc, tagID: nil, path: created.path)
+            let record = ((try? await store.aliases(for: doc.doc)) ?? [])
+                .first(where: { $0.path == created.path })
+            AliasManager.removeAlias(at: created.path, pointingTo: doc.url)
+            if let record { try? await store.deleteAlias(id: record.id) }
+            try? await store.logProcessing(
+                docID: doc.doc, action: "unfiled",
+                detail: "No longer filed under \(elsewhere.lastPathComponent)",
+                confidence: nil, rule: nil, from: doc.path, to: created.path, approved: true)
+
+            let undone = try? await store.undoLastEvent()
+            let back = ((try? await store.aliases(for: doc.doc)) ?? []).filter { $0.tagID == nil }
+            // `&&` takes its right side as a non-async autoclosure, so anything
+            // awaited has to be in hand before the check, not inside it.
+            let stillHome = (try? await store.documentPath(doc.doc)) ?? ""
+            Check.that("undoing a deleted alias writes the alias again, and nothing else",
+                       undone?.action == "unfiled"
+                           && back.contains(where: { AliasManager.isAlias(URL(fileURLWithPath: $0.path)) })
+                           && stillHome == doc.path,
+                       undone?.action ?? "nothing to undo")
+
+            for alias in back {
+                AliasManager.removeAlias(at: alias.path, pointingTo: doc.url)
+                try? await store.deleteAlias(id: alias.id)
+            }
+        }
+
         print("\nQUEUE MODE (same browser, review columns)")
         let queued = (try? await store.listDocuments(selection: .queue, query: SearchQuery(""),
                                                      sort: .added, ascending: false)) ?? []
