@@ -146,12 +146,16 @@ enum UITest {
 
         // Which leaves telling a double-click apart to the tap handler.
         model.selectedIDs = []
+        let handedOver = URLRecorder()
+        AppModel.opener = { handedOver.urls.append($0) }
+        defer { AppModel.opener = AppModel.defaultOpener }
         post(window, at: middle)
         post(window, at: middle, clickCount: 2)
-        let opened = await settle({ QuickLookController.shared.isOpen }, timeout: 3)
-        Check.that("double-clicking a gallery thumbnail opens Quick Look", opened,
-                   "\(model.selectedIDs.count) selected")
-        if opened { QLPreviewPanel.shared().orderOut(nil) }
+        let opened = await settle({ !handedOver.urls.isEmpty }, timeout: 3)
+        Check.that("double-clicking a gallery thumbnail opens it in its default app",
+                   opened, "\(model.selectedIDs.count) selected")
+        Check.that("and does not open Quick Look instead", !QuickLookController.shared.isOpen)
+        if QuickLookController.shared.isOpen { QLPreviewPanel.shared().orderOut(nil) }
         model.selectedIDs = []
     }
 
@@ -789,4 +793,8 @@ private final class SyntheticDrag: NSObject, NSDraggingInfo {
                                 for view: NSView?, classes classArray: [AnyClass],
                                 searchOptions: [NSPasteboard.ReadingOptionKey: Any] = [:],
                                 using block: (NSDraggingItem, Int, UnsafeMutablePointer<ObjCBool>) -> Void) {}
+}
+
+private final class URLRecorder {
+    var urls: [URL] = []
 }

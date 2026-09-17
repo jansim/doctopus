@@ -1012,7 +1012,7 @@ final class AppModel {
 
     // MARK: - Document actions
 
-    /// Space, the Document menu and double-click all land here.
+    /// Space and the Document menu land here.
     func quickLook(startingAt row: DocumentRow? = nil) {
         let rows = selectedRows.isEmpty ? documents : selectedRows
         guard !rows.isEmpty else { return }
@@ -1025,8 +1025,11 @@ final class AppModel {
     }
 
     func open(_ rows: [DocumentRow]) {
-        for row in rows { NSWorkspace.shared.open(row.url) }
+        for row in rows { Self.opener(row.url) }
     }
+
+    static var opener: (URL) -> Void = defaultOpener
+    static let defaultOpener: (URL) -> Void = { NSWorkspace.shared.open($0) }
 
     func reprocess(_ rows: [DocumentRow]) {
         Task {

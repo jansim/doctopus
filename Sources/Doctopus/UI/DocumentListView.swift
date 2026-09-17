@@ -286,7 +286,7 @@ private struct DocumentTableView: View {
             DocumentMenu(rows: model.documents.filter { ids.contains($0.id) },
                          renameSheet: $renameSheet, tagSheet: $tagSheet, filingRow: $filingRow)
         } primaryAction: { ids in
-            model.quickLook(startingAt: model.documents.first { ids.contains($0.id) })
+            model.open(model.documents.filter { ids.contains($0.id) })
         }
     }
 }
@@ -413,7 +413,7 @@ private struct DocumentGalleryView: View {
     /// time the second arrives, so the second only has to open it.
     private func click(_ row: DocumentRow) {
         if (NSApp.currentEvent?.clickCount ?? 1) >= 2 {
-            model.quickLook(startingAt: row)
+            model.open(model.selectedIDs.contains(row.id) ? model.selectedRows : [row])
         } else {
             select(row)
         }
