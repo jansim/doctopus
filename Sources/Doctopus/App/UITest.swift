@@ -248,9 +248,11 @@ enum UITest {
         // The app-wide keys are not written into the blob at all now, at a
         // default or otherwise, so an API key cannot travel inside a folder.
         let blob = await settledRaw(model, AppSettings.storageKey)
+        let appWideKeys = ["remoteAPIKey", "viewMode"].filter { blob?.contains($0) == true }
         Check.that("a library's own copy carries no app-wide settings",
-                   blob.map { !$0.contains("remoteAPIKey") && !$0.contains("viewMode") } ?? false,
-                   blob == nil ? "nothing stored" : "the library blob still names one")
+                   blob != nil && appWideKeys.isEmpty,
+                   blob == nil ? "nothing stored"
+                       : (appWideKeys.isEmpty ? "library keys only" : appWideKeys.joined(separator: ", ")))
 
         let inLibrary: LibrarySettings? = await settled(model, AppSettings.storageKey)
         Check.that("what the blob holds is the library's own half", inLibrary != nil,
