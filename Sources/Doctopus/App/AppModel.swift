@@ -1012,7 +1012,8 @@ final class AppModel {
 
     // MARK: - Document actions
 
-    /// Space, the Document menu and double-click all land here.
+    /// Space and the Document menu land here. Double-click deliberately does
+    /// not: it hands the document to its own app, the way Finder does.
     func quickLook(startingAt row: DocumentRow? = nil) {
         let rows = selectedRows.isEmpty ? documents : selectedRows
         guard !rows.isEmpty else { return }
@@ -1024,9 +1025,17 @@ final class AppModel {
         NSWorkspace.shared.activateFileViewerSelecting(rows.map(\.url))
     }
 
+    /// Double-click, ⌘↓ and the Document menu all land here: whatever app
+    /// owns the file opens it, exactly as a double-click in Finder would.
     func open(_ rows: [DocumentRow]) {
-        for row in rows { NSWorkspace.shared.open(row.url) }
+        for row in rows { Self.opener(row.url) }
     }
+
+    /// Hands a document to the app that owns it. A property so the UI checks
+    /// can watch a double-click arrive without a fixture really being opened
+    /// in front of whoever is running them.
+    static var opener: (URL) -> Void = defaultOpener
+    static let defaultOpener: (URL) -> Void = { NSWorkspace.shared.open($0) }
 
     func reprocess(_ rows: [DocumentRow]) {
         Task {

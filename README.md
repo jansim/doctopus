@@ -38,7 +38,7 @@ A high-performance, native macOS document management utility inspired by the org
   - Sidebar: Physical directory tree, Recent Processing Queue (with review/confidence states), Paperless-ngx-style smart views (Tags, Correspondents, Languages, Document Types). With more than one library open, folders and tags are grouped under the library that owns them; the smart views span all of them.
   - Center Pane: High-density list/table view featuring SQLite-backed deep full-text search, token filters, and sort options.
   - Inspector Pane: Full document metadata inspector (extracted dates, assigned tags, generated LLM summaries, optimization savings, and alias mappings, raw text, all metadata).
-- Keyboard-Driven Inspection: Full keyboard navigation with native Quick Look integration—hitting Spacebar on any file presents an instant preview with text selection and pagination.
+- Keyboard-Driven Inspection: Full keyboard navigation with native Quick Look integration—hitting Spacebar on any file presents an instant preview with text selection and pagination. Double-click (or ⌘↓) hands the document to whichever app owns it, the way Finder does.
 
 ### Storage
 - Canonical Disk Layer: Physical directory hierarchy containing PDFs, JPEGs, PNGs, and optional macOS Finder Aliases. If the disk layer changes, the app has to update accordingly, not show it as errors etc.
