@@ -7,34 +7,9 @@
       "layers" : [
         {
           "glass" : true,
-          "hidden" : true,
-          "image-name" : "ChatGPT Image Sep 7, 2026, 11_13_07 PM 2.png",
-          "name" : "ChatGPT Image Sep 7, 2026, 11_13_07 PM 2",
-          "position" : {
-            "scale" : 0.92,
-            "translation-in-points" : [
-              -3.2199999999999136,
-              -52.34375
-            ]
-          }
-        }
-      ],
-      "shadow" : {
-        "kind" : "neutral",
-        "opacity" : 0.5
-      },
-      "translucency" : {
-        "enabled" : true,
-        "value" : 0.5
-      }
-    },
-    {
-      "layers" : [
-        {
-          "glass" : true,
           "hidden" : false,
-          "image-name" : "background-removed.png",
-          "name" : "background-removed",
+          "image-name" : "doctopus.png",
+          "name" : "doctopus",
           "position" : {
             "scale" : 0.55,
             "translation-in-points" : [

@@ -474,7 +474,6 @@ extension Store {
         var pending = 0
         var failed = 0
         var needsReview = 0
-        var bytes: Int64 = 0
         var saved: Int64 = 0
         /// Documents in the Trash whose rows are still here, waiting to be
         /// restored or to age out.
@@ -484,8 +483,7 @@ extension Store {
         static func + (a: Stats, b: Stats) -> Stats {
             Stats(total: a.total + b.total, pending: a.pending + b.pending,
                   failed: a.failed + b.failed, needsReview: a.needsReview + b.needsReview,
-                  bytes: a.bytes + b.bytes, saved: a.saved + b.saved,
-                  deleted: a.deleted + b.deleted)
+                  saved: a.saved + b.saved, deleted: a.deleted + b.deleted)
         }
     }
 
@@ -494,11 +492,11 @@ extension Store {
         try db.query("""
             SELECT COUNT(*),
                    SUM(ocr_state=0), SUM(ocr_state=2), SUM(approved=0),
-                   SUM(size), SUM(COALESCE(original_size,size) - size)
+                   SUM(COALESCE(original_size,size) - size)
             FROM documents WHERE missing=0 AND deleted_at IS NULL
             """) { r in
             s.total = Int(r.int(0)); s.pending = Int(r.int(1)); s.failed = Int(r.int(2))
-            s.needsReview = Int(r.int(3)); s.bytes = r.int(4); s.saved = max(0, r.int(5))
+            s.needsReview = Int(r.int(3)); s.saved = max(0, r.int(4))
         }
         s.deleted = try deletedCount()
         return s

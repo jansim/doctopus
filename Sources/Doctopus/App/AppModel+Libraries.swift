@@ -1,0 +1,212 @@
+import Foundation
+import AppKit
+
+extension AppModel {
+
+    // MARK: - Libraries
+
+    /// A `*.doctopus` directory sitting directly inside `folder`, if any.
+    func existingContainer(in folder: URL) -> URL? {
+        (try? FileManager.default.contentsOfDirectory(
+            at: folder, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles]))?
+            .first { $0.lastPathComponent.hasSuffix(".doctopus") }
+    }
+
+    /// Opens — creating it if needed — the library whose container is at
+    /// `container`, alongside any already open. Opening one that is already
+    /// open is a no-op rather than a second copy.
+    func openLibrary(container: URL, rootBookmark: Data? = nil,
+                             persist: Bool = true, index: Bool = true) async {
+        let root = container.deletingLastPathComponent()
+        // The app is not sandboxed, so a plain bookmark is enough to survive the
+        // folder being moved between launches.
+        let bookmark = rootBookmark ?? (try? root.bookmarkData(
+            includingResourceValuesForKeys: nil, relativeTo: nil))
+
+        let store: Store
+        do {
+            store = try Store(directory: container)
+        } catch let error as Store.OpenError {
+            // A library written by a newer Doctopus says so, rather than
+            // looking like a broken folder.
+            errorMessage = error.description
+            return
+        } catch {
+            errorMessage = "Could not open a library at \(root.lastPathComponent)."
+            return
+        }
+
+        // Identity is the id in `meta.json`, so the same library reached by two
+        // different paths — a bookmark and a Finder open, say — is one library.
+        if let already = library(store.libraryID) {
+            if let bookmark { already.bookmark = bookmark }
+            if persist { persistOpenLibraries() }
+            return
+        }
+        guard opening.insert(store.libraryID).inserted else { return }
+        defer { opening.remove(store.libraryID) }
+
+        let lib = Library(store: store, bookmark: bookmark)
+        lib.settings = await AppSettings.load(from: store)
+        // The callbacks hop back to the main actor; the actors themselves stay off it.
+        lib.attachIndexer(
+            intelligence: intelligence,
+            onProgress: { [weak self] p in Task { @MainActor in self?.progress = p } },
+            onDataChanged: { [weak self] in Task { @MainActor in self?.refreshAll() } })
+
+        if (try? await store.rules())?.isEmpty ?? true {
+            for rule in Router.starterRules { _ = try? await store.upsertRule(rule) }
+        }
+
+        libraries.append(lib)
+        startWatching(lib)
+
+        // The first library decides what the settings pane and the view mode
+        // show; later ones join without disturbing either.
+        if libraries.count == 1 {
+            adoptSettings(of: lib)
+            viewMode = settings.viewMode
+            await intelligence.update(settings: settings)
+            modelStatus = await intelligence.status()
+        }
+
+        refreshAll()
+        if persist { persistOpenLibraries() }
+        guard index else { return }
+        let indexed = await lib.indexer.indexAll()
+        // Only a library the user just added or opened reports back; the ones
+        // restored at launch catch up quietly.
+        if persist, let indexed {
+            notify(indexed == 0 ? "Opened \(lib.displayName)."
+                                : "Indexed \(indexed) document\(indexed == 1 ? "" : "s") in \(lib.displayName).")
+        }
+    }
+
+    /// Choose a folder to index; its index lives in a `library.doctopus` inside.
+    func addLibrary() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Choose Folder"
+        panel.message = "Choose a folder to index in place. Doctopus keeps its index in “\(Preferences.libraryFolderName)” inside it — nothing else is moved or renamed."
+        guard panel.runModal() == .OK, let folder = panel.url else { return }
+        openLibrary(at: folder)
+    }
+
+    func openLibraryPicker() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        // A library is a package, which the panel counts as a file.
+        panel.canChooseFiles = true
+        panel.allowedContentTypes = [.doctopusLibrary]
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Open Library"
+        panel.message = "Choose a “\(Preferences.libraryFolderName)” library, or a folder that contains one."
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        openLibrary(at: url)
+    }
+
+    /// Open an existing library, given either its `library.doctopus` directory
+    /// or the folder that contains one.
+    func openLibrary(at url: URL) {
+        let container: URL
+        if url.lastPathComponent.hasSuffix(".doctopus") {
+            container = url
+        } else if let existing = existingContainer(in: url) {
+            container = existing
+        } else {
+            container = url.appendingPathComponent(Preferences.libraryFolderName, isDirectory: true)
+        }
+        Task { await openLibrary(container: container) }
+    }
+
+    /// Stops watching and forgets a library. The `library.doctopus` directory is
+    /// left on disk untouched.
+    func closeLibrary(_ lib: Library) {
+        lib.watcher?.stop()
+        libraries.removeAll { $0 === lib }
+        if settingsLibraryID == lib.id { settingsLibraryID = nil }
+        if selectionBelongs(to: lib) { selection = .all }
+        selectedIDs = selectedIDs.filter { $0.library != lib.id }
+        persistOpenLibraries()
+        adoptSettings(of: settingsLibrary)
+        refreshAll()
+    }
+
+    private func selectionBelongs(to lib: Library) -> Bool {
+        switch selection {
+        case .tag(let ref): return ref.library == lib.id
+        case .folder(let path): return lib.owns(path: path)
+        default: return false
+        }
+    }
+
+    func persistOpenLibraries() {
+        guard !restoring else { return }
+        Preferences.libraryBookmarks = libraries.compactMap(\.bookmark)
+    }
+
+    // MARK: - Watching
+
+    /// One watcher per library, over that library's root, feeding that
+    /// library's pipeline. Libraries never see each other's changes.
+    private func startWatching(_ lib: Library) {
+        lib.watcher?.stop()
+        guard let indexer = lib.indexer else { return }
+        let watcher = FileWatcher { changed in
+            Task { await indexer.handleChanges(paths: changed) }
+        }
+        watcher.start(paths: [lib.root.path])
+        lib.watcher = watcher
+    }
+
+    /// Rescans one library, or every open one when none is named.
+    func reindex(_ lib: Library? = nil) {
+        let targets = lib.map { [$0] } ?? libraries
+        Task {
+            var changed = 0
+            var ran = false
+            for lib in targets {
+                guard let n = await lib.indexer.indexAll() else { continue }
+                changed += n
+                ran = true
+            }
+            // A rescan already under way picks this request up; saying
+            // "up to date" before it finishes would be wrong.
+            guard ran else { return }
+            let scope = targets.count == 1 ? targets[0].displayName : "\(targets.count) libraries"
+            if changed == 0 { notify("\(scope) is up to date.", .info) }
+            else { notify("Indexed \(changed) new or changed document\(changed == 1 ? "" : "s") in \(scope).") }
+        }
+    }
+    func cancelIndexing() { Task { for lib in libraries { await lib.indexer.cancel() } } }
+
+    func undo() {
+        guard let lib = activeLibrary else { return }
+        Task {
+            if let undone = try? await lib.store.undoLastEvent() {
+                refreshAll()
+                notify("Undid \(undone.action) for “\(undone.filename)”.", .success)
+            } else {
+                notify("Nothing to undo.", .info)
+            }
+        }
+    }
+
+    func verifyLibrary() {
+        guard let lib = activeLibrary else { return }
+        Task {
+            do {
+                let report = try await LibraryVerifier.verify(store: lib.store)
+                if report.isClean {
+                    notify("Library “\(lib.displayName)” is healthy with 0 errors.", .success)
+                } else {
+                    notify("Library verification found \(report.errorsCount) error(s) and \(report.warningsCount) warning(s).", .warning)
+                }
+            } catch {
+                errorMessage = "Could not verify library: \(error.localizedDescription)"
+            }
+        }
+    }
+}

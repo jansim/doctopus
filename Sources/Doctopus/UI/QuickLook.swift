@@ -68,3 +68,28 @@ final class QuickLookController: NSObject, @preconcurrency QLPreviewPanelDataSou
         return false
     }
 }
+
+enum SpacePreview {
+    static func install(_ preview: @escaping @MainActor () -> Void) {
+        _ = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            let previewed = MainActor.assumeIsolated { () -> Bool in
+                guard shouldPreview(characters: event.charactersIgnoringModifiers,
+                                    modifiers: event.modifierFlags,
+                                    panelIsVisible: QuickLookController.shared.isOpen,
+                                    editingText: NSApp.keyWindow?.firstResponder is NSText)
+                else { return false }
+                preview()
+                return true
+            }
+            return previewed ? nil : event
+        }
+    }
+
+    private static func shouldPreview(characters: String?, modifiers: NSEvent.ModifierFlags,
+                                      panelIsVisible: Bool, editingText: Bool) -> Bool {
+        guard characters == " " else { return false }
+        guard modifiers.intersection(.deviceIndependentFlagsMask)
+            .isDisjoint(with: [.command, .option, .control, .shift]) else { return false }
+        return !panelIsVisible && !editingText
+    }
+}
