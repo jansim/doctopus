@@ -11,9 +11,11 @@ was shown the page as well.
 
 ## What it is asked for
 
-- A 1–2 sentence semantic summary.
+- A 1–2 sentence semantic summary, written in the document's own language and
+  stating the substance rather than opening with “This document is…”.
 - Correspondent or vendor, document category, language, and intent.
-- Standard taxonomy tags and a canonical title.
+- Standard taxonomy tags and a canonical title — at most five words, also in the
+  document's own language.
 
 Proposed tags are staged as suggestions in the inspector rather than assigned
 outright — click one to accept it, or dismiss it with the ×  — and never appear

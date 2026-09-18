@@ -688,6 +688,8 @@ enum SelfTest {
         Check.that("the system message tells a vision model to read the page too",
                    LLMPrompt.instructions(withPageImage: true).contains("page image")
                        && !LLMPrompt.instructions().contains("page image"))
+        Check.that("the system message asks for the document's own language",
+                   LLMPrompt.instructions().contains("language the document"))
 
         // The first page, rendered from a fixture that is really on disk. Asked
         // for fresh: the rows read at the start of the run have been moved
