@@ -1,0 +1,81 @@
+import Foundation
+
+/// The Finder's own tags, mirrored into the index.
+///
+/// The files themselves are the source of truth; these rows only make the tags
+/// countable and filterable without reading every file on disk. The batch query
+/// at the end reads both tag systems at once, which is what the list column
+/// needs and the only place the two meet.
+extension Store {
+
+    // MARK: - Finder tags
+
+    /// Replaces the indexed copy of one document's Finder tags. The file itself
+    /// is the source of truth; this only mirrors it so the tags can be counted
+    /// and filtered without reading every file.
+    func indexFinderTags(docID: Int64, entries: [FinderTags.Entry]) throws {
+        try db.run("DELETE FROM finder_tags WHERE doc_id=?", [.int(docID)])
+        var seen: Set<String> = []
+        for entry in entries {
+            let name = entry.name.trimmingCharacters(in: .whitespaces)
+            guard !name.isEmpty, seen.insert(name.lowercased()).inserted else { continue }
+            try db.run("INSERT OR IGNORE INTO finder_tags(doc_id, name, label) VALUES(?,?,?)",
+                       [.int(docID), .text(name), .int(Int64(entry.label))])
+        }
+    }
+
+    /// The colour label seen for each Finder tag across the library. The
+    /// maximum, so one untagged-by-colour copy cannot grey out a tag that
+    /// every other file carries in red.
+    func finderTagLabels() throws -> [String: Int] {
+        var out: [String: Int] = [:]
+        try db.query("SELECT name, MAX(label) FROM finder_tags GROUP BY name COLLATE NOCASE") {
+            out[$0.string(0)] = Int($0.int(1))
+        }
+        return out
+    }
+
+    func finderTags(docID: Int64) throws -> [String] {
+        try db.map("SELECT name FROM finder_tags WHERE doc_id=? ORDER BY name COLLATE NOCASE",
+                   [.int(docID)]) { $0.string(0) }
+    }
+
+    /// Every Finder tag in the library, with how many documents carry it.
+    func finderTags() throws -> [Facet] {
+        try db.map("""
+            SELECT f.name, COUNT(*) FROM finder_tags f
+            JOIN documents d ON d.id = f.doc_id AND d.missing = 0 AND d.deleted_at IS NULL
+            GROUP BY f.name COLLATE NOCASE
+            ORDER BY f.name COLLATE NOCASE
+            """) { Facet(value: $0.string(0), count: Int($0.int(1))) }
+    }
+
+    // MARK: - Tags for a batch of rows
+
+    /// Both tag systems for a page of documents, in one query each, so the list
+    /// can show either as a column.
+    func tags(forDocuments ids: [Int64]) throws -> (own: [Int64: [Tag]], finder: [Int64: [String]]) {
+        guard !ids.isEmpty else { return ([:], [:]) }
+        let placeholders = ids.map { _ in "?" }.joined(separator: ",")
+        let args = ids.map { Database.Value.int($0) }
+
+        var own: [Int64: [Tag]] = [:]
+        try db.query("""
+            SELECT dt.doc_id, t.id, t.name, t.color FROM document_tags dt
+            JOIN tags t ON t.id = dt.tag_id
+            WHERE dt.doc_id IN (\(placeholders))
+            ORDER BY t.name COLLATE NOCASE
+            """, args) { row in
+            own[row.int(0), default: []].append(
+                Tag(tagID: row.int(1), name: row.string(2), color: row.int(3), mirrors: false, folder: nil))
+        }
+
+        var finder: [Int64: [String]] = [:]
+        try db.query("""
+            SELECT doc_id, name FROM finder_tags WHERE doc_id IN (\(placeholders))
+            ORDER BY name COLLATE NOCASE
+            """, args) { finder[$0.int(0), default: []].append($0.string(1)) }
+
+        return (own, finder)
+    }
+}
