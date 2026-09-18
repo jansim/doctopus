@@ -485,19 +485,16 @@ private struct StatusFooter: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Divider()
+            // Which model is running is a setting rather than a number, and
+            // Settings says it with more detail than a dot and one word can.
             HStack(spacing: 6) {
-                Circle()
-                    .fill(model.modelStatus.isReady ? Color.green : Color.secondary.opacity(0.5))
-                    .frame(width: 6, height: 6)
-                Text(model.modelStatus.isReady ? model.settings.llmBackend.label : "Heuristics only")
-                    .lineLimit(1)
-                Spacer(minLength: 6)
                 Text("\(model.stats.total.formatted()) doc\(model.stats.total == 1 ? "" : "s")")
-                    .monospacedDigit()
+                Spacer(minLength: 6)
+                Text(ByteFormat.string(model.stats.bytes))
             }
-            .font(.caption)
+            .font(.caption.monospacedDigit())
             .foregroundStyle(.secondary)
-            .help(model.modelStatus.label)
+            .lineLimit(1)
             .padding(.top, 6)
         }
         .padding(.horizontal, 12)
