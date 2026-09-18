@@ -832,9 +832,8 @@ actor Store {
     }
 
     /// A change somebody made by hand. It joins the record but never the
-    /// review queue: what the user typed is the answer, not a proposal waiting
-    /// to be signed off, so recording it must not push the document back into
-    /// review.
+    /// review queue: what the user typed is the answer, not a proposal, so
+    /// recording it must not push the document back into review.
     func logEdit(docID: Int64, detail: String) throws {
         try db.run("INSERT INTO events(doc_id, at, action, detail) VALUES(?,?,?,?)",
                    [.int(docID), .double(Date().timeIntervalSince1970),

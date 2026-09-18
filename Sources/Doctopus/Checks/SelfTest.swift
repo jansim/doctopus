@@ -1268,10 +1268,8 @@ enum SelfTest {
             Check.that("history is newest first",
                        zip(kept, kept.dropFirst()).allSatisfy { $0.at >= $1.at })
 
-            // What somebody typed over the model's answer is as much a part of
-            // "why does it say that" as what the pipeline did — and only that:
-            // nobody signs off their own typing, so a hand edit must not turn
-            // up as a review entry or take a settled document back into review.
+            // A hand edit belongs in the record and nowhere else: nobody
+            // signs off their own typing.
             let approvedBefore = (try? await store.detail(subject.doc))?.row.approved
             try? await store.logEdit(docID: subject.doc, detail: "Title → Typed by hand")
             let edited = (try? await store.history(for: subject.doc, limit: 10_000)) ?? []

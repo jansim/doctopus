@@ -71,10 +71,6 @@ private struct DetailInspector: View {
                      : "No model configured — \(model.modelStatus.label).")
                     .font(.callout).foregroundStyle(.tertiary)
                     .fixedSize(horizontal: false, vertical: true)
-                // Offered only while there is nothing to show. Running it
-                // again on a document that already has a summary is still a
-                // click away in the Document menu and the list's context
-                // menu, and does not need a line in every inspector.
                 Button {
                     model.analyze([row])
                 } label: {
@@ -149,9 +145,8 @@ private struct DetailInspector: View {
                     }
                 }
                 if let source = detail.metadataSource {
-                    // How sure the extractor was is rarely what anyone opened
-                    // the inspector for, so it waits under the pointer instead
-                    // of taking a coloured bubble of its own.
+                    // Rarely what anyone opened the inspector for, so it
+                    // waits under the pointer.
                     let hint = detail.metadataConfidence
                         .map { "\(ConfidenceBadge.percent($0)) confident" }
                         ?? "How this document's metadata was worked out"
@@ -306,9 +301,8 @@ private struct DetailInspector: View {
                     InfoRow("Text") {
                         HStack(spacing: 5) {
                             Text("\(words) words · \(ocrSourceLabel(src))")
-                            // Nothing here needs acting on — a low number
-                            // means a blurry scan, not a wrong answer — so it
-                            // stays neutral rather than turning red.
+                            // A low number here is a blurry scan, not a
+                            // wrong answer.
                             if let c = detail.ocrConfidence, src != "pdf-layer" {
                                 ConfidenceBadge(value: c, muted: true)
                             }
@@ -594,8 +588,8 @@ struct Badge: View {
 
 struct ConfidenceBadge: View {
     let value: Double
-    /// A number that is context rather than a verdict, shown in the same grey
-    /// as the rest of its row so it does not read as a warning.
+    /// A number that is context rather than a verdict, shown in the row's
+    /// own grey so it does not read as a warning.
     var muted: Bool = false
 
     static func percent(_ value: Double) -> String {

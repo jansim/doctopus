@@ -512,12 +512,11 @@ enum UITest {
         FinderTags.write(originalFinderTags, to: row.url)
     }
 
-    /// The history was answering "why does it say that" with only what the
-    /// pipeline did, so a title somebody typed over the model's was
-    /// indistinguishable from the model's own. Drives its own edits rather
-    /// than reading the ones the check above made: every edit refreshes the
-    /// pane, which re-sorts it, so two checks asking for the first row do not
-    /// reliably get the same document.
+    /// The history recorded only what the pipeline did, so a title somebody
+    /// typed over the model's was indistinguishable from the model's own.
+    /// Makes its own edits rather than reading the ones the check above made:
+    /// every edit refreshes the pane, which re-sorts it, so two checks asking
+    /// for the first row can get different documents.
     private static func handEditsReachTheHistory(_ model: AppModel) async {
         guard let row = model.documents.first else { return }
         model.selectedIDs = [row.id]
@@ -528,8 +527,6 @@ enum UITest {
         let before = model.detail?.history.count ?? 0
         let queueBefore = model.queue.count
 
-        // The row moves in the pane as soon as its title changes, so
-        // everything below finds it by id rather than by position.
         func recorded(_ needle: String) -> Bool {
             model.detail?.history.contains {
                 $0.action == "edited" && $0.detail?.contains(needle) == true
@@ -557,16 +554,13 @@ enum UITest {
                    (model.detail?.history.count ?? 0) >= before + 3,
                    "\(model.detail?.history.count ?? 0) events, was \(before)")
 
-        // A value somebody chose is the answer, not a proposal waiting to be
-        // signed off, so it must not queue the document for review.
         Check.that("a hand edit does not queue the document for review",
                    model.queue.count <= queueBefore
                        && model.documents.first { $0.id == row.id }?.approved != false,
                    "\(model.queue.count) entries, was \(queueBefore)")
 
-        // All of this touched the library and the file itself, so it goes back
-        // the way it was found — the events recording that it happened stay,
-        // which is the whole point of them.
+        // All of this touched the library and the file itself, so it goes
+        // back the way it was found. The events stay.
         model.removeFinderTag(finderTag, from: [row])
         if let added = model.tags.first(where: { $0.name == tag }) {
             model.removeTag(added, from: [row])
@@ -574,7 +568,8 @@ enum UITest {
             Check.that("taking a tag off by hand is recorded too", untagged)
             model.deleteTag(added)
         }
-        // The checks below search by title, so that goes back too.
+        // The checks below search by title, so that goes back too. The row
+        // moves when it changes, which is why everything here works by id.
         model.editMetadata(row.id, column: "title", value: row.title)
         _ = await settle { model.documents.first { $0.id == row.id }?.title == row.title }
     }

@@ -3,14 +3,6 @@ import AppKit
 
 extension AppModel {
 
-    // MARK: - The record of a hand edit
-    //
-    // What the pipeline did to a document is already in `events`; what someone
-    // typed over it was not, which left the history answering "why does it say
-    // that" with only half the story. Every edit below adds its own line, and
-    // `logEdit` deliberately keeps them out of the review queue: a value the
-    // user chose is not a proposal waiting to be signed off.
-
     /// How an edit reads in the history: "Amount → €49,90", or "Amount cleared".
     static func editDetail(_ label: String, _ value: String?) -> String {
         guard let value = value?.nilIfBlank else { return "\(label) cleared" }
@@ -247,8 +239,7 @@ extension AppModel {
         guard let lib = library(ref.library) else { return }
         Task {
             try? await lib.store.updateNote(id, body: body)
-            // Editing a note to nothing deletes it, so that is what the record
-            // has to say happened.
+            // Editing a note to nothing deletes it.
             try? await lib.store.logEdit(docID: ref.doc,
                                          detail: body.nilIfBlank == nil ? "Note deleted" : "Note edited")
             reloadDetail()
@@ -385,9 +376,8 @@ extension AppModel {
         }
     }
 
-    /// `title` and `summary` are edited straight, without a `Field` in front
-    /// of them; everything else a column can be reached through is one, and
-    /// carries the name the user chose for it.
+    /// `title` and `summary` are edited straight; every other column is
+    /// reached through a `Field`, which carries the name the user gave it.
     private func columnLabel(_ column: String) -> String {
         if let field = fields.first(where: { $0.builtinColumn == column }) { return field.name }
         return column == "summary" ? "Summary" : "Title"
