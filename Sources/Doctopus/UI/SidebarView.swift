@@ -430,7 +430,15 @@ struct FolderRow: View {
                                         message: "Create a folder inside \(node.name).",
                                         initial: "Untitled Folder") else { return }
         let url = URL(fileURLWithPath: node.path).appendingPathComponent(name, isDirectory: true)
-        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        do {
+            try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+            // The watcher would pick this up on its own, but only after its
+            // debounce — refresh now so the new row shows immediately.
+            model.refreshAll()
+            model.selection = .folder(url.path)
+        } catch {
+            model.errorMessage = "Could not create “\(name)”: \(error.localizedDescription)"
+        }
     }
 
     /// Renames the folder on disk. The watcher sees the old path vanish and the

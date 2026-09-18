@@ -155,6 +155,33 @@ enum SelfTest {
         Check.that("folder tree built", !tree.isEmpty && tree[0].deepCount == stats.total)
         printTree(tree, depth: 0)
 
+        // A folder made in Finder (or from the sidebar's "New Subfolder…",
+        // which does the same thing) has no document in it yet, but it is
+        // still a real folder — it should show up rather than wait for one.
+        //
+        // `store.absPath` round-trips through the library's own canonical
+        // root (e.g. /var → /private/var on macOS), which a path built
+        // straight from the local `root` variable has not been through —
+        // so node.path is compared against the same round-trip, not against
+        // `emptyFolder.path` itself.
+        let emptyFolder = root.appendingPathComponent("Empty Subfolder", isDirectory: true)
+        try? FileManager.default.createDirectory(at: emptyFolder, withIntermediateDirectories: true)
+        let treeWithEmptyFolder = (try? await store.folderTree()) ?? []
+        let emptyFolderPath = store.absPath(store.relPath(emptyFolder.path))
+        Check.that("an empty folder on disk still shows in the tree",
+                   findNode(path: emptyFolderPath, in: treeWithEmptyFolder)?.count == 0)
+
+        // The default tag-mirror directory holds aliases, not documents, and
+        // is a view of the library rather than a home — it must not ride the
+        // disk walk above into a sidebar row of its own.
+        let tagsMirror = root.appendingPathComponent("Tags", isDirectory: true)
+            .appendingPathComponent("Some Tag", isDirectory: true)
+        try? FileManager.default.createDirectory(at: tagsMirror, withIntermediateDirectories: true)
+        let treeWithTagsMirror = (try? await store.folderTree()) ?? []
+        let tagsMirrorPath = store.absPath(store.relPath(tagsMirror.path))
+        Check.that("the Tags/ mirror is not promoted into the folder tree",
+                   findNode(path: tagsMirrorPath, in: treeWithTagsMirror) == nil)
+
         print("\nRENAME PREVIEW (\(Naming.defaultTemplate))")
         for row in rows.prefix(4) {
             let ctx = Naming.Context(date: row.docDate ?? row.createdAt, correspondent: row.correspondent,
@@ -1726,6 +1753,14 @@ enum SelfTest {
 
         for id in ruleIDs { try? await store.deleteRule(id) }
         await indexer.update(settings: settings)
+    }
+
+    private static func findNode(path: String, in nodes: [FolderNode]) -> FolderNode? {
+        for node in nodes {
+            if node.path == path { return node }
+            if let hit = findNode(path: path, in: node.children) { return hit }
+        }
+        return nil
     }
 
     private static func printTree(_ nodes: [FolderNode], depth: Int) {
