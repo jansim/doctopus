@@ -426,8 +426,22 @@ extension Store {
             counts[$0.string(0)] = Int($0.int(1))
         }
 
+        // A folder with nothing in it yet has no row above, but it is still a
+        // real folder — walk the disk too, so it shows up before anything is
+        // filed into it rather than only after.
+        var allDirs = Set(counts.keys)
+        // Tag mirrors under the default `Tags/` hold aliases, not documents,
+        // and are a view of the library rather than a home for anything — so
+        // unlike a folder the user made, they never earn a place of their own.
+        let tagsMirrorRoot = root.appendingPathComponent("Tags", isDirectory: true).path
+        for url in FileScanner.directories(root: root) {
+            let path = url.path
+            guard path != tagsMirrorRoot, !path.hasPrefix(tagsMirrorRoot + "/") else { continue }
+            allDirs.insert(relPath(path))
+        }
+
         var children: [String: Set<String>] = [:]
-        for dir in counts.keys where !dir.isEmpty {
+        for dir in allDirs where !dir.isEmpty {
             var cur = dir
             while !cur.isEmpty {
                 let parent = (cur as NSString).deletingLastPathComponent

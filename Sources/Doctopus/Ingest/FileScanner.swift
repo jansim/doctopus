@@ -48,6 +48,23 @@ enum FileScanner {
         return out
     }
 
+    /// Every directory under `root`, at any depth, including ones with
+    /// nothing in them yet — so a folder made in Finder, or from the
+    /// sidebar's "New Subfolder…", is there before any document is.
+    static func directories(root: URL) -> [URL] {
+        guard let e = FileManager.default.enumerator(
+            at: root, includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles, .skipsPackageDescendants]) else { return [] }
+
+        var out: [URL] = []
+        for case let url as URL in e {
+            guard (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true else { continue }
+            if url.lastPathComponent.hasSuffix(".doctopus") { e.skipDescendants(); continue }
+            out.append(url)
+        }
+        return out
+    }
+
     /// The documents behind files and folders handed to an import. A file is
     /// kept if Doctopus can read it; a folder is walked for the ones inside it,
     /// at any depth, with the same rules as a library scan. A package — an app,
