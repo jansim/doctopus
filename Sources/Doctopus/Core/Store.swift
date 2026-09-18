@@ -1016,6 +1016,25 @@ actor Store {
         try? FileManager.default.removeItem(at: originalsDirectory.appendingPathComponent("\(hash).\(ext)"))
     }
 
+    /// Frees a document's saved pre-optimization copy for good — the fallback
+    /// `Revert to Original` offers, not the optimized file already in place,
+    /// which is untouched. `original_size` is kept so the savings the
+    /// optimization made stay on record; only `original_hash` is cleared,
+    /// which is what `originalFileURL` and `revertOptimization` key off.
+    func deleteOriginalFile(for docID: Int64) throws {
+        guard let (path, originalHash) = try db.first("""
+            SELECT path, original_hash FROM documents
+            WHERE id=? AND original_size IS NOT NULL AND original_hash IS NOT NULL
+            """, [.int(docID)], { ($0.string(0), $0.string(1)) }) else { return }
+        try db.run("UPDATE documents SET original_hash=NULL WHERE id=?", [.int(docID)])
+        // Originals are content-addressed and can be shared by more than one
+        // document, so the file itself only goes once nothing else wants it.
+        guard try db.first("SELECT 1 FROM documents WHERE original_hash=? LIMIT 1",
+                           [.text(originalHash)], { _ in true }) == nil else { return }
+        let ext = URL(fileURLWithPath: path).pathExtension
+        try? FileManager.default.removeItem(at: originalsDirectory.appendingPathComponent("\(originalHash).\(ext)"))
+    }
+
     func revertOptimization(_ docID: Int64) throws -> Bool {
         guard let (relPath, originalSize, originalHash) = try db.first("""
             SELECT path, original_size, original_hash

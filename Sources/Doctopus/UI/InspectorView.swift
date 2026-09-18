@@ -28,6 +28,7 @@ private struct DetailInspector: View {
     @State private var noteDraft = ""
     @State private var tagInput = ""
     @State private var finderTagInput = ""
+    @State private var confirmingDeleteOriginal = false
 
     private var row: DocumentRow { detail.row }
 
@@ -291,8 +292,25 @@ private struct DetailInspector: View {
                 InfoRow("Size", ByteFormat.string(row.size))
                 if let original = row.originalSize, let savings = row.savings {
                     InfoRow("Optimized") {
-                        Text("\(ByteFormat.string(original)) → \(ByteFormat.string(row.size)) (−\(Int(savings * 100))%)")
-                            .foregroundStyle(.green)
+                        HStack(spacing: 6) {
+                            Text("\(ByteFormat.string(original)) → \(ByteFormat.string(row.size)) (−\(Int(savings * 100))%)")
+                            if let originalURL = detail.originalFileURL {
+                                Button {
+                                    QuickLookController.shared.toggle(urls: [originalURL])
+                                } label: {
+                                    Image(systemName: "eye")
+                                }
+                                .buttonStyle(.borderless)
+                                .help("View the original, pre-optimization file")
+                                Button(role: .destructive) {
+                                    confirmingDeleteOriginal = true
+                                } label: {
+                                    Image(systemName: "trash")
+                                }
+                                .buttonStyle(.borderless)
+                                .help("Delete the saved original — this cannot be undone")
+                            }
+                        }
                     }
                 }
                 InfoRow("Added", row.createdAt.formatted(date: .abbreviated, time: .shortened))
@@ -318,6 +336,13 @@ private struct DetailInspector: View {
                     }
                 }
             }
+        }
+        .confirmationDialog("Delete the saved original of “\(row.displayTitle)”?",
+                            isPresented: $confirmingDeleteOriginal) {
+            Button("Delete", role: .destructive) { model.deleteOriginal(row) }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("The pre-optimization file kept for Revert to Original is removed for good. The optimized file already in place is not touched.")
         }
     }
 

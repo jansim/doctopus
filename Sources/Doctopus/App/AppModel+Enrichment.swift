@@ -113,6 +113,18 @@ extension AppModel {
         }
     }
 
+    /// Frees the pre-optimization copy kept for `Revert to Original`. The
+    /// optimized file already in place, and the savings shown for it, are
+    /// untouched — only the fallback to go back goes away, for good.
+    func deleteOriginal(_ row: DocumentRow) {
+        guard let lib = library(of: row) else { return }
+        Task {
+            try? await lib.store.deleteOriginalFile(for: row.doc)
+            reloadDetail()
+            notify("Deleted the saved original of “\(row.displayTitle)”.")
+        }
+    }
+
     func rename(_ rows: [DocumentRow], template: String) {
         Task {
             var n = 0
