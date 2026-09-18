@@ -1,4 +1,5 @@
 import Foundation
+import AppKit
 
 /// Headless exercise of the full ingest pipeline: scan → OCR → analyze →
 /// enrich → index → search. Run with `Doctopus --selftest <folder>`.
@@ -1597,6 +1598,28 @@ enum SelfTest {
         session.suspend(.deviceGone)
         Check.that("a device that left says so rather than just “paused”",
                    session.paused?.summary == "Device gone", session.label)
+
+        print("\nFOLDER DROPS")
+        // Which keys are held is what decides whether a drag onto a folder in
+        // the sidebar files the document there as well or moves the file
+        // itself, and it is read while the drag is still in the air.
+        Check.that("a drag with nothing held files the document in a second place",
+                   FolderDropIntent.reading([]) == .alias)
+        Check.that("⌘ moves the master file instead",
+                   FolderDropIntent.reading([.command]) == .move)
+        Check.that("⌘ still means move with other keys alongside it",
+                   FolderDropIntent.reading([.command, .shift]) == .move)
+        Check.that("⌥ on its own is not a move",
+                   FolderDropIntent.reading([.option]) == .alias)
+        func movesInto(_ intent: FolderDropIntent, _ folder: String) -> Bool {
+            if case .move(let target) = intent.action(on: folder) { return target == folder }
+            return false
+        }
+        Check.that("the intent carries the folder the drag was read over",
+                   movesInto(.move, "/Documents/Taxes") && !movesInto(.alias, "/Documents/Taxes"))
+        Check.that("the row says which of the two it would be",
+                   FolderDropIntent.alias.label == "File Here"
+                       && FolderDropIntent.move.label == "Move Here")
 
         for id in ruleIDs { try? await store.deleteRule(id) }
         await indexer.update(settings: settings)
