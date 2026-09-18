@@ -669,24 +669,23 @@ enum UITest {
         let (window, host) = host(VStack { FolderRow(node: node, depth: 0) }.environment(model),
                                   size: NSSize(width: 240, height: 90))
         defer { window.orderOut(nil) }
-        // SwiftUI registers the row's dragged types on a subview of the hosting
-        // view, and not before that view has been laid out.
-        let wanted = NSPasteboard.PasteboardType(UTType.doctopusDocument.identifier)
+        // SwiftUI registers a drop target under the types the wanted one
+        // conforms to — `public.data` and `public.item` for ours — rather than
+        // under its own identifier, and not before the view has been laid out.
+        func takesDocuments(_ view: NSView) -> Bool {
+            view.registeredDraggedTypes.contains {
+                UTType($0.rawValue).map(UTType.doctopusDocument.conforms(to:)) == true
+            }
+        }
         var targets: [NSView] = []
         _ = await settle({
             targets = dropTargets(in: host)
-            return targets.contains { $0.registeredDraggedTypes.contains(wanted) }
+            return targets.contains(where: takesDocuments)
         }, timeout: 10)
-        let byName = targets.first { $0.registeredDraggedTypes.contains(wanted) }
-        guard let target = byName ?? targets.first else {
-            return fail("nothing under the hosted row takes a drop at all")
+        guard let target = targets.first(where: takesDocuments) else {
+            return fail("nothing under the hosted row takes a Doctopus document · registered "
+                + "\(Set(targets.flatMap { $0.registeredDraggedTypes.map(\.rawValue) }).sorted())")
         }
-        // Named only when the row did not register the type under the identifier
-        // it was given, which is the one thing here that cannot be read off the
-        // source.
-        let registered = byName == nil
-            ? " · registered \(Set(targets.flatMap { $0.registeredDraggedTypes.map(\.rawValue) }).sorted())"
-            : ""
 
         // A drag carries the whole selection when it starts inside one, and
         // these two rows are not in it.
@@ -706,8 +705,7 @@ enum UITest {
         }, timeout: 20)
         Check.that("a drag onto a folder files the document there as well",
                    filedTaken && aliased && fm.fileExists(atPath: filed.path),
-                   "taken \(filedTaken), filed \(aliased), master still in place \(fm.fileExists(atPath: filed.path))"
-                       + registered)
+                   "taken \(filedTaken), filed \(aliased), master still in place \(fm.fileExists(atPath: filed.path))")
 
         // ⌘ held: the master file itself moves, and nothing is left behind.
         FolderDropIntent.heldModifiers = { NSEvent.ModifierFlags.command }
