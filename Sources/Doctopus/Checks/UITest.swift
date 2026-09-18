@@ -514,30 +514,39 @@ enum UITest {
 
     /// The history was answering "why does it say that" with only what the
     /// pipeline did, so a title somebody typed over the model's was
-    /// indistinguishable from the model's own. Runs after the check above,
-    /// whose tag and Finder tag were added by hand through the same paths the
-    /// inspector uses.
+    /// indistinguishable from the model's own. Drives its own edits rather
+    /// than reading the ones the check above made: every edit refreshes the
+    /// pane, which re-sorts it, so two checks asking for the first row do not
+    /// reliably get the same document.
     private static func handEditsReachTheHistory(_ model: AppModel) async {
         guard let row = model.documents.first else { return }
         model.selectedIDs = [row.id]
         guard await settle({ model.detail?.row.id == row.id }) else {
-            Check.that("the document a hand edit was made on loads", false)
+            Check.that("the document a hand edit is made on loads", false)
             return
         }
         let before = model.detail?.history.count ?? 0
         let queueBefore = model.queue.count
 
+        // The row moves in the pane as soon as its title changes, so
+        // everything below finds it by id rather than by position.
         func recorded(_ needle: String) -> Bool {
             model.detail?.history.contains {
                 $0.action == "edited" && $0.detail?.contains(needle) == true
             } == true
         }
 
-        _ = await settle { recorded("Receipts") && recorded("Blue") }
-        Check.that("a tag added by hand is recorded in the history", recorded("Receipts"),
+        let tag = "HandEdited"
+        model.addTag(tag, to: [row])
+        let tagged = await settle { recorded(tag) }
+        Check.that("a tag added by hand is recorded in the history", tagged,
                    model.detail?.history.compactMap(\.detail).prefix(3)
-                       .joined(separator: "; ") ?? "no events")
-        Check.that("a Finder tag added by hand is recorded in the history", recorded("Blue"))
+                       .joined(separator: " / ") ?? "no events")
+
+        let finderTag = "Green"
+        model.addFinderTag(finderTag, to: [row])
+        let finderTagged = await settle { recorded(finderTag) }
+        Check.that("a Finder tag added by hand is recorded in the history", finderTagged)
 
         let title = "Titled by the checks"
         model.editMetadata(row.id, column: "title", value: title)
@@ -545,7 +554,7 @@ enum UITest {
         Check.that("a title typed by hand is recorded in the history", retitled)
 
         Check.that("hand edits add to the history rather than replacing it",
-                   (model.detail?.history.count ?? 0) > before,
+                   (model.detail?.history.count ?? 0) >= before + 3,
                    "\(model.detail?.history.count ?? 0) events, was \(before)")
 
         // A value somebody chose is the answer, not a proposal waiting to be
@@ -555,9 +564,17 @@ enum UITest {
                        && model.documents.first { $0.id == row.id }?.approved != false,
                    "\(model.queue.count) entries, was \(queueBefore)")
 
-        // The checks below search by title, so the title goes back the way it
-        // was found. The event recording that it was changed stays — that is
-        // the whole point of it.
+        // All of this touched the library and the file itself, so it goes back
+        // the way it was found — the events recording that it happened stay,
+        // which is the whole point of them.
+        model.removeFinderTag(finderTag, from: [row])
+        if let added = model.tags.first(where: { $0.name == tag }) {
+            model.removeTag(added, from: [row])
+            let untagged = await settle { recorded("Untagged") }
+            Check.that("taking a tag off by hand is recorded too", untagged)
+            model.deleteTag(added)
+        }
+        // The checks below search by title, so that goes back too.
         model.editMetadata(row.id, column: "title", value: row.title)
         _ = await settle { model.documents.first { $0.id == row.id }?.title == row.title }
     }
