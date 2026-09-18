@@ -177,12 +177,15 @@ private struct DetailInspector: View {
 
     private var tagsSection: some View {
         Section2("Tags") {
-            if detail.tags.isEmpty {
+            let visible = Tag.visible(in: detail.tags)
+            if visible.isEmpty {
                 Text("No tags").font(.callout).foregroundStyle(.tertiary)
             } else {
                 FlowLayout(spacing: 5) {
-                    ForEach(detail.tags) { tag in
-                        TagChip(tag: tag) { model.removeTag(tag, from: [row]) }
+                    ForEach(visible, id: \.tag.id) { entry in
+                        TagChip(tag: entry.tag, displayName: entry.path) {
+                            model.removeTag(entry.tag, from: [row])
+                        }
                     }
                 }
             }

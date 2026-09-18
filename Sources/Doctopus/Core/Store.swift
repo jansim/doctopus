@@ -724,14 +724,35 @@ actor Store {
         }
     }
 
+    /// A slash in the name — "tax/2025" — nests rather than becoming a literal
+    /// character: each segment becomes its own tag, chained under the one
+    /// before it, exactly as typing each name separately and "Move Under"-ing
+    /// the next one by hand would leave it. Tag names stay globally unique
+    /// either way (see the table's own constraint), so a segment that already
+    /// exists elsewhere in the tree is reused and re-parented rather than
+    /// duplicated — the same reuse-by-name a plain tag already gets.
     @discardableResult
     func tagID(named name: String, color: Int64 = 0) throws -> Int64 {
-        let clean = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !clean.isEmpty else { return 0 }
-        if let id = try db.first("SELECT id FROM tags WHERE name=? COLLATE NOCASE", [.text(clean)], { $0.int(0) }) {
+        let segments = name.split(separator: "/")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        guard let leaf = segments.last else { return 0 }
+        guard segments.count > 1 else { return try tagID(plain: leaf, color: color) }
+        var parent: Int64?
+        var id: Int64 = 0
+        for segment in segments {
+            id = try tagID(plain: segment, color: color)
+            if let parent, parent != id { _ = try? setTagParent(id, to: parent) }
+            parent = id
+        }
+        return id
+    }
+
+    private func tagID(plain name: String, color: Int64) throws -> Int64 {
+        if let id = try db.first("SELECT id FROM tags WHERE name=? COLLATE NOCASE", [.text(name)], { $0.int(0) }) {
             return id
         }
-        return try db.run("INSERT INTO tags(name, color) VALUES(?,?)", [.text(clean), .int(color)])
+        return try db.run("INSERT INTO tags(name, color) VALUES(?,?)", [.text(name), .int(color)])
     }
 
     /// Assigning a tag assigns everything it sits under too. That is what makes
@@ -766,12 +787,12 @@ actor Store {
 
     func tags(for docID: Int64) throws -> [Tag] {
         try db.map("""
-            SELECT t.id, t.name, t.color, t.mirrors, t.folder, t.parent_id FROM tags t
+            SELECT t.id, t.name, t.color, t.mirrors, t.folder, t.parent_id, dt.auto FROM tags t
             JOIN document_tags dt ON dt.tag_id=t.id WHERE dt.doc_id=?
             ORDER BY t.name COLLATE NOCASE
             """, [.int(docID)]) {
             Tag(tagID: $0.int(0), name: $0.string(1), color: $0.int(2), mirrors: $0.bool(3),
-                folder: $0.stringOrNil(4), parentID: $0.intOrNil(5))
+                folder: $0.stringOrNil(4), parentID: $0.intOrNil(5), implied: $0.bool(6))
         }
     }
 
