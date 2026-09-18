@@ -122,8 +122,10 @@ enum MetadataSource: Equatable {
 enum LLMPrompt {
     /// Bumped whenever the question changes, so `is:stale-analysis` can find
     /// the documents that were answered under an older one. v3 added the page
-    /// count, and the first page as an image where the endpoint takes one.
-    static let promptVersion = 3
+    /// count, and the first page as an image where the endpoint takes one; v4
+    /// asks for the summary and title in the document's own language, and for
+    /// shorter titles.
+    static let promptVersion = 4
 
     /// The system message. A vision model is told to read the page as well,
     /// because the sentence that keeps it from inventing anything would
@@ -134,7 +136,9 @@ enum LLMPrompt {
             : "Answer only from the text you are given."
         return """
         You classify scanned personal and business documents for a filing system. \
-        \(sources) If a field is genuinely not \
+        \(sources) Write the summary and the title in the language the document \
+        itself is written in — never translate them, and never answer in English \
+        because the question is in English. If a field is genuinely not \
         determinable, return an empty string rather than guessing. Never invent \
         names, amounts or dates. Be terse. Candidate tags are options, not requirements.
         """
@@ -144,12 +148,12 @@ enum LLMPrompt {
     /// support structured output and the prose spelled out for those that do
     /// not are both generated from this, so the two cannot drift apart.
     static let fields: [(key: String, description: String)] = [
-        ("summary", "One or two sentences on what this document is and what it concerns."),
+        ("summary", "One or two sentences on what the document concerns, in the language of the document. State the substance directly — never open with \"This document\", \"This is\" or the document type, e.g. \"Quarterly electricity bill for the Hauptstr. flat, due 14 March.\""),
         ("correspondent", "The organisation or person that issued or sent it."),
         ("documentType", "Category, e.g. Invoice, Receipt, Contract, Bank Statement, Tax, Insurance, Payslip, Medical, Certificate, Letter."),
         ("language", "The two-letter ISO 639-1 code of the document body and nothing else, e.g. en, de, fr — never the name of the language."),
         ("intent", "What the reader is expected to do: exactly one of pay, sign, file, read, respond, none."),
-        ("title", "A short canonical title, at most 8 words, without a date."),
+        ("title", "A short canonical title in the language of the document, at most 5 words, without a date, e.g. \"Electricity bill\", \"Stromrechnung\", \"Tenancy agreement termination\"."),
     ]
     static let tagsDescription = "Two to four lowercase topical tags."
 

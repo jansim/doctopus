@@ -22,7 +22,7 @@ struct DocumentInsight: Sendable {
 @available(macOS 26.0, *)
 @Generable
 private struct GeneratedInsight {
-    @Guide(description: "One or two sentences describing what this document is and what it concerns. No preamble.")
+    @Guide(description: "One or two sentences on what the document concerns, in the language of the document. No preamble — never open with \"This document\" or \"This is\".")
     var summary: String
 
     @Guide(description: "The organisation or person that issued or sent the document. Empty string if unclear.")
@@ -37,7 +37,7 @@ private struct GeneratedInsight {
     @Guide(description: "What the reader is expected to do: pay, sign, file, read, respond, or none.")
     var intent: String
 
-    @Guide(description: "A short canonical title, at most 8 words, without a date.")
+    @Guide(description: "A short canonical title in the language of the document, at most 5 words, without a date, e.g. \"Electricity bill\", \"Stromrechnung\".")
     var title: String
 
     @Guide(description: "Two to four lowercase topical tags, comma separated, no hashes.")
