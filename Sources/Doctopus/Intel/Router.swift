@@ -270,9 +270,7 @@ struct Router: Sendable {
             path = (path as NSString).expandingTildeInPath
             return URL(fileURLWithPath: path)
         }
-        // Render each path component separately so empty tokens collapse cleanly.
-        let components = path.split(separator: "/").map { Naming.render(String($0), ctx) }
-            .filter { !$0.isEmpty && $0 != "Unfiled" }
+        let components = Naming.renderPath(path, ctx)
         return components.reduce(root) { $0.appendingPathComponent($1, isDirectory: true) }
     }
 

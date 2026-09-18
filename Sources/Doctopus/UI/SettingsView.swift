@@ -71,10 +71,8 @@ private struct GeneralSettings: View {
             if !model.libraries.isEmpty {
                 Section("Library Settings") {
                     LibraryPicker()
-                    TextField("Default rename template", text: $model.settings.namingTemplate)
-                        .font(.system(.body, design: .monospaced))
-                    Text("Tokens: {date} {year} {month} {day} {correspondent} {title} {type} {lang} {n} {original}. Add a format like {date:yyyy-MM} for custom dates.")
-                        .font(.caption).foregroundStyle(.secondary)
+                    TemplateField(title: "Default rename template",
+                                  template: $model.settings.namingTemplate, kind: .filename)
                     TextField("Scan destination folder", text: $model.settings.scanDestination)
                     Text("Relative to this library's folder. Right-clicking a folder in the sidebar always overrides it.")
                         .font(.caption).foregroundStyle(.secondary)
@@ -341,8 +339,8 @@ private struct RoutingSettings: View {
                     Toggle("Auto-route imports and scans", isOn: $model.settings.autoRouteImports)
                     Toggle("Derive a folder when no rule matches", isOn: $model.settings.deriveWhenNoRule)
                         .disabled(!model.settings.autoRouteImports)
-                    TextField("Derived path template", text: $model.settings.derivedTemplate)
-                        .font(.system(.body, design: .monospaced))
+                    TemplateField(title: "Derived path template",
+                                  template: $model.settings.derivedTemplate, kind: .path)
                         .disabled(!model.settings.deriveWhenNoRule)
                     LabeledContent("Confidence threshold") {
                         HStack {
