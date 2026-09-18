@@ -286,7 +286,7 @@ private struct DocumentTableView: View {
             DocumentMenu(rows: model.documents.filter { ids.contains($0.id) },
                          renameSheet: $renameSheet, tagSheet: $tagSheet, filingRow: $filingRow)
         } primaryAction: { ids in
-            model.quickLook(startingAt: model.documents.first { ids.contains($0.id) })
+            model.open(model.documents.filter { ids.contains($0.id) })
         }
     }
 }
@@ -413,7 +413,7 @@ private struct DocumentGalleryView: View {
     /// time the second arrives, so the second only has to open it.
     private func click(_ row: DocumentRow) {
         if (NSApp.currentEvent?.clickCount ?? 1) >= 2 {
-            model.quickLook(startingAt: row)
+            model.open(model.selectedIDs.contains(row.id) ? model.selectedRows : [row])
         } else {
             select(row)
         }
@@ -497,11 +497,6 @@ private struct DocumentMenu: View {
             Button("Quick Look") { model.quickLook(startingAt: rows.first) }
             Button("Open in Default App") { model.open(rows) }
             Button("Reveal in Finder") { model.reveal(rows) }
-            if rows.count == 1, rows[0].isAliasHere, case .folder(let folder) = model.selection {
-                Button("Remove Alias from “\((folder as NSString).lastPathComponent)”") {
-                    model.removeAlias(rows[0], inFolder: folder)
-                }
-            }
             if model.selection.isQueueMode {
                 Divider()
                 Button("Approve") { model.setApproved(rows, true) }
@@ -565,6 +560,14 @@ private struct DocumentMenu: View {
             if model.selection == .deleted {
                 Button("Put Back") { model.restore(rows) }
                 Button("Remove from Library", role: .destructive) { model.forget(rows) }
+            } else if case .folder(let folder) = model.selection, rows.allSatisfy(\.isAliasHere) {
+                // Everything selected is in this folder as an alias, and that
+                // is all deleting it takes away — so the menu says so rather
+                // than promising the Trash.
+                Button(rows.count == 1
+                       ? "Remove Alias from “\((folder as NSString).lastPathComponent)”"
+                       : "Remove \(rows.count) Aliases from “\((folder as NSString).lastPathComponent)”",
+                       role: .destructive) { model.moveToTrash(rows) }
             } else {
                 Button("Move to Trash", role: .destructive) { model.moveToTrash(rows) }
             }

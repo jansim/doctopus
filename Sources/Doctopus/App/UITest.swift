@@ -146,12 +146,16 @@ enum UITest {
 
         // Which leaves telling a double-click apart to the tap handler.
         model.selectedIDs = []
+        let handedOver = URLRecorder()
+        AppModel.opener = { handedOver.urls.append($0) }
+        defer { AppModel.opener = AppModel.defaultOpener }
         post(window, at: middle)
         post(window, at: middle, clickCount: 2)
-        let opened = await settle({ QuickLookController.shared.isOpen }, timeout: 3)
-        Check.that("double-clicking a gallery thumbnail opens Quick Look", opened,
-                   "\(model.selectedIDs.count) selected")
-        if opened { QLPreviewPanel.shared().orderOut(nil) }
+        let opened = await settle({ !handedOver.urls.isEmpty }, timeout: 3)
+        Check.that("double-clicking a gallery thumbnail opens it in its default app",
+                   opened, "\(model.selectedIDs.count) selected")
+        Check.that("and does not open Quick Look instead", !QuickLookController.shared.isOpen)
+        if QuickLookController.shared.isOpen { QLPreviewPanel.shared().orderOut(nil) }
         model.selectedIDs = []
     }
 
@@ -245,31 +249,33 @@ enum UITest {
                    stored.viewMode == .gallery && stored.galleryThumbnailSize == 190,
                    "\(stored.viewMode.rawValue) at \(Int(stored.galleryThumbnailSize))")
 
-        let inLibrary: AppSettings? = await settled(model, AppSettings.storageKey)
+        // The app-wide keys never reach the blob, so an API key cannot travel
+        // inside a folder somebody shares.
+        let blob = await settledRaw(model, AppSettings.storageKey)
+        let appWideKeys = ["remoteAPIKey", "viewMode"].filter { blob?.contains($0) == true }
         Check.that("a library's own copy carries no app-wide settings",
-                   inLibrary?.viewMode == AppSettings().viewMode && inLibrary?.remoteAPIKey == "",
-                   inLibrary.map { "library blob says \($0.viewMode.rawValue)" } ?? "nothing stored")
+                   blob != nil && appWideKeys.isEmpty,
+                   blob == nil ? "nothing stored"
+                       : (appWideKeys.isEmpty ? "library keys only" : appWideKeys.joined(separator: ", ")))
 
-        // Regression: `AppSettings` decoded key by key or not at all, and `load`
-        // swallowed the failure — so the first release to add a setting reset
-        // every one the user had already chosen.
-        let partial = #"{"viewMode":"Gallery","galleryThumbnailSize":190}"#
-        let decoded = try? JSONDecoder().decode(AppSettings.self, from: Data(partial.utf8))
-        Check.that("settings stored by an older version still load",
-                   decoded?.viewMode == .gallery && decoded?.galleryThumbnailSize == 190
-                       && decoded?.namingTemplate == AppSettings().namingTemplate,
-                   decoded == nil ? "decode failed outright" : "decoded")
+        let inLibrary: LibrarySettings? = await settled(model, AppSettings.storageKey)
+        Check.that("what the blob holds is the library's own half", inLibrary != nil,
+                   inLibrary == nil ? "nothing stored" : "stored")
 
-        // The on-device model used to be a plain on/off switch. Someone who
-        // turned it off meant it, so the choice survives the move to a picker
-        // rather than silently coming back on.
-        let legacyOff = #"{"useOnDeviceModel":false}"#
-        let legacyOn = #"{"useOnDeviceModel":true}"#
-        let off = try? JSONDecoder().decode(AppSettings.self, from: Data(legacyOff.utf8))
-        let on = try? JSONDecoder().decode(AppSettings.self, from: Data(legacyOn.utf8))
-        Check.that("an older on/off model setting becomes a backend choice",
-                   off?.llmBackend == .off && on?.llmBackend == .onDevice,
-                   "\(off?.llmBackend.rawValue ?? "nil") / \(on?.llmBackend.rawValue ?? "nil")")
+        // Adding a setting must not reset the ones already stored, so a blob
+        // written before it existed fills the rest in from its defaults.
+        let partial = AppWideSettings.decoded(
+            from: Data(#"{"viewMode":"Gallery","galleryThumbnailSize":190}"#.utf8))
+        Check.that("a blob missing app-wide keys keeps the ones it has",
+                   partial.viewMode == .gallery && partial.galleryThumbnailSize == 190
+                       && partial.remoteEndpoint == AppWideSettings().remoteEndpoint,
+                   "\(partial.viewMode.rawValue) at \(Int(partial.galleryThumbnailSize))")
+
+        let partialLibrary = LibrarySettings.decoded(from: Data(#"{"routingThreshold":0.9}"#.utf8))
+        Check.that("a blob missing library keys keeps the ones it has",
+                   partialLibrary.routingThreshold == 0.9
+                       && partialLibrary.namingTemplate == LibrarySettings().namingTemplate,
+                   "threshold \(partialLibrary.routingThreshold)")
 
         model.viewMode = .list
         model.setSort(.docDate, ascending: false)
@@ -434,6 +440,19 @@ enum UITest {
     private static func settled<T: Decodable>(_ model: AppModel, _ key: String,
                                               until: (T) -> Bool = { _ in true }) async -> T? {
         var last: T?
+        _ = await settledRaw(model, key) { raw in
+            guard let decoded = try? JSONDecoder().decode(T.self, from: Data(raw.utf8)) else { return false }
+            last = decoded
+            return until(decoded)
+        }
+        return last
+    }
+
+    /// The stored value for `key` as written, for checks about what reached the
+    /// store rather than about what it decodes to.
+    private static func settledRaw(_ model: AppModel, _ key: String,
+                                   until: (String) -> Bool = { _ in true }) async -> String? {
+        var last: String?
         for _ in 0..<20 {
             // Column/collapsed/sort state lives in UserDefaults now; the settings
             // blob still lives in the library's database.
@@ -441,10 +460,9 @@ enum UITest {
             if raw == nil, let store = model.activeLibrary?.store {
                 raw = (try? await store.setting(key)) ?? nil
             }
-            if let raw, let data = raw.data(using: .utf8),
-               let decoded = try? JSONDecoder().decode(T.self, from: data) {
-                last = decoded
-                if until(decoded) { return decoded }
+            if let raw {
+                last = raw
+                if until(raw) { return raw }
             }
             try? await Task.sleep(for: .milliseconds(200))
         }
@@ -775,4 +793,8 @@ private final class SyntheticDrag: NSObject, NSDraggingInfo {
                                 for view: NSView?, classes classArray: [AnyClass],
                                 searchOptions: [NSPasteboard.ReadingOptionKey: Any] = [:],
                                 using block: (NSDraggingItem, Int, UnsafeMutablePointer<ObjCBool>) -> Void) {}
+}
+
+private final class URLRecorder {
+    var urls: [URL] = []
 }

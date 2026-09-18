@@ -1012,7 +1012,7 @@ final class AppModel {
 
     // MARK: - Document actions
 
-    /// Space, the Document menu and double-click all land here.
+    /// Space and the Document menu land here.
     func quickLook(startingAt row: DocumentRow? = nil) {
         let rows = selectedRows.isEmpty ? documents : selectedRows
         guard !rows.isEmpty else { return }
@@ -1025,8 +1025,11 @@ final class AppModel {
     }
 
     func open(_ rows: [DocumentRow]) {
-        for row in rows { NSWorkspace.shared.open(row.url) }
+        for row in rows { Self.opener(row.url) }
     }
+
+    static var opener: (URL) -> Void = defaultOpener
+    static let defaultOpener: (URL) -> Void = { NSWorkspace.shared.open($0) }
 
     func reprocess(_ rows: [DocumentRow]) {
         Task {
@@ -1187,29 +1190,41 @@ final class AppModel {
     /// Moves the master files to the Trash — never deletes them outright — and
     /// forgets them only once the Trash has actually taken them.
     ///
-    /// A row shown in a folder through an alias *looks* like it lives there,
-    /// but trashing it trashes the original somewhere else. That is worth a
-    /// question; an ordinary trash, which Finder does not ask about either, is
-    /// not.
+    /// Two kinds of row never reach the Trash at all:
+    ///
+    /// A row that is in the folder being viewed only as an alias *is* the
+    /// alias, and deleting it deletes exactly that — the same thing Remove
+    /// Alias does, and the same thing Finder does with an alias. The document
+    /// it points at is somewhere else and is not what was deleted.
+    ///
+    /// A document that was filed in another folder by hand moves to the
+    /// nearest of those folders, taking the place of the alias standing there,
+    /// so it leaves the folder it was deleted from without the placements it
+    /// had being left pointing at nothing. See `Indexer.promoteClosestAlias`.
     func moveToTrash(_ rows: [DocumentRow]) {
-        let viaAlias = rows.filter(\.isAliasHere)
-        if !viaAlias.isEmpty {
-            let alert = NSAlert()
-            alert.messageText = viaAlias.count == 1
-                ? "Move the original of “\(viaAlias[0].displayTitle)” to the Trash?"
-                : "Move the originals of \(viaAlias.count) aliased documents to the Trash?"
-            alert.informativeText = viaAlias.count == 1
-                ? "It is only here as an alias. The original lives in “\((viaAlias[0].directory as NSString).lastPathComponent)”, and that is what would be trashed. To take it out of this folder only, use Remove Alias instead."
-                : "They are only here as aliases, and it is their originals elsewhere that would be trashed. To take them out of this folder only, use Remove Alias instead."
-            alert.addButton(withTitle: "Move to Trash")
-            alert.addButton(withTitle: "Cancel")
-            guard alert.runModal() == .alertFirstButtonReturn else { return }
-        }
+        // `isAliasHere` is only ever set while a folder is being viewed, and
+        // that folder is the one the alias is in.
+        let viewedFolder: String?
+        if case .folder(let path) = selection { viewedFolder = path } else { viewedFolder = nil }
         Task {
             var trashed = 0
+            var rehomed: [(title: String, folder: String)] = []
+            var unfiled = 0
             var failed: [String] = []
             for (lib, rows) in grouped(rows) {
                 for row in rows {
+                    // The alias is the thing on screen, so it is the thing
+                    // deleted. Nothing else about the document changes.
+                    if row.isAliasHere, let folder = viewedFolder {
+                        unfiled += await removeAliasPlacements(of: row, in: folder, from: lib)
+                        continue
+                    }
+                    // Somewhere else to be beats the Trash.
+                    if let newHome = await lib.indexer.promoteClosestAlias(docID: row.doc) {
+                        rehomed.append((row.displayTitle,
+                                        newHome.deletingLastPathComponent().lastPathComponent))
+                        continue
+                    }
                     do {
                         var landed: NSURL?
                         try FileManager.default.trashItem(at: row.url, resultingItemURL: &landed)
@@ -1230,10 +1245,26 @@ final class AppModel {
             if !failed.isEmpty {
                 errorMessage = "Could not move \(failed.count == 1 ? "“\(failed[0])”" : "\(failed.count) files") to the Trash. \(failed.count == 1 ? "It was" : "They were") left where \(failed.count == 1 ? "it is" : "they are")."
             }
+            // A delete can end three ways at once, and one toast replaces the
+            // last, so they are said in one line rather than hiding each other.
+            var said: [String] = []
             if trashed > 0 {
-                notify(trashed == 1 && rows.count == 1 ? "Moved “\(rows[0].displayTitle)” to the Trash."
-                                                       : "Moved \(trashed) documents to the Trash.")
+                said.append(trashed == 1 && rows.count == 1
+                    ? "Moved “\(rows[0].displayTitle)” to the Trash."
+                    : "Moved \(trashed) documents to the Trash.")
             }
+            if !rehomed.isEmpty {
+                said.append(rehomed.count == 1
+                    ? "“\(rehomed[0].title)” is also filed in “\(rehomed[0].folder)”, so it moved there instead of the Trash."
+                    : "\(rehomed.count) documents are also filed in other folders, so they moved there instead of the Trash.")
+            }
+            if unfiled > 0, let folder = viewedFolder {
+                let name = (folder as NSString).lastPathComponent
+                said.append(unfiled == 1
+                    ? "Took the alias out of “\(name)”. The document itself is untouched."
+                    : "Took \(unfiled) aliases out of “\(name)”. The documents themselves are untouched.")
+            }
+            if !said.isEmpty { notify(said.joined(separator: " ")) }
         }
     }
 
@@ -1319,17 +1350,27 @@ final class AppModel {
         }
     }
 
-    /// Removes an alias placement without touching the master file.
-    func removeAlias(_ row: DocumentRow, inFolder folder: String) {
-        guard let lib = library(of: row) else { return }
-        Task {
-            for alias in ((try? await lib.store.aliases(for: row.doc)) ?? [])
-            where alias.path.hasPrefix(folder + "/") {
-                AliasManager.removeAlias(at: alias.path, pointingTo: row.url)
-                try? await lib.store.deleteAlias(id: alias.id)
-            }
-            refreshAll()
+    /// Takes a document's aliases inside `folder` away, leaving the master file
+    /// where it is, and says how many went. The registry lets go of the
+    /// placement either way: an entry whose file is no longer the alias we
+    /// wrote is a record of something that is not ours to remove.
+    ///
+    /// Each one is recorded as an `unfiled` event carrying where the alias was,
+    /// which is what lets Undo write it again.
+    private func removeAliasPlacements(of row: DocumentRow, in folder: String,
+                                       from lib: Library) async -> Int {
+        var removed = 0
+        for alias in ((try? await lib.store.aliases(for: row.doc)) ?? [])
+        where alias.path.hasPrefix(folder + "/") {
+            AliasManager.removeAlias(at: alias.path, pointingTo: row.url)
+            try? await lib.store.deleteAlias(id: alias.id)
+            try? await lib.store.logProcessing(
+                docID: row.doc, action: "unfiled",
+                detail: "No longer filed under \((folder as NSString).lastPathComponent)",
+                confidence: nil, rule: nil, from: row.path, to: alias.path, approved: true)
+            removed += 1
         }
+        return removed
     }
 
     // MARK: - Tags
@@ -1872,6 +1913,160 @@ final class AppModel {
         // The scan was staged in the temporary directory by this app, so it is
         // ours to move rather than copy.
         importFiles(urls, into: destination, movingSource: true)
+    }
+
+    // MARK: - Continuous scanning
+
+    /// The run under way, if any: one capture after another from the same
+    /// device, so a stack of documents is scanned without coming back to the
+    /// Mac in between.
+    private(set) var scanSession: ScanSession?
+    /// Both halves of a round: the pause before asking for the next capture,
+    /// and the wait for it to arrive. One task, since only one of the two is
+    /// ever outstanding and stopping means dropping whichever it is.
+    private var scanRound: Task<Void, Never>?
+    /// Confirms a loss of focus before acting on it — see `appResignedActive`.
+    private var scanFocusCheck: Task<Void, Never>?
+
+    /// How long a fired capture may go undelivered before the run pauses.
+    /// Cancelling on the device tells the Mac nothing at all, so without this
+    /// the toolbar would claim to be scanning until someone noticed. Long
+    /// enough to line up an awkward page; short enough to not be a lie.
+    private static let scanTimeout = Duration.seconds(120)
+    /// A beat between a capture landing and asking for the next one, while the
+    /// device is still putting its scanner away. A guess, and the one number
+    /// here that wants a real device: `--scantest loop` reports the round trip
+    /// and whether a fire this soon is honoured at all.
+    private static let scanRearm = Duration.milliseconds(800)
+    /// How long to leave the submenu to come back before believing the device
+    /// is gone.
+    private static let scanRetry = Duration.seconds(2)
+    /// How long the app has to be out of front before a run gives up on it.
+    private static let scanFocusGrace = Duration.milliseconds(1500)
+
+    /// Whether a capture fired now could be delivered at all. It is handed to
+    /// the key window's first responder, and there is no such window while
+    /// another app is in front. (Nothing to ask in the headless checks, which
+    /// never start a run.)
+    private var canReceiveScans: Bool { NSApp?.isActive ?? true }
+
+    func startContinuousScan(device: String, action: String, into destination: URL?) {
+        scanSession = ScanSession(device: device, action: action, destination: destination)
+        fireNextScan()
+    }
+
+    func resumeContinuousScan() {
+        guard scanSession != nil else { return }
+        scanSession?.resume()
+        fireNextScan()
+    }
+
+    /// Ends the run. A capture already in flight still arrives and is still
+    /// filed — the user scanned it, and it is not this app's to throw away —
+    /// it just does not ask for another.
+    func stopContinuousScan() {
+        scanRound?.cancel()
+        scanRound = nil
+        scanFocusCheck?.cancel()
+        scanFocusCheck = nil
+        let finished = scanSession
+        scanSession = nil
+        guard let finished, finished.count > 0 else { return }
+        notify(finished.count == 1 ? "Scanned 1 document." : "Scanned \(finished.count) documents.")
+    }
+
+    /// A capture landed. Counts it, then asks for the next one.
+    func scanDelivered(_ documents: Int) {
+        guard scanSession != nil else { return }
+        scanRound?.cancel()
+        scanRound = nil
+        scanSession?.received(documents)
+        guard scanSession?.isRunning == true else { return }
+        fireNextScan(after: Self.scanRearm)
+    }
+
+    /// A capture arrived that could not be read. Mid-run an alert would sit in
+    /// front of the next scan, so the run pauses and says so in a toast
+    /// instead; on a one-off scan it is still an alert.
+    func scanFailed(_ message: String) {
+        guard scanSession != nil else {
+            errorMessage = message
+            return
+        }
+        suspendScan(.failed)
+        notify(message, .warning)
+    }
+
+    /// Doctopus stopped being the active app. A capture is handed to the key
+    /// window's first responder, so one fired now would be refused and the
+    /// device would have been woken for nothing. The run pauses with its count
+    /// intact, ready to carry on with one click.
+    ///
+    /// Confirmed after a beat rather than acted on at once: if the system's
+    /// own capture UI takes the app out of front for a moment mid-round, a run
+    /// would otherwise end after its first document. Nothing rests on the
+    /// delay — a capture is never fired without checking `canReceiveScans`
+    /// first — it only decides when to say so.
+    func appResignedActive() {
+        guard scanSession?.isRunning == true else { return }
+        scanFocusCheck?.cancel()
+        scanFocusCheck = Task { [weak self] in
+            try? await Task.sleep(for: Self.scanFocusGrace)
+            guard !Task.isCancelled, let self, self.scanSession?.isRunning == true,
+                  !self.canReceiveScans else { return }
+            self.suspendScan(.lostFocus)
+        }
+    }
+
+    private func suspendScan(_ reason: ScanSession.Pause) {
+        scanRound?.cancel()
+        scanRound = nil
+        scanFocusCheck?.cancel()
+        scanFocusCheck = nil
+        scanSession?.suspend(reason)
+    }
+
+    /// Fires one round and waits for it. Deferred onto its own task rather
+    /// than run inline because the caller is usually the delivery of the
+    /// previous capture, which is still holding the pasteboard that capture
+    /// came on.
+    private func fireNextScan(after delay: Duration = .zero) {
+        scanRound?.cancel()
+        scanRound = Task { [weak self] in
+            try? await Task.sleep(for: delay)
+            guard !Task.isCancelled, let self else { return }
+            // Never wake the device while another app is in front: the capture
+            // would come back to a key window that is not ours and be refused,
+            // and the user would have been sent to their phone for nothing.
+            guard self.canReceiveScans else {
+                self.suspendScan(.lostFocus)
+                return
+            }
+
+            // The system rebuilds that submenu on its own schedule, so an
+            // entry missing at this instant may only mean it has not been put
+            // back yet. One retry tells a rebuild apart from a device that has
+            // really left the room.
+            var fired = false
+            for attempt in 0..<2 {
+                if attempt > 0 { try? await Task.sleep(for: Self.scanRetry) }
+                guard !Task.isCancelled,
+                      let session = self.scanSession, session.isRunning else { return }
+                if ScanCoordinator.shared.scan(device: session.device, action: session.action,
+                                               into: session.destination) {
+                    fired = true
+                    break
+                }
+            }
+            guard fired else {
+                self.suspendScan(.deviceGone)
+                return
+            }
+
+            try? await Task.sleep(for: Self.scanTimeout)
+            guard !Task.isCancelled, self.scanSession?.isRunning == true else { return }
+            self.suspendScan(.timedOut)
+        }
     }
 }
 
