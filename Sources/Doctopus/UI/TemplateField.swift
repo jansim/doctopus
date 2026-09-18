@@ -27,9 +27,10 @@ enum TemplateTokens {
 }
 
 /// What a `TemplateField` is for: a filename or a folder path. The two differ
-/// in the separator a tapped token is joined with and in how the live example
-/// below the field is built — everything else about editing one is the same.
-enum TemplateFieldKind {
+/// in the separator a tapped token is joined with, in whether a `/` may be
+/// typed at all, and in how the live example below the field is built —
+/// everything else about editing one is the same.
+enum TemplateFieldKind: Equatable {
     case filename
     case path
 
@@ -40,6 +41,10 @@ enum TemplateFieldKind {
         }
     }
 
+    /// A filename can't contain a path separator; a folder path is made of
+    /// them, so it's the one character never forbidden there.
+    var forbidsSlash: Bool { self == .filename }
+
     /// Sample values standing in for a real document's own, so every token in
     /// a template shows something in the live example.
     private static func sample(ext: String, originalStem: String) -> Naming.Context {
@@ -49,6 +54,8 @@ enum TemplateFieldKind {
             language: "en", counter: 2, originalStem: originalStem, ext: ext)
     }
 
+    /// What this kind of template renders to. A path always ends in `/`, so
+    /// the preview reads as a directory rather than a file at a glance.
     func preview(_ template: String) -> String {
         guard template.nilIfBlank != nil else { return "—" }
         switch self {
@@ -56,7 +63,7 @@ enum TemplateFieldKind {
             return Naming.render(template, Self.sample(ext: "pdf", originalStem: "scan0001"))
         case .path:
             let components = Naming.renderPath(template, Self.sample(ext: "", originalStem: "Unfiled"))
-            return components.isEmpty ? "(the library folder itself)" : components.joined(separator: "/")
+            return components.isEmpty ? "/" : components.joined(separator: "/") + "/"
         }
     }
 }
@@ -71,19 +78,30 @@ struct TemplateField: View {
     var kind: TemplateFieldKind
     var tokens: [TemplateToken] = TemplateTokens.all
 
+    /// The field's own caret/selection, so a tapped token lands where the
+    /// user was typing instead of always at the end.
+    @State private var selection: TextSelection?
+
     var body: some View {
         Group {
-            HStack(spacing: 4) {
-                ForEach(tokens) { token in
-                    Button(token.symbol) { insert(token) }
-                        .buttonStyle(.borderless)
-                        .font(.caption.monospaced())
-                        .help(token.help)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 4) {
+                    ForEach(tokens) { token in
+                        Button(token.symbol) { insert(token) }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                            .font(.caption.monospaced())
+                            .help(token.help)
+                    }
                 }
-                Spacer()
             }
-            TextField(title, text: $template)
+            .frame(height: 26)
+            TextField(title, text: $template, selection: $selection)
                 .font(.system(.body, design: .monospaced))
+                .onChange(of: template) { _, newValue in
+                    guard kind.forbidsSlash, newValue.contains("/") else { return }
+                    template = newValue.filter { $0 != "/" }
+                }
             LabeledContent("For example") {
                 Text(kind.preview(template))
                     .font(.caption.monospaced())
@@ -95,15 +113,35 @@ struct TemplateField: View {
         }
     }
 
-    /// Appends the token to whatever is already there, joined by the kind's
-    /// separator unless the text is empty or already ends in one.
+    /// Inserts at the caret, or replaces the current selection, joined by the
+    /// kind's separator on whichever side already has adjoining text — so a
+    /// token dropped between two others doesn't run into them. Falls back to
+    /// appending at the end when the field has never been focused.
     private func insert(_ token: TemplateToken) {
         let sep = kind.separator
+        guard let selection, case .selection(let range) = selection.indices,
+              range.lowerBound <= template.endIndex, range.upperBound <= template.endIndex else {
+            appendAtEnd(token, separator: sep)
+            return
+        }
+        var piece = token.symbol
+        if range.lowerBound > template.startIndex, template[template.index(before: range.lowerBound)] != sep {
+            piece = String(sep) + piece
+        }
+        if range.upperBound < template.endIndex, template[range.upperBound] != sep {
+            piece += String(sep)
+        }
+        template.replaceSubrange(range, with: piece)
+        self.selection = TextSelection(insertionPoint: template.index(range.lowerBound, offsetBy: piece.count))
+    }
+
+    private func appendAtEnd(_ token: TemplateToken, separator sep: Character) {
         if template.isEmpty || template.last == sep {
             template += token.symbol
         } else {
             template.append(sep)
             template += token.symbol
         }
+        selection = TextSelection(insertionPoint: template.endIndex)
     }
 }
