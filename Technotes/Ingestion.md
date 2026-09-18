@@ -2,9 +2,9 @@
 
 ## Getting documents in
 
-**Drag and drop, or Import.** Files from outside the library are copied in;
-the original is never touched. A dropped folder brings in the PDFs and images
-inside it at any depth, flattened into the destination.
+**Drag and drop, or Import.** Files from outside the library are copied in, a
+dropped folder is walked to any depth, and nothing outside is moved — see
+[File safety](FileSafety.md) for the exact contract.
 
 **Scan in place.** Right-clicking any folder in the tree and choosing Import
 from iPhone/iPad › Scan Documents forces the scanned output to land in that

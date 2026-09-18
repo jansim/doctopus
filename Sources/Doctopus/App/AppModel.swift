@@ -274,9 +274,8 @@ final class AppModel {
         notice = nil
     }
 
-    // Stored state for the work the extensions below drive. Swift keeps stored
-    // properties in the class body, so these sit here rather than beside the
-    // code that uses them; each one names the file it belongs to.
+    // Stored properties belong in the class body, so the state each extension
+    // drives sits here under that extension's name.
 
     // AppModel+Refresh
     var searchTask: Task<Void, Never>?

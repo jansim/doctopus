@@ -1,5 +1,4 @@
 import Foundation
-import AppKit
 
 struct GlobalSearchResult: Identifiable, Sendable {
     enum Category: String, Sendable {

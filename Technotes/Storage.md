@@ -19,8 +19,7 @@ wrote it, so a library from a newer Doctopus is refused with a reason rather
 than opened and written back missing whatever it did not know about.
 
 Finder shows the package as a single Doctopus document that opens the library
-on a double-click; Show Package Contents gets at the files. A library whose
-`library.doctopus` was deleted is not recreated at launch.
+on a double-click; Show Package Contents gets at the files.
 
 ## Where configuration lives
 

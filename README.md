@@ -36,19 +36,9 @@ compiles `Resources/doctopus.icon` with `actool` — emitting both a layered
 `Assets.car` for macOS 26 and a legacy `.icns` used on macOS 15 — and ad-hoc
 signs the bundle.
 
-## Checks
-
-```bash
-swift Testing/makefixtures.swift Testing/DemoLibrary
-build/Doctopus.app/Contents/MacOS/Doctopus --selftest Testing/DemoLibrary
-build/Doctopus.app/Contents/MacOS/Doctopus --uitest Testing/DemoLibrary build/snapshots
-```
-
-Two suites, built into the binary and run against a generated demo library:
-`--selftest` drives the ingest pipeline headlessly, `--uitest` drives the real
-panes in an off-screen window. Both run in CI on every push.
-See [Testing](Technotes/Testing.md) for the rest, including the command-line
-modes and how to check a model endpoint.
+Two check suites are built into the binary and run against a generated demo
+library — `--selftest` for the ingest pipeline, `--uitest` for the panes. Both
+run in CI on every push; [Testing](Technotes/Testing.md) has the commands.
 
 ## Technotes
 
