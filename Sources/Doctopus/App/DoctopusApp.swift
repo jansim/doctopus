@@ -113,6 +113,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
+        SpacePreview.install { [weak self] in self?.model?.quickLook() }
     }
 
     /// Opening a `library.doctopus` (or a folder holding one) from Finder.

@@ -122,7 +122,7 @@ actor LLMService {
     @available(macOS 26.0, *)
     private func currentSession() throws -> LanguageModelSession {
         if let existing = sessionBox { return existing }
-        let s = LanguageModelSession(instructions: LLMPrompt.instructions)
+        let s = LanguageModelSession(instructions: LLMPrompt.instructions())
         sessionBox = s
         return s
     }

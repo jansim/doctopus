@@ -42,6 +42,12 @@ struct AppWideSettings: StoredSettings, Sendable, Equatable {
     /// small fixed window; a server's is whatever it was loaded with, so this
     /// is worth turning up when the machine on the other end can take it.
     var llmExcerptLimit = 6000
+    /// Send the first page of each document to the API as an image as well as
+    /// its text — worth having where the endpoint is a vision model, and
+    /// refused by every endpoint that is not.
+    var remoteVision = false
+    /// Longest edge, in pixels, of that page image.
+    var remoteVisionImageSize = 1024
     var ocrConcurrency = 0        // 0 = auto
     var viewMode: ViewMode = .list
     var galleryThumbnailSize: Double = 150
@@ -57,8 +63,14 @@ struct AppWideSettings: StoredSettings, Sendable, Equatable {
 
     var remoteConfig: RemoteLLMConfig {
         RemoteLLMConfig(endpoint: remoteEndpoint, model: remoteModel, apiKey: remoteAPIKey,
-                        timeout: remoteTimeout, parallelRequests: remoteParallelRequests)
+                        timeout: remoteTimeout, parallelRequests: remoteParallelRequests,
+                        vision: remoteVision, visionImageSize: remoteVisionImageSize)
     }
+
+    /// True when each document's first page is sent as an image as well as its
+    /// text. A document OCR found nothing in is still worth asking about then —
+    /// a scan whose text layer is noise is exactly what a vision model is for.
+    var sendsPageImage: Bool { llmBackend == .remote && remoteVision }
 
     var effectiveConcurrency: Int {
         if ocrConcurrency > 0 { return min(ocrConcurrency, 16) }
@@ -124,6 +136,7 @@ struct AppSettings: Sendable, Equatable {
     var ignoredDays: Set<String> { library.ignoredDays }
     var optimizerOptions: Optimizer.Options { appWide.optimizerOptions }
     var remoteConfig: RemoteLLMConfig { appWide.remoteConfig }
+    var sendsPageImage: Bool { appWide.sendsPageImage }
     var effectiveConcurrency: Int { appWide.effectiveConcurrency }
 
     static let storageKey = "app_settings_v1"

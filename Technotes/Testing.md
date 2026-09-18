@@ -50,6 +50,9 @@ DOCTOPUS_LLM_ENDPOINT=http://localhost:1234/v1 DOCTOPUS_LLM_MODEL=qwen3-8b \
   build/Doctopus.app/Contents/MacOS/Doctopus --selftest Testing/DemoLibrary
 ```
 
+Add `DOCTOPUS_LLM_VISION=1` to send each document's first page as an image too,
+which is how a vision model is checked before it is configured in the app.
+
 ## Continuity Camera
 
 Scanning needs a real iPhone or iPad in the room and cannot be checked from CI.

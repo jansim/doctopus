@@ -6,7 +6,8 @@ the same questions and are interchangeable, and it can be turned off entirely.
 
 Both backends are asked the same question and produce the same
 `DocumentInsight`, so routing, tagging and the inspector never know which one
-ran; only `metadata.source` records it.
+ran; only `metadata.source` records it — `remote:`, or `vlm:` where the model
+was shown the page as well.
 
 ## What it is asked for
 
@@ -51,3 +52,23 @@ drafts JSON of its own are all still read correctly.
 This backend does send document text to the endpoint you choose, which is why
 it is never the default. The API key is stored in Doctopus's own index rather
 than the Keychain.
+
+## Vision models
+
+Where the endpoint is a vision model, each document's first page is sent as an
+image alongside its text (Settings › Intelligence › Page Image). The letterhead,
+a logo, a stamp or the layout of a table then count towards the answer, and a
+scan whose text layer is noise is still classified — a document OCR found
+nothing in is asked about at all, where the text-only path skips it.
+
+The page is rasterized to a colour JPEG, longest edge configurable and 1,024 px
+by default, with the page's own `/Rotate` and a photo's EXIF orientation
+applied, and sent as an `image_url` content part beside the text. The page count
+is spelled out in the prompt, so a model shown page 1 of 12 does not summarize
+as though the rest were missing. The text is still the whole document: the image
+adds what OCR drops, it does not replace it.
+
+A model that cannot see refuses the request, and the refusal is recognized from
+what the server says rather than from a status code — including the case where
+an endpoint rejects every response format only while an image is attached.
+Doctopus then falls back to text alone for the rest of the session.
