@@ -483,10 +483,6 @@ private struct StatusFooter: View {
                 Text(model.modelStatus.isReady ? model.settings.llmBackend.label : "Heuristics only")
                     .lineLimit(1)
                 Spacer(minLength: 6)
-                // The only number worth a permanent corner of the window:
-                // how much is in here. Bytes on disk and bytes reclaimed are
-                // storage questions, and belong with the storage settings that
-                // answer them rather than under every sidebar.
                 Text("\(model.stats.total.formatted()) doc\(model.stats.total == 1 ? "" : "s")")
                     .monospacedDigit()
             }
