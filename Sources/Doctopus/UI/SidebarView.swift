@@ -332,7 +332,6 @@ struct FolderRow: View {
     let node: FolderNode
     let depth: Int
 
-    /// What a drag currently over the row would do, and nil when there is none.
     @State private var hovering: FolderDropIntent?
     /// Carries what the keys said while the drag was over the row into the drop.
     @State private var dropState = FolderDropState()
@@ -370,9 +369,6 @@ struct FolderRow: View {
                     .lineLimit(1)
                     .truncationMode(.middle)
                 Spacer()
-                // While a drag is over the row the count gives way to what
-                // letting go would do, which is the only place ⌘ announces
-                // itself: the drag cursor cannot say it.
                 if let hovering {
                     Text(hovering.label)
                         .font(.caption)

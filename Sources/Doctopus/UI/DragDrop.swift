@@ -83,9 +83,7 @@ enum DropAction {
 /// master where it is, and with Command held it moves the master itself — the
 /// same thing ⌘ does to a Finder drag between two volumes.
 enum FolderDropIntent: Equatable {
-    /// File the document in the folder as a Finder alias, master untouched.
     case alias
-    /// Move the master file into the folder.
     case move
 
     static func reading(_ modifiers: NSEvent.ModifierFlags) -> FolderDropIntent {
@@ -110,10 +108,7 @@ enum FolderDropIntent: Equatable {
         }
     }
 
-    /// What the row says it is about to do, which is where the difference
-    /// shows: the cursor cannot carry it, since proposing a move is only
-    /// honoured if the drag's source offered one, and a proposal the source
-    /// does not allow refuses the drop outright.
+    /// What the row shows while a drag is over it.
     var label: String {
         switch self {
         case .alias: return "File Here"
@@ -140,11 +135,10 @@ final class FolderDropState {
 struct FolderDropDelegate: DropDelegate {
     let folder: String
     let model: AppModel
-    /// What the drop will act on. Kept apart from `hovering` because a binding
+    /// What the drop acts on. Kept apart from `hovering` because a binding
     /// handed out on an earlier pass through the row's body can read back what
-    /// that pass saw, which is fine for a highlight and not for a decision.
+    /// that pass saw — fine for a highlight, not for a decision.
     let state: FolderDropState
-    /// What the row draws, and nil when no drag is over it.
     @Binding var hovering: FolderDropIntent?
 
     func validateDrop(info: DropInfo) -> Bool {

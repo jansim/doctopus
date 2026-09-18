@@ -645,14 +645,10 @@ enum UITest {
         for row in model.documents where row.filename.contains(tag) { try? fm.removeItem(at: row.url) }
     }
 
-    /// A drag onto a folder in the sidebar files the document there as well,
-    /// leaving the master where it is; holding ⌘ moves the master instead.
-    ///
-    /// Which of the two it is has to be read while the drag is still in the
-    /// air — asked once the drop has landed and its payload has been decoded,
-    /// the keys are already back up — so this goes through AppKit's own drag
-    /// entry points in the order a drop target sees them, with the row hosted
-    /// on its own so there is exactly one target to hand them to.
+    /// Driven through AppKit's own drag entry points, in the order a drop
+    /// target sees them: what decides between the two is read while the drag
+    /// is still in the air, so a drop handed straight to the model would not
+    /// exercise it. The row is hosted alone to keep the targets unambiguous.
     private static func draggingOntoAFolderFilesOrMoves(_ model: AppModel) async {
         let fm = FileManager.default
         defer { FolderDropIntent.heldModifiers = { NSEvent.modifierFlags } }
@@ -696,7 +692,6 @@ enum UITest {
         }
         guard candidates.count >= 2 else { return fail("\(candidates.count) usable documents") }
 
-        // Nothing held: an alias appears in the folder and the master stays put.
         FolderDropIntent.heldModifiers = { NSEvent.ModifierFlags() }
         let filed = candidates[0]
         let filedTaken = drop(DocumentDragItem(filed), on: target, in: window)
@@ -707,7 +702,6 @@ enum UITest {
                    filedTaken && aliased && fm.fileExists(atPath: filed.path),
                    "taken \(filedTaken), filed \(aliased), master still in place \(fm.fileExists(atPath: filed.path))")
 
-        // ⌘ held: the master file itself moves, and nothing is left behind.
         FolderDropIntent.heldModifiers = { NSEvent.ModifierFlags.command }
         let moving = candidates[1]
         let cameFrom = URL(fileURLWithPath: moving.directory)
@@ -729,8 +723,8 @@ enum UITest {
 
     // MARK: - Harness
 
-    /// Puts one document on a pasteboard of its own and runs it past a drop
-    /// target the way AppKit would, answering whether the target took it.
+    /// Runs one document past a drop target the way AppKit would, and says
+    /// whether it was taken.
     private static func drop(_ item: DocumentDragItem, on target: NSView, in window: NSWindow) -> Bool {
         guard let payload = try? JSONEncoder().encode(item) else { return false }
         let pasteboard = NSPasteboard(name: .init("doctopus-uitest-\(UUID().uuidString)"))
@@ -766,8 +760,8 @@ enum UITest {
         return view.subviews.lazy.compactMap { dropTarget(in: $0) }.first
     }
 
-    /// Every view in the tree that takes a drop, outermost first. The plural of
-    /// the above, for when which one is wanted depends on what it registered.
+    /// Every view in the tree that takes a drop, outermost first, for when
+    /// which one is wanted depends on what it registered.
     private static func dropTargets(in view: NSView) -> [NSView] {
         (view.registeredDraggedTypes.isEmpty ? [] : [view])
             + view.subviews.flatMap { dropTargets(in: $0) }

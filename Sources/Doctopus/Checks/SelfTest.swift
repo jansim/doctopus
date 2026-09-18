@@ -1662,9 +1662,6 @@ enum SelfTest {
                    session.paused?.summary == "Device gone", session.label)
 
         print("\nFOLDER DROPS")
-        // Which keys are held is what decides whether a drag onto a folder in
-        // the sidebar files the document there as well or moves the file
-        // itself, and it is read while the drag is still in the air.
         Check.that("a drag with nothing held files the document in a second place",
                    FolderDropIntent.reading([]) == .alias)
         Check.that("⌘ moves the master file instead",
