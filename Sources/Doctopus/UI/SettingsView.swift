@@ -678,6 +678,20 @@ struct IntelligenceSettings: View {
             Text("Works with any OpenAI-compatible server — LM Studio, Ollama, llama.cpp, vLLM, or a hosted API. Unlike the on-device model, this sends the text of your documents to that endpoint, and the API key is stored in Doctopus's own preferences rather than the Keychain — it never travels inside a library folder.")
                 .font(.caption).foregroundStyle(.secondary)
         }
+
+        Section("Page Image") {
+            Toggle("Send the first page as an image", isOn: $model.settings.remoteVision)
+            if model.settings.remoteVision {
+                Picker("Longest edge", selection: $model.settings.remoteVisionImageSize) {
+                    Text("768 px").tag(768)
+                    Text("1,024 px").tag(1024)
+                    Text("1,536 px").tag(1536)
+                    Text("2,048 px").tag(2048)
+                }
+                Text("The model is shown the first page as well as the text and the page count, so the letterhead, a logo, a stamp or the layout of a table count towards its answer — which is what a scan loses on the way through OCR. It needs a model that can see, such as Qwen2.5-VL, Gemma 3, LLaVA or a hosted multimodal model; a text model refuses the image, and Doctopus then carries on with text alone for the rest of the session. A larger page reads more small print and costs more tokens.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
     }
 
     private func test() {
@@ -700,8 +714,9 @@ struct IntelligenceSettings: View {
         let count = model.stats.total
         let alert = NSAlert()
         alert.messageText = "Analyze \(count) document\(count == 1 ? "" : "s")?"
+        let sent = model.settings.remoteVision ? "its text and an image of its first page" : "its text"
         alert.informativeText = model.settings.llmBackend == .remote
-            ? "Each one sends its text to \(model.settings.remoteEndpoint). Summaries, types, correspondents and titles found by the model will replace what is stored now."
+            ? "Each one sends \(sent) to \(model.settings.remoteEndpoint). Summaries, types, correspondents and titles found by the model will replace what is stored now."
             : "Summaries, types, correspondents and titles found by the model will replace what is stored now."
         alert.addButton(withTitle: "Analyze")
         alert.addButton(withTitle: "Cancel")
