@@ -270,12 +270,39 @@ struct Tag: Identifiable, Hashable, Sendable {
     var depth: Int = 0
     /// Which library this tag belongs to. Stamped by `AppModel`.
     var library: LibraryID = ""
+    /// Only meaningful in a per-document list: whether this tag rode along as
+    /// an automatic ancestor of one actually chosen, rather than being chosen
+    /// itself. Such a tag has nothing of its own to show as a pill — the
+    /// descendant that pulled it in already speaks for it.
+    var implied: Bool = false
 
     var id: TagRef { TagRef(library: library, tag: tagID) }
 
     /// Tags nest, but not without limit. Paperless settled on five and nobody
     /// has ever asked for a sixth.
     static let maxDepth = 5
+
+    /// This tag's full nested name, root first ("Tax" or "Tax/2025"), resolved
+    /// against the rest of a document's tags — where its ancestors live, since
+    /// assigning a child pulls every tag above it in as an automatic
+    /// assignment on the same document.
+    func path(in siblings: [Tag]) -> String {
+        var names = [name]
+        var current = self
+        while let parentID = current.parentID,
+              let parent = siblings.first(where: { $0.tagID == parentID }) {
+            names.append(parent.name)
+            current = parent
+        }
+        return names.reversed().joined(separator: "/")
+    }
+
+    /// Of a document's tags, the ones worth their own pill — not one that only
+    /// showed up because a nested child pulled it in as an ancestor, whose
+    /// pill already spells the whole path out.
+    static func visible(in tags: [Tag]) -> [(tag: Tag, path: String)] {
+        tags.filter { !$0.implied }.map { ($0, $0.path(in: tags)) }
+    }
 }
 
 /// A tag the model proposed for a document but that has not been accepted

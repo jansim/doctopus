@@ -1011,6 +1011,33 @@ enum SelfTest {
         for id in chain.reversed() { try? await store.deleteTag(id) }
         for id in [invoices, statements, finances, deep] { try? await store.deleteTag(id) }
 
+        // A slash in a typed tag name is shorthand for nesting it by hand:
+        // "tax/2025" should leave "2025" sitting under "tax" without anyone
+        // touching "Move Under".
+        let taxYear = (try? await store.tagID(named: "tax/2025")) ?? 0
+        let taxRoot = (try? await store.tagID(named: "tax")) ?? 0
+        let taxShaped = (try? await store.tags()) ?? []
+        let taxYearTag = taxShaped.first { $0.tagID == taxYear }
+        Check.that("a slash in the name nests the tag it makes",
+                   taxYearTag?.parentID == taxRoot && taxYearTag?.name == "2025",
+                   taxShaped.map(\.name).joined(separator: ", "))
+        // Typing the same path again finds what is already there rather than
+        // building a second "tax" or a second "2025".
+        let taxYearAgain = (try? await store.tagID(named: "tax/2025")) ?? -1
+        Check.that("typing the same nested path twice doesn't duplicate it",
+                   taxYearAgain == taxYear)
+        if let subject = rows.first {
+            try? await store.assign(tag: taxYear, to: subject.doc)
+            let carried = (try? await store.tags(for: subject.doc)) ?? []
+            let pills = Tag.visible(in: carried)
+            Check.that("the pill for a nested tag spells out its whole path",
+                       pills.contains { $0.tag.tagID == taxYear && $0.path == "tax/2025" }
+                           && !pills.contains { $0.tag.tagID == taxRoot },
+                       pills.map(\.path).joined(separator: ", "))
+        }
+        try? await store.deleteTag(taxYear)
+        try? await store.deleteTag(taxRoot)
+
         print("\nDATES")
         // The same numeric date, read two ways. Which one is right is the
         // library's business, not the Mac's — that is the whole setting.

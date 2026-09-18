@@ -222,8 +222,10 @@ private struct GeneratedInfoEditor: View {
     private var tags: some View {
         VStack(alignment: .leading, spacing: 5) {
             FlowLayout(spacing: 4) {
-                ForEach(detail.tags) { tag in
-                    TagChip(tag: tag, compact: true) { model.removeTag(tag, from: [row]) }
+                ForEach(Tag.visible(in: detail.tags), id: \.tag.id) { entry in
+                    TagChip(tag: entry.tag, displayName: entry.path, compact: true) {
+                        model.removeTag(entry.tag, from: [row])
+                    }
                 }
                 // Suggestions sit alongside, dashed, so accepting one is a
                 // click away rather than a trip to the inspector.

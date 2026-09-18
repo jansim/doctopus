@@ -31,17 +31,18 @@ struct TagChips: View {
     let tags: [Tag]
 
     var body: some View {
-        if tags.isEmpty {
+        let visible = Tag.visible(in: tags)
+        if visible.isEmpty {
             Text("—").foregroundStyle(.tertiary)
         } else {
             HStack(spacing: 3) {
-                ForEach(tags) { tag in
-                    let color = TagColor.color(tag.color)
+                ForEach(visible, id: \.tag.id) { entry in
+                    let color = TagColor.color(entry.tag.color)
                     HStack(spacing: 3) {
                         Image(systemName: "tag")
                             .font(.system(size: 8))
                             .foregroundStyle(color)
-                        Text(tag.name).font(.caption).lineLimit(1)
+                        Text(entry.path).font(.caption).lineLimit(1)
                     }
                     .padding(.horizontal, 5).padding(.vertical, 1)
                     .background(color.opacity(0.16), in: Capsule())
@@ -76,17 +77,22 @@ struct FinderTagChips: View {
 /// One of Doctopus's tags as an editable token.
 struct TagChip: View {
     let tag: Tag
+    /// The full nested name to show ("Tax/2025"), when it differs from
+    /// `tag.name`. Defaults to the tag's own name for a caller with no
+    /// sibling list to resolve ancestors against.
+    var displayName: String?
     var compact = false
     let onRemove: () -> Void
 
     var body: some View {
         let color = TagColor.color(tag.color)
+        let shown = displayName ?? tag.name
         ChipBody(compact: compact) {
             Image(systemName: "tag")
                 .font(.system(size: compact ? 8 : 9))
                 .foregroundStyle(color)
-            Text(tag.name).font(.caption)
-            RemoveButton(help: "Remove “\(tag.name)”", action: onRemove)
+            Text(shown).font(.caption)
+            RemoveButton(help: "Remove “\(shown)”", action: onRemove)
         }
         .background(color.opacity(0.16), in: Capsule())
         .overlay(Capsule().strokeBorder(color.opacity(0.45)))
