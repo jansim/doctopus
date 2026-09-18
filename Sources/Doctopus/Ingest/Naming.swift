@@ -119,6 +119,18 @@ enum Naming {
         return ext.isEmpty ? out : "\(out).\(ext)"
     }
 
+    /// Renders a `/`-separated folder template one component at a time, so an
+    /// empty token collapses just its own path segment — `{correspondent}/{year}`
+    /// with no year drops straight to the correspondent's folder rather than
+    /// leaving a trailing slash. `ctx.originalStem` is the fallback a component
+    /// renders to when every token in it is empty, so it doubles as the
+    /// sentinel filtered back out here.
+    static func renderPath(_ template: String, _ ctx: Context) -> [String] {
+        template.split(separator: "/")
+            .map { render(String($0), ctx) }
+            .filter { !$0.isEmpty && $0 != ctx.originalStem }
+    }
+
     /// Appends ` 2`, ` 3`… the way Finder does, so a rename never clobbers.
     static func uniqueURL(in directory: URL, filename: String) -> URL {
         let fm = FileManager.default
