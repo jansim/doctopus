@@ -1268,6 +1268,23 @@ enum SelfTest {
             Check.that("history is newest first",
                        zip(kept, kept.dropFirst()).allSatisfy { $0.at >= $1.at })
 
+            // What somebody typed over the model's answer is as much a part of
+            // "why does it say that" as what the pipeline did — and only that:
+            // nobody signs off their own typing, so a hand edit must not turn
+            // up as a review entry or take a settled document back into review.
+            let approvedBefore = (try? await store.detail(subject.doc))?.row.approved
+            try? await store.logEdit(docID: subject.doc, detail: "Title → Typed by hand")
+            let edited = (try? await store.history(for: subject.doc, limit: 10_000)) ?? []
+            let queueAfterEdit = (try? await store.processingQueue(limit: 10_000)) ?? []
+            Check.that("a hand edit is recorded in the history",
+                       edited.contains { $0.action == "edited"
+                                         && $0.detail == "Title → Typed by hand" })
+            Check.that("a hand edit stays out of the review queue",
+                       queueAfterEdit.count == queue.count,
+                       "\(queueAfterEdit.count) entries, was \(queue.count)")
+            Check.that("a hand edit does not put the document back into review",
+                       (try? await store.detail(subject.doc))?.row.approved == approvedBefore)
+
             // Test undo of file move
             let origPath = subject.path
             let movedTarget = root.appendingPathComponent("Work/undotest-\(subject.filename)")

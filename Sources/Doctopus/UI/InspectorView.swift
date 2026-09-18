@@ -53,9 +53,9 @@ private struct DetailInspector: View {
         .id(row.id)
     }
 
-    /// The model's own output, with the button that produced it. Documents
-    /// indexed before a model was configured land here with nothing to show,
-    /// which is exactly when someone wants to run it by hand.
+    /// The model's own output. Documents indexed before a model was configured
+    /// land here with nothing to show, which is exactly when someone wants to
+    /// run it by hand — and the only time the button earns its line.
     @ViewBuilder
     private var summarySection: some View {
         let analyzing = model.progress.phase == "Analyzing"
@@ -71,16 +71,19 @@ private struct DetailInspector: View {
                      : "No model configured — \(model.modelStatus.label).")
                     .font(.callout).foregroundStyle(.tertiary)
                     .fixedSize(horizontal: false, vertical: true)
+                // Offered only while there is nothing to show. Running it
+                // again on a document that already has a summary is still a
+                // click away in the Document menu and the list's context
+                // menu, and does not need a line in every inspector.
+                Button {
+                    model.analyze([row])
+                } label: {
+                    Label("Analyze with Model", systemImage: "sparkles")
+                        .font(.callout)
+                }
+                .buttonStyle(.link)
+                .disabled(!model.modelStatus.isReady || analyzing)
             }
-            Button {
-                model.analyze([row])
-            } label: {
-                Label(row.summary == nil ? "Analyze with Model" : "Analyze Again",
-                      systemImage: "sparkles")
-                    .font(.callout)
-            }
-            .buttonStyle(.link)
-            .disabled(!model.modelStatus.isReady || analyzing)
         }
     }
 
@@ -146,13 +149,14 @@ private struct DetailInspector: View {
                     }
                 }
                 if let source = detail.metadataSource {
+                    // How sure the extractor was is rarely what anyone opened
+                    // the inspector for, so it waits under the pointer instead
+                    // of taking a coloured bubble of its own.
+                    let hint = detail.metadataConfidence
+                        .map { "\(ConfidenceBadge.percent($0)) confident" }
+                        ?? "How this document's metadata was worked out"
                     InfoRow("Extracted by") {
-                        HStack(spacing: 5) {
-                            Text(Self.sourceLabel(source))
-                            if let c = detail.metadataConfidence {
-                                ConfidenceBadge(value: c)
-                            }
-                        }
+                        Text(Self.sourceLabel(source)).help(hint)
                     }
                 }
             }
@@ -302,8 +306,11 @@ private struct DetailInspector: View {
                     InfoRow("Text") {
                         HStack(spacing: 5) {
                             Text("\(words) words · \(ocrSourceLabel(src))")
+                            // Nothing here needs acting on — a low number
+                            // means a blurry scan, not a wrong answer — so it
+                            // stays neutral rather than turning red.
                             if let c = detail.ocrConfidence, src != "pdf-layer" {
-                                ConfidenceBadge(value: c)
+                                ConfidenceBadge(value: c, muted: true)
                             }
                         }
                     }
@@ -587,15 +594,26 @@ struct Badge: View {
 
 struct ConfidenceBadge: View {
     let value: Double
+    /// A number that is context rather than a verdict, shown in the same grey
+    /// as the rest of its row so it does not read as a warning.
+    var muted: Bool = false
+
+    static func percent(_ value: Double) -> String {
+        "\(Int((value * 100).rounded()))%"
+    }
+
     var body: some View {
-        Text("\(Int((value * 100).rounded()))%")
+        Text(Self.percent(value))
             .font(.caption2.weight(.semibold).monospacedDigit())
             .padding(.horizontal, 5).padding(.vertical, 1)
             .background(color.opacity(0.18), in: Capsule())
             .foregroundStyle(color)
             .help("Confidence")
     }
-    private var color: Color { value >= 0.85 ? .green : (value >= 0.6 ? .orange : .red) }
+    private var color: Color {
+        guard !muted else { return .secondary }
+        return value >= 0.85 ? .green : (value >= 0.6 ? .orange : .red)
+    }
 }
 
 /// Finder-style property list: right-aligned labels in their own gutter, all

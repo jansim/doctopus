@@ -54,6 +54,7 @@ enum UITest {
             await finishedActionsAreToasts(model, snapshots: snapshots)
             await uiStatePersists(model)
             await sidebarShowsBothTagSystems(model, snapshots: snapshots)
+            await handEditsReachTheHistory(model)
             await secondLibraryMerges(model, alongside: library, snapshots: snapshots)
             // Last: they import documents, which the checks above count.
             await reviewPanelFiles(model, snapshots: snapshots)
@@ -509,6 +510,56 @@ enum UITest {
         // The index is a throwaway, but the Finder tag was written to the
         // user's own file and has to go back the way it was found.
         FinderTags.write(originalFinderTags, to: row.url)
+    }
+
+    /// The history was answering "why does it say that" with only what the
+    /// pipeline did, so a title somebody typed over the model's was
+    /// indistinguishable from the model's own. Runs after the check above,
+    /// whose tag and Finder tag were added by hand through the same paths the
+    /// inspector uses.
+    private static func handEditsReachTheHistory(_ model: AppModel) async {
+        guard let row = model.documents.first else { return }
+        model.selectedIDs = [row.id]
+        guard await settle({ model.detail?.row.id == row.id }) else {
+            Check.that("the document a hand edit was made on loads", false)
+            return
+        }
+        let before = model.detail?.history.count ?? 0
+        let queueBefore = model.queue.count
+
+        func recorded(_ needle: String) -> Bool {
+            model.detail?.history.contains {
+                $0.action == "edited" && $0.detail?.contains(needle) == true
+            } == true
+        }
+
+        _ = await settle { recorded("Receipts") && recorded("Blue") }
+        Check.that("a tag added by hand is recorded in the history", recorded("Receipts"),
+                   model.detail?.history.compactMap(\.detail).prefix(3)
+                       .joined(separator: "; ") ?? "no events")
+        Check.that("a Finder tag added by hand is recorded in the history", recorded("Blue"))
+
+        let title = "Titled by the checks"
+        model.editMetadata(row.id, column: "title", value: title)
+        let retitled = await settle { recorded(title) }
+        Check.that("a title typed by hand is recorded in the history", retitled)
+
+        Check.that("hand edits add to the history rather than replacing it",
+                   (model.detail?.history.count ?? 0) > before,
+                   "\(model.detail?.history.count ?? 0) events, was \(before)")
+
+        // A value somebody chose is the answer, not a proposal waiting to be
+        // signed off, so it must not queue the document for review.
+        Check.that("a hand edit does not queue the document for review",
+                   model.queue.count <= queueBefore
+                       && model.documents.first { $0.id == row.id }?.approved != false,
+                   "\(model.queue.count) entries, was \(queueBefore)")
+
+        // The checks below search by title, so the title goes back the way it
+        // was found. The event recording that it was changed stays — that is
+        // the whole point of it.
+        model.editMetadata(row.id, column: "title", value: row.title)
+        _ = await settle { model.documents.first { $0.id == row.id }?.title == row.title }
     }
 
     /// Two libraries open at once: the centre pane merges them, the sort still
