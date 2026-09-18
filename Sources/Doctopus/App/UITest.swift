@@ -669,10 +669,24 @@ enum UITest {
         let (window, host) = host(VStack { FolderRow(node: node, depth: 0) }.environment(model),
                                   size: NSSize(width: 240, height: 90))
         defer { window.orderOut(nil) }
-        try? await Task.sleep(for: .seconds(1))
-        guard let target = dropTarget(in: host, accepting: .doctopusDocument) else {
-            return fail("no drop target on the folder row")
+        // SwiftUI registers the row's dragged types on a subview of the hosting
+        // view, and not before that view has been laid out.
+        let wanted = NSPasteboard.PasteboardType(UTType.doctopusDocument.identifier)
+        var targets: [NSView] = []
+        _ = await settle({
+            targets = dropTargets(in: host)
+            return targets.contains { $0.registeredDraggedTypes.contains(wanted) }
+        }, timeout: 10)
+        let byName = targets.first { $0.registeredDraggedTypes.contains(wanted) }
+        guard let target = byName ?? targets.first else {
+            return fail("nothing under the hosted row takes a drop at all")
         }
+        // Named only when the row did not register the type under the identifier
+        // it was given, which is the one thing here that cannot be read off the
+        // source.
+        let registered = byName == nil
+            ? " · registered \(Set(targets.flatMap { $0.registeredDraggedTypes.map(\.rawValue) }).sorted())"
+            : ""
 
         // A drag carries the whole selection when it starts inside one, and
         // these two rows are not in it.
@@ -692,7 +706,8 @@ enum UITest {
         }, timeout: 20)
         Check.that("a drag onto a folder files the document there as well",
                    filedTaken && aliased && fm.fileExists(atPath: filed.path),
-                   "taken \(filedTaken), filed \(aliased), master still in place \(fm.fileExists(atPath: filed.path))")
+                   "taken \(filedTaken), filed \(aliased), master still in place \(fm.fileExists(atPath: filed.path))"
+                       + registered)
 
         // ⌘ held: the master file itself moves, and nothing is left behind.
         FolderDropIntent.heldModifiers = { NSEvent.ModifierFlags.command }
@@ -727,8 +742,10 @@ enum UITest {
         _ = entry.setData(payload, forType: .init(UTType.doctopusDocument.identifier))
         _ = pasteboard.writeObjects([entry])
 
-        let drag = SyntheticDrag(pasteboard: pasteboard, window: window,
-                                 at: NSPoint(x: 60, y: window.frame.height / 2))
+        // Over the middle of the target itself, in window coordinates: SwiftUI
+        // routes a drop by where it landed, not by which view was handed it.
+        let middle = target.convert(NSPoint(x: target.bounds.midX, y: target.bounds.midY), to: nil)
+        let drag = SyntheticDrag(pasteboard: pasteboard, window: window, at: middle)
         // A move is only ever offered if the source says it would allow one.
         drag.draggingSourceOperationMask = [.copy, .move]
         let taken = target.draggingEntered(drag) != [] && target.draggingUpdated(drag) != []
@@ -751,11 +768,11 @@ enum UITest {
         return view.subviews.lazy.compactMap { dropTarget(in: $0) }.first
     }
 
-    /// The same, narrowed to a target that takes one particular type — a
-    /// sidebar row registers for documents, the panes around it for files.
-    private static func dropTarget(in view: NSView, accepting type: UTType) -> NSView? {
-        if view.registeredDraggedTypes.contains(.init(type.identifier)) { return view }
-        return view.subviews.lazy.compactMap { dropTarget(in: $0, accepting: type) }.first
+    /// Every view in the tree that takes a drop, outermost first. The plural of
+    /// the above, for when which one is wanted depends on what it registered.
+    private static func dropTargets(in view: NSView) -> [NSView] {
+        (view.registeredDraggedTypes.isEmpty ? [] : [view])
+            + view.subviews.flatMap { dropTargets(in: $0) }
     }
 
     private static func host<V: View>(_ view: V, size: NSSize) -> (NSWindow, NSView) {
