@@ -404,6 +404,11 @@ struct FolderRow: View {
         Button("Import Files Here…") { importHere() }
         Divider()
         Button("New Subfolder…") { newSubfolder() }
+        // Renaming the library root would desync it from the `Library` that
+        // was opened at that path; subfolders have no such identity to break.
+        if !node.isRoot {
+            Button("Rename…") { renameFolder() }
+        }
         Button("Reveal in Finder") {
             NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: node.path)])
         }
@@ -426,6 +431,18 @@ struct FolderRow: View {
                                         initial: "Untitled Folder") else { return }
         let url = URL(fileURLWithPath: node.path).appendingPathComponent(name, isDirectory: true)
         try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+    }
+
+    /// Renames the folder on disk. The watcher sees the old path vanish and the
+    /// new one appear, and relinks every document inside by hash — the same
+    /// path the rest of Doctopus already uses for Finder-driven moves.
+    private func renameFolder() {
+        guard let name = TextPrompt.ask(title: "Rename Folder",
+                                        message: "Renames the folder on disk; documents inside keep their tags and metadata.",
+                                        initial: node.name) else { return }
+        let source = URL(fileURLWithPath: node.path)
+        let destination = source.deletingLastPathComponent().appendingPathComponent(name, isDirectory: true)
+        try? FileManager.default.moveItem(at: source, to: destination)
     }
 }
 
