@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import UniformTypeIdentifiers
 import QuickLookThumbnailing
 import QuickLookUI
 
@@ -57,6 +58,7 @@ enum UITest {
             // Last: they import documents, which the checks above count.
             await reviewPanelFiles(model, snapshots: snapshots)
             await droppingAFolderImportsIt(model)
+            await draggingOntoAFolderFilesOrMoves(model)
             Check.finish("ui checks")
         }
         app.run()
@@ -643,7 +645,106 @@ enum UITest {
         for row in model.documents where row.filename.contains(tag) { try? fm.removeItem(at: row.url) }
     }
 
+    /// Driven through AppKit's own drag entry points, in the order a drop
+    /// target sees them: what decides between the two is read while the drag
+    /// is still in the air, so a drop handed straight to the model would not
+    /// exercise it. The row is hosted alone to keep the targets unambiguous.
+    private static func draggingOntoAFolderFilesOrMoves(_ model: AppModel) async {
+        let fm = FileManager.default
+        defer { FolderDropIntent.heldModifiers = { NSEvent.modifierFlags } }
+        func fail(_ why: String) {
+            Check.that("a drag onto a folder files the document there as well", false, why)
+        }
+        guard let library = model.libraries.first else { return fail("no library open") }
+
+        let name = "Dropped-\(UUID().uuidString.prefix(6))"
+        let destination = library.root.appendingPathComponent(name, isDirectory: true)
+        try? fm.createDirectory(at: destination, withIntermediateDirectories: true)
+        let node = FolderNode(path: destination.path, name: name,
+                              children: [], count: 0, deepCount: 0)
+        let (window, host) = host(VStack { FolderRow(node: node, depth: 0) }.environment(model),
+                                  size: NSSize(width: 240, height: 90))
+        defer { window.orderOut(nil) }
+        // SwiftUI registers a drop target under the types the wanted one
+        // conforms to — `public.data` and `public.item` for ours — rather than
+        // under its own identifier, and not before the view has been laid out.
+        func takesDocuments(_ view: NSView) -> Bool {
+            view.registeredDraggedTypes.contains {
+                UTType($0.rawValue).map(UTType.doctopusDocument.conforms(to:)) == true
+            }
+        }
+        var targets: [NSView] = []
+        _ = await settle({
+            targets = dropTargets(in: host)
+            return targets.contains(where: takesDocuments)
+        }, timeout: 10)
+        guard let target = targets.first(where: takesDocuments) else {
+            return fail("nothing under the hosted row takes a Doctopus document · registered "
+                + "\(Set(targets.flatMap { $0.registeredDraggedTypes.map(\.rawValue) }).sorted())")
+        }
+
+        // A drag carries the whole selection when it starts inside one, and
+        // these two rows are not in it.
+        model.selectedIDs = []
+        let candidates = model.documents.filter {
+            $0.library == library.id && !$0.isAliasHere && !$0.missing
+                && $0.directory != destination.path && fm.fileExists(atPath: $0.path)
+        }
+        guard candidates.count >= 2 else { return fail("\(candidates.count) usable documents") }
+
+        FolderDropIntent.heldModifiers = { NSEvent.ModifierFlags() }
+        let filed = candidates[0]
+        let filedTaken = drop(DocumentDragItem(filed), on: target, in: window)
+        let aliased = await settle({
+            ((try? fm.contentsOfDirectory(atPath: destination.path)) ?? []).count > 0
+        }, timeout: 20)
+        Check.that("a drag onto a folder files the document there as well",
+                   filedTaken && aliased && fm.fileExists(atPath: filed.path),
+                   "taken \(filedTaken), filed \(aliased), master still in place \(fm.fileExists(atPath: filed.path))")
+
+        FolderDropIntent.heldModifiers = { NSEvent.ModifierFlags.command }
+        let moving = candidates[1]
+        let cameFrom = URL(fileURLWithPath: moving.directory)
+        let movedTaken = drop(DocumentDragItem(moving), on: target, in: window)
+        let landed = destination.appendingPathComponent(moving.filename)
+        let arrived = await settle({
+            fm.fileExists(atPath: landed.path) && !fm.fileExists(atPath: moving.path)
+        }, timeout: 20)
+        Check.that("⌘ held over the folder moves the file instead of filing it twice",
+                   movedTaken && arrived,
+                   "taken \(movedTaken), at \(name)/\(moving.filename) \(fm.fileExists(atPath: landed.path)), "
+                       + "gone from where it was \(!fm.fileExists(atPath: moving.path))")
+
+        // Put the library back as it was found, alias and all.
+        try? fm.createDirectory(at: cameFrom, withIntermediateDirectories: true)
+        try? fm.moveItem(at: landed, to: cameFrom.appendingPathComponent(moving.filename))
+        try? fm.removeItem(at: destination)
+    }
+
     // MARK: - Harness
+
+    /// Runs one document past a drop target the way AppKit would, and says
+    /// whether it was taken.
+    private static func drop(_ item: DocumentDragItem, on target: NSView, in window: NSWindow) -> Bool {
+        guard let payload = try? JSONEncoder().encode(item) else { return false }
+        let pasteboard = NSPasteboard(name: .init("doctopus-uitest-\(UUID().uuidString)"))
+        defer { pasteboard.releaseGlobally() }
+        pasteboard.clearContents()
+        let entry = NSPasteboardItem()
+        _ = entry.setData(payload, forType: .init(UTType.doctopusDocument.identifier))
+        _ = pasteboard.writeObjects([entry])
+
+        // Over the middle of the target itself, in window coordinates: SwiftUI
+        // routes a drop by where it landed, not by which view was handed it.
+        let middle = target.convert(NSPoint(x: target.bounds.midX, y: target.bounds.midY), to: nil)
+        let drag = SyntheticDrag(pasteboard: pasteboard, window: window, at: middle)
+        // A move is only ever offered if the source says it would allow one.
+        drag.draggingSourceOperationMask = [.copy, .move]
+        let taken = target.draggingEntered(drag) != [] && target.draggingUpdated(drag) != []
+            && target.prepareForDragOperation(drag) && target.performDragOperation(drag)
+        target.concludeDragOperation(drag)
+        return taken
+    }
 
     /// Copies a document with a trailing PDF comment, so an import sees new
     /// bytes rather than skipping a duplicate of what is already in the library.
@@ -657,6 +758,13 @@ enum UITest {
     private static func dropTarget(in view: NSView) -> NSView? {
         if !view.registeredDraggedTypes.isEmpty { return view }
         return view.subviews.lazy.compactMap { dropTarget(in: $0) }.first
+    }
+
+    /// Every view in the tree that takes a drop, outermost first, for when
+    /// which one is wanted depends on what it registered.
+    private static func dropTargets(in view: NSView) -> [NSView] {
+        (view.registeredDraggedTypes.isEmpty ? [] : [view])
+            + view.subviews.flatMap { dropTargets(in: $0) }
     }
 
     private static func host<V: View>(_ view: V, size: NSSize) -> (NSWindow, NSView) {
@@ -778,7 +886,7 @@ private final class SyntheticDrag: NSObject, NSDraggingInfo {
     }
 
     var draggingDestinationWindow: NSWindow? { window }
-    var draggingSourceOperationMask: NSDragOperation { .copy }
+    var draggingSourceOperationMask: NSDragOperation = .copy
     var draggedImageLocation: NSPoint { draggingLocation }
     var draggedImage: NSImage? { nil }
     var draggingSource: Any? { nil }

@@ -287,4 +287,40 @@ extension Store {
     func setTagColor(_ id: Int64, _ color: Int64) throws {
         try db.run("UPDATE tags SET color=? WHERE id=?", [.int(color), .int(id)])
     }
+
+    // MARK: - Per-value icons
+
+    /// Icons chosen for individual values of a field — one for “Invoice”,
+    /// another for “Tax”. Unset values fall back to the field's own icon.
+    func setValueIcon(field: Field, value: String, icon: String?) throws {
+        // A taxonomy value carries its own icon, so renaming it can no longer
+        // orphan one — which is exactly what keying an icon by a string did.
+        if let column = field.builtinColumn, Store.entityColumns[column] != nil {
+            guard let id = try existingEntityID(named: value, builtin: column) else { return }
+            try setEntityIcon(id, icon: icon)
+            return
+        }
+        guard let icon, !icon.isEmpty else {
+            try db.run("DELETE FROM value_icons WHERE field_id=? AND value=?",
+                       [.int(field.fieldID), .text(value)])
+            return
+        }
+        try db.run("""
+            INSERT INTO value_icons(field_id, value, icon) VALUES(?,?,?)
+            ON CONFLICT(field_id, value) DO UPDATE SET icon=excluded.icon
+            """, [.int(field.fieldID), .text(value), .text(icon)])
+    }
+
+    func valueIcons(field: Field) throws -> [String: String] {
+        if let column = field.builtinColumn, Store.entityColumns[column] != nil {
+            return try entities(builtin: column).reduce(into: [:]) { out, entity in
+                if let icon = entity.icon { out[entity.name] = icon }
+            }
+        }
+        var out: [String: String] = [:]
+        try db.query("SELECT value, icon FROM value_icons WHERE field_id=?", [.int(field.fieldID)]) {
+            out[$0.string(0)] = $0.string(1)
+        }
+        return out
+    }
 }

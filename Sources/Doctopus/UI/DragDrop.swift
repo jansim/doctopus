@@ -26,6 +26,48 @@ struct DocumentDragItem: Codable, Transferable, Hashable, Sendable {
         // Also offer the file itself, so a drag out to Finder or Mail works.
         ProxyRepresentation(exporting: \.path)
     }
+
+    /// Reads dragged documents back off a drop's item providers.
+    ///
+    /// Waited out rather than handed a callback: the providers read lazily from
+    /// the drag pasteboard, which the system takes away as soon as the drop
+    /// returns, and a drop that knows whether it took anything is a drop that
+    /// can snap back when it did not.
+    static func read(from providers: [NSItemProvider]) -> [DocumentDragItem] {
+        guard !providers.isEmpty else { return [] }
+        let loads = Loads(count: providers.count)
+        for provider in providers {
+            _ = provider.loadDataRepresentation(for: .doctopusDocument) { data, _ in
+                loads.finish(with: data)
+            }
+        }
+        // Keep the run loop turning in case a loader calls back on main.
+        let deadline = Date(timeIntervalSinceNow: 5)
+        while !loads.isComplete, Date() < deadline {
+            RunLoop.current.run(mode: .default, before: Date(timeIntervalSinceNow: 0.02))
+        }
+        return loads.items
+    }
+
+    /// Provider loads, which finish on arbitrary queues.
+    private final class Loads: @unchecked Sendable {
+        private let lock = NSLock()
+        private var outstanding: Int
+        private var loaded: [DocumentDragItem] = []
+
+        init(count: Int) { outstanding = count }
+
+        func finish(with data: Data?) {
+            let item = data.flatMap { try? JSONDecoder().decode(DocumentDragItem.self, from: $0) }
+            lock.withLock {
+                if let item { loaded.append(item) }
+                outstanding -= 1
+            }
+        }
+
+        var isComplete: Bool { lock.withLock { outstanding == 0 } }
+        var items: [DocumentDragItem] { lock.withLock { loaded } }
+    }
 }
 
 /// What a drop onto a sidebar row should do.
@@ -34,6 +76,100 @@ enum DropAction {
     case move(folder: String)
     case tag(Tag)
     case field(Field, value: String)
+}
+
+/// What a drag onto a folder will do when it is let go, which is the keys'
+/// decision: on its own it files the document in a second place and leaves the
+/// master where it is, and with Command held it moves the master itself — the
+/// same thing ⌘ does to a Finder drag between two volumes.
+enum FolderDropIntent: Equatable {
+    case alias
+    case move
+
+    static func reading(_ modifiers: NSEvent.ModifierFlags) -> FolderDropIntent {
+        modifiers.contains(.command) ? .move : .alias
+    }
+
+    /// Which keys are down. A stored function rather than a call straight to
+    /// `NSEvent`, so the headless checks — which have no keyboard to hold —
+    /// can answer for it.
+    nonisolated(unsafe) static var heldModifiers: () -> NSEvent.ModifierFlags = { NSEvent.modifierFlags }
+
+    /// What the keys say at this instant. Only ever asked while a drag is still
+    /// in the air: read once the drop has landed and its payload has been
+    /// decoded, the keys are back up again, because they come up with the
+    /// mouse button.
+    static var held: FolderDropIntent { reading(heldModifiers()) }
+
+    func action(on folder: String) -> DropAction {
+        switch self {
+        case .alias: return .alias(folder: folder)
+        case .move: return .move(folder: folder)
+        }
+    }
+
+    /// What the row shows while a drag is over it.
+    var label: String {
+        switch self {
+        case .alias: return "File Here"
+        case .move: return "Move Here"
+        }
+    }
+}
+
+/// What the drag currently over a folder row is doing. A class, because SwiftUI
+/// builds the delegate afresh every time the row's body runs, and what was read
+/// while the drag was in the air has to survive into the drop.
+final class FolderDropState {
+    var intent: FolderDropIntent = .alias
+}
+
+/// A folder row's drop target.
+///
+/// `dropDestination` would carry the documents on its own, but it only hands
+/// them over once the drop has landed and its payload has been decoded — far
+/// too late to still know which keys were held. A `DropDelegate` is asked on
+/// every update of the drag instead, which is early enough to read them, and
+/// early enough to tell the row what it is about to do while the drag is still
+/// in the air.
+struct FolderDropDelegate: DropDelegate {
+    let folder: String
+    let model: AppModel
+    /// What the drop acts on. Kept apart from `hovering` because a binding
+    /// handed out on an earlier pass through the row's body can read back what
+    /// that pass saw — fine for a highlight, not for a decision.
+    let state: FolderDropState
+    @Binding var hovering: FolderDropIntent?
+
+    func validateDrop(info: DropInfo) -> Bool {
+        info.hasItemsConforming(to: [.doctopusDocument])
+    }
+
+    func dropEntered(info: DropInfo) { note(.held) }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        note(.held)
+        // Always copy, whichever way the drop will go: an operation the drag's
+        // source did not offer is refused, and a refused drop is a drag that
+        // cannot be let go at all. Which of the two it is, the row says.
+        return DropProposal(operation: .copy)
+    }
+
+    func dropExited(info: DropInfo) { hovering = nil }
+
+    func performDrop(info: DropInfo) -> Bool {
+        hovering = nil
+        let items = DocumentDragItem.read(from: info.itemProviders(for: [.doctopusDocument]))
+        guard !items.isEmpty else { return false }
+        let action = state.intent.action(on: folder)
+        // Drop callbacks arrive on the main thread, which is where the model is.
+        return MainActor.assumeIsolated { model.handleDrop(items, action: action) }
+    }
+
+    private func note(_ intent: FolderDropIntent) {
+        state.intent = intent
+        if hovering != intent { hovering = intent }
+    }
 }
 
 extension AppModel {
@@ -77,13 +213,7 @@ extension AppModel {
 
         switch action {
         case .alias(let folder):
-            // Holding Command turns the default "file it in two places" drop
-            // into a real move of the master file.
-            if NSEvent.modifierFlags.contains(.command) {
-                move(dropped, to: URL(fileURLWithPath: folder))
-            } else {
-                createAliases(dropped, in: URL(fileURLWithPath: folder))
-            }
+            createAliases(dropped, in: URL(fileURLWithPath: folder))
         case .move(let folder):
             move(dropped, to: URL(fileURLWithPath: folder))
         case .tag(let tag):

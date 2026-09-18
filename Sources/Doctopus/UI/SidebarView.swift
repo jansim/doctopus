@@ -325,13 +325,16 @@ private struct TagRow: View {
     }
 }
 
-/// One folder in the physical tree, with its own disclosure state.
-private struct FolderRow: View {
+/// One folder in the physical tree, with its own disclosure state. Not private:
+/// the drop checks host a row of their own.
+struct FolderRow: View {
     @Environment(AppModel.self) private var model
     let node: FolderNode
     let depth: Int
 
-    @State private var targeted = false
+    @State private var hovering: FolderDropIntent?
+    /// Carries what the keys said while the drag was over the row into the drop.
+    @State private var dropState = FolderDropState()
     /// Expanded unless the user has said otherwise, and the exceptions are
     /// remembered across launches.
     private var isExpanded: Bool { !model.collapsedFolders.contains(node.path) }
@@ -366,19 +369,25 @@ private struct FolderRow: View {
                     .lineLimit(1)
                     .truncationMode(.middle)
                 Spacer()
-                CountBadge(node.deepCount)
+                if let hovering {
+                    Text(hovering.label)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    CountBadge(node.deepCount)
+                }
             }
         } icon: {
             Image(systemName: node.isRoot ? "externaldrive" : "folder")
         }
         .help(node.path)
-        .dropHighlight(targeted)
+        .dropHighlight(hovering != nil)
         .padding(.leading, CGFloat(depth) * 11)
         .tag(Selection.folder(node.path))
         .contextMenu { menu }
-        .dropDestination(for: DocumentDragItem.self) { items, _ in
-            model.handleDrop(items, action: .alias(folder: node.path))
-        } isTargeted: { targeted = $0 }
+        .onDrop(of: [.doctopusDocument],
+                delegate: FolderDropDelegate(folder: node.path, model: model,
+                                             state: dropState, hovering: $hovering))
 
         if isExpanded {
             ForEach(node.children) { child in
