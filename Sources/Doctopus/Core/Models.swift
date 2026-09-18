@@ -138,6 +138,9 @@ enum DocumentAction {
 struct DocumentDetail: Sendable {
     var row: DocumentRow
     var hash: String?
+    /// The pre-optimization copy kept for `Revert to Original`, if one is
+    /// still on disk. Nil once it has been reverted to, or deleted by hand.
+    var originalFileURL: URL?
     var intent: String?
     var dateSource: String?
     var metadataSource: String?

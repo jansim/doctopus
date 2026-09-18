@@ -37,6 +37,9 @@ struct ReviewPanel: View {
 private struct DocumentReview: View {
     @Environment(AppModel.self) private var model
     let detail: DocumentDetail
+    // Reset for every document by the `.id(detail.row.id)` ReviewPanel
+    // applies below, so each one starts out asking to drop its original.
+    @State private var keepOriginal = false
     private var row: DocumentRow { detail.row }
 
     var body: some View {
@@ -44,10 +47,10 @@ private struct DocumentReview: View {
             header
             Divider()
             HStack(alignment: .top, spacing: 0) {
-                GeneratedInfoEditor(detail: detail)
+                GeneratedInfoEditor(detail: detail, keepOriginal: $keepOriginal)
                     .frame(minWidth: 250, idealWidth: 330, maxWidth: 400)
                 Divider()
-                FilingEditor(detail: detail, mode: .review)
+                FilingEditor(detail: detail, mode: .review, keepOriginal: keepOriginal)
                     .frame(maxWidth: .infinity)
             }
         }
@@ -89,6 +92,7 @@ private struct DocumentReview: View {
 private struct GeneratedInfoEditor: View {
     @Environment(AppModel.self) private var model
     let detail: DocumentDetail
+    @Binding var keepOriginal: Bool
     @State private var tagInput = ""
     @State private var confirmingDiscard = false
     private var row: DocumentRow { detail.row }
@@ -143,6 +147,10 @@ private struct GeneratedInfoEditor: View {
                 }
                 .padding(.horizontal, 12).padding(.bottom, 10)
             }
+            if let originalURL = detail.originalFileURL {
+                Divider()
+                originalSection(originalURL)
+            }
         }
         .confirmationDialog("Discard what was generated for “\(row.displayTitle)”?",
                             isPresented: $confirmingDiscard) {
@@ -151,6 +159,28 @@ private struct GeneratedInfoEditor: View {
         } message: {
             Text("The title, correspondent, type, language, summary and date that were worked out are cleared, with the tags rules assigned and every pending suggestion. Your own edits, the extracted text and the file itself are kept — Analyze with Model can fill it in again.")
         }
+    }
+
+    /// The file as it arrived, before optimization rasterized it — one tap
+    /// away in case the compressed version lost something worth checking.
+    /// Kept around until the document is approved, and gone after unless
+    /// asked to stay.
+    private func originalSection(_ url: URL) -> some View {
+        HStack(spacing: 10) {
+            Thumbnail(url: url, mtime: row.mtime, size: .row,
+                      width: 28, height: 36, cornerRadius: 2)
+                .onTapGesture { QuickLookController.shared.toggle(urls: [url]) }
+                .help("Quick Look the original, pre-optimization file")
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Original available").font(.caption).foregroundStyle(.secondary)
+                Toggle("Keep the original", isOn: $keepOriginal)
+                    .toggleStyle(.checkbox)
+                    .font(.caption)
+            }
+            Spacer(minLength: 4)
+        }
+        .padding(.horizontal, 12).padding(.vertical, 8)
+        .help("Approving deletes the pre-optimization original unless this is checked")
     }
 
     private var hasGenerated: Bool {
@@ -247,14 +277,19 @@ struct FilingEditor: View {
     @Environment(AppModel.self) private var model
     let detail: DocumentDetail
     let mode: Mode
+    /// Whether to spare this document's pre-optimization original, if it has
+    /// one, when the Approve button here also approves it. Only `.review`
+    /// passes this in; `.sheet` never approves, so it never matters there.
+    var keepOriginal: Bool
 
     @State private var primary: String
     @State private var secondaries: Set<String>
     @State private var chosen: [FilingOption] = []
 
-    init(detail: DocumentDetail, mode: Mode) {
+    init(detail: DocumentDetail, mode: Mode, keepOriginal: Bool = true) {
         self.detail = detail
         self.mode = mode
+        self.keepOriginal = keepOriginal
         _primary = State(initialValue: detail.row.directory)
         _secondaries = State(initialValue: Set(detail.folderAliases.map {
             ($0 as NSString).deletingLastPathComponent }))
@@ -443,7 +478,8 @@ struct FilingEditor: View {
 
     private func apply(approve: Bool, advance: Bool) {
         model.file(row, in: URL(fileURLWithPath: primary, isDirectory: true), alsoIn: secondaries,
-                   approve: approve, advance: advance && model.selection.isQueueMode)
+                   approve: approve, keepOriginal: keepOriginal,
+                   advance: advance && model.selection.isQueueMode)
     }
 
     private func displayPath(_ path: String) -> String {

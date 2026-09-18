@@ -52,8 +52,13 @@ extension AppModel {
     ///
     /// This is the review's one button, so it can also approve the document
     /// and step on to the next one.
+    ///
+    /// `keepOriginal` only matters when `approve` is true: left false, the
+    /// pre-optimization file kept for `Revert to Original` — if this document
+    /// has one — is freed once the document is accepted, since a review that
+    /// went well is the moment it stops being needed.
     func file(_ row: DocumentRow, in primary: URL, alsoIn secondaries: Set<String>,
-              approve: Bool, advance: Bool = false) {
+              approve: Bool, keepOriginal: Bool = true, advance: Bool = false) {
         guard let lib = library(of: row) else { return }
         guard lib.owns(path: primary.path) else {
             errorMessage = "“\(primary.lastPathComponent)” is outside \(lib.displayName). A document can only be filed within its own library."
@@ -104,7 +109,10 @@ extension AppModel {
                 added.append((folder as NSString).lastPathComponent)
             }
 
-            if approve { try? await lib.store.setDocumentApproved(row.doc, true) }
+            if approve {
+                try? await lib.store.setDocumentApproved(row.doc, true)
+                if !keepOriginal { try? await lib.store.deleteOriginalFile(for: row.doc) }
+            }
             if let next { selectedIDs = [next] }
             refreshAll()
             reloadDetail()

@@ -411,6 +411,7 @@ extension Store {
         d.dateCandidates = try dateCandidates(for: id)
         d.row.finderTags = try finderTags(docID: id)
         d.aliases = try aliases(for: id).map(\.path)
+        d.originalFileURL = try? originalFileURL(for: id)
         return d
     }
 
