@@ -831,6 +831,15 @@ actor Store {
             """, [.int(Store.queueLength - 1)])
     }
 
+    /// A change somebody made by hand. It joins the record but never the
+    /// review queue: what the user typed is the answer, not a proposal, so
+    /// recording it must not push the document back into review.
+    func logEdit(docID: Int64, detail: String) throws {
+        try db.run("INSERT INTO events(doc_id, at, action, detail) VALUES(?,?,?,?)",
+                   [.int(docID), .double(Date().timeIntervalSince1970),
+                    .text("edited"), .text(detail)])
+    }
+
     func processingQueue(limit: Int = 200) throws -> [ProcessingEntry] {
         try db.map("""
             SELECT p.id, p.doc_id, e.at, e.action, e.detail, e.confidence, e.rule,

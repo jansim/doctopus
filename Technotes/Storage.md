@@ -49,7 +49,7 @@ statements. FTS5 with `unicode61 remove_diacritics 2`.
 | `tags`, `document_tags` | Relational junction for multi-tag assignment. Tags nest up to five deep, and assigning a child attaches every ancestor |
 | `tag_suggestions` | Model-proposed tags awaiting acceptance or dismissal, kept apart from `document_tags` so they never count toward a tag's sidebar total |
 | `path_suggestions` | Every folder the router considered for a new document, best first — what the review offers, and all there is to go on when it moved nothing |
-| `events`, `processing` | `events` is the append-only record of what happened to a document, never trimmed, and the inspector's History. `processing` is the bounded recency view the review reads, holding only which event is on show and whether it has been signed off |
+| `events`, `processing` | `events` is the append-only record of what happened to a document, never trimmed, and the inspector's History — what the pipeline did to it, and what somebody changed by hand afterwards. `processing` is the bounded recency view the review reads, holding only which event is on show and whether it has been signed off; a hand edit never enters it |
 | `finder_tags` | Index of the Finder's own tags, which live on the files themselves |
 | `value_icons` | Per-value icons for the fields whose values are still strings; a correspondent or type keeps its icon on its own row, where a rename cannot orphan it |
 | `aliases` | Registry of generated Finder aliases, for automated pruning when tags change |

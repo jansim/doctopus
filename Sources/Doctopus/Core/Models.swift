@@ -113,6 +113,7 @@ enum DocumentAction {
         case "unfiled": return "folder.badge.minus"
         case "imported": return "tray.and.arrow.down"
         case "analyzed": return "sparkles"
+        case "edited": return "pencil"
         default: return "doc.text.magnifyingglass"
         }
     }
@@ -128,6 +129,7 @@ enum DocumentAction {
         case "imported": return "Imported"
         case "analyzed": return "Analyzed"
         case "indexed": return "Indexed"
+        case "edited": return "Edited by hand"
         default: return action.capitalized
         }
     }

@@ -53,9 +53,9 @@ private struct DetailInspector: View {
         .id(row.id)
     }
 
-    /// The model's own output, with the button that produced it. Documents
-    /// indexed before a model was configured land here with nothing to show,
-    /// which is exactly when someone wants to run it by hand.
+    /// The model's own output. Documents indexed before a model was configured
+    /// land here with nothing to show, which is exactly when someone wants to
+    /// run it by hand — and the only time the button earns its line.
     @ViewBuilder
     private var summarySection: some View {
         let analyzing = model.progress.phase == "Analyzing"
@@ -71,16 +71,15 @@ private struct DetailInspector: View {
                      : "No model configured — \(model.modelStatus.label).")
                     .font(.callout).foregroundStyle(.tertiary)
                     .fixedSize(horizontal: false, vertical: true)
+                Button {
+                    model.analyze([row])
+                } label: {
+                    Label("Analyze with Model", systemImage: "sparkles")
+                        .font(.callout)
+                }
+                .buttonStyle(.link)
+                .disabled(!model.modelStatus.isReady || analyzing)
             }
-            Button {
-                model.analyze([row])
-            } label: {
-                Label(row.summary == nil ? "Analyze with Model" : "Analyze Again",
-                      systemImage: "sparkles")
-                    .font(.callout)
-            }
-            .buttonStyle(.link)
-            .disabled(!model.modelStatus.isReady || analyzing)
         }
     }
 
@@ -146,13 +145,13 @@ private struct DetailInspector: View {
                     }
                 }
                 if let source = detail.metadataSource {
+                    // Rarely what anyone opened the inspector for, so it
+                    // waits under the pointer.
+                    let hint = detail.metadataConfidence
+                        .map { "\(ConfidenceBadge.percent($0)) confident" }
+                        ?? "How this document's metadata was worked out"
                     InfoRow("Extracted by") {
-                        HStack(spacing: 5) {
-                            Text(Self.sourceLabel(source))
-                            if let c = detail.metadataConfidence {
-                                ConfidenceBadge(value: c)
-                            }
-                        }
+                        Text(Self.sourceLabel(source)).help(hint)
                     }
                 }
             }
@@ -302,8 +301,10 @@ private struct DetailInspector: View {
                     InfoRow("Text") {
                         HStack(spacing: 5) {
                             Text("\(words) words · \(ocrSourceLabel(src))")
+                            // A low number here is a blurry scan, not a
+                            // wrong answer.
                             if let c = detail.ocrConfidence, src != "pdf-layer" {
-                                ConfidenceBadge(value: c)
+                                ConfidenceBadge(value: c, muted: true)
                             }
                         }
                     }
@@ -587,15 +588,26 @@ struct Badge: View {
 
 struct ConfidenceBadge: View {
     let value: Double
+    /// A number that is context rather than a verdict, shown in the row's
+    /// own grey so it does not read as a warning.
+    var muted: Bool = false
+
+    static func percent(_ value: Double) -> String {
+        "\(Int((value * 100).rounded()))%"
+    }
+
     var body: some View {
-        Text("\(Int((value * 100).rounded()))%")
+        Text(Self.percent(value))
             .font(.caption2.weight(.semibold).monospacedDigit())
             .padding(.horizontal, 5).padding(.vertical, 1)
             .background(color.opacity(0.18), in: Capsule())
             .foregroundStyle(color)
             .help("Confidence")
     }
-    private var color: Color { value >= 0.85 ? .green : (value >= 0.6 ? .orange : .red) }
+    private var color: Color {
+        guard !muted else { return .secondary }
+        return value >= 0.85 ? .green : (value >= 0.6 ? .orange : .red)
+    }
 }
 
 /// Finder-style property list: right-aligned labels in their own gutter, all

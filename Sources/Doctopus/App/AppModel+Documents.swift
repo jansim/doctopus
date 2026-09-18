@@ -3,6 +3,12 @@ import AppKit
 
 extension AppModel {
 
+    /// How an edit reads in the history: "Amount → €49,90", or "Amount cleared".
+    static func editDetail(_ label: String, _ value: String?) -> String {
+        guard let value = value?.nilIfBlank else { return "\(label) cleared" }
+        return "\(label) → \(value)"
+    }
+
     // MARK: - Document actions
 
     /// Space and the Document menu land here.
@@ -49,6 +55,7 @@ extension AppModel {
                 guard let id = try? await lib.store.tagID(named: name), id > 0 else { continue }
                 for row in rows {
                     try? await lib.store.assign(tag: id, to: row.doc)
+                    try? await lib.store.logEdit(docID: row.doc, detail: "Tagged “\(name)”")
                     await lib.indexer.syncAliases(docID: row.doc, target: row.url)
                 }
             }
@@ -63,6 +70,7 @@ extension AppModel {
         Task {
             for row in rows where row.library == tag.library {
                 try? await lib.store.unassign(tag: tag.tagID, from: row.doc)
+                try? await lib.store.logEdit(docID: row.doc, detail: "Untagged “\(tag.name)”")
                 await lib.indexer.syncAliases(docID: row.doc, target: row.url)
             }
             refreshAll()
@@ -75,6 +83,8 @@ extension AppModel {
         guard let lib = library(of: row) else { return }
         Task {
             try? await lib.store.acceptTagSuggestion(suggestion.name, for: row.doc)
+            try? await lib.store.logEdit(docID: row.doc,
+                                         detail: "Tagged “\(suggestion.name)”")
             await lib.indexer.syncAliases(docID: row.doc, target: row.url)
             refreshAll()
             reloadDetail()
@@ -165,6 +175,8 @@ extension AppModel {
             for (lib, rows) in grouped(rows) {
                 for row in rows where FinderTags.add(clean, to: row.url) {
                     try? await lib.store.indexFinderTags(docID: row.doc, entries: FinderTags.entries(row.url))
+                    try? await lib.store.logEdit(docID: row.doc,
+                                                 detail: "Finder tag “\(clean)” added")
                 }
             }
             refreshAll()
@@ -177,6 +189,8 @@ extension AppModel {
             for (lib, rows) in grouped(rows) {
                 for row in rows where FinderTags.remove(name, from: row.url) {
                     try? await lib.store.indexFinderTags(docID: row.doc, entries: FinderTags.entries(row.url))
+                    try? await lib.store.logEdit(docID: row.doc,
+                                                 detail: "Finder tag “\(name)” removed")
                 }
             }
             if selection == .finderTag(name) { selection = .all }
@@ -216,6 +230,7 @@ extension AppModel {
         guard let lib = library(ref.library), body.nilIfBlank != nil else { return }
         Task {
             _ = try? await lib.store.addNote(body, to: ref.doc)
+            try? await lib.store.logEdit(docID: ref.doc, detail: "Note added")
             reloadDetail()
         }
     }
@@ -224,6 +239,9 @@ extension AppModel {
         guard let lib = library(ref.library) else { return }
         Task {
             try? await lib.store.updateNote(id, body: body)
+            // Editing a note to nothing deletes it.
+            try? await lib.store.logEdit(docID: ref.doc,
+                                         detail: body.nilIfBlank == nil ? "Note deleted" : "Note edited")
             reloadDetail()
         }
     }
@@ -232,6 +250,7 @@ extension AppModel {
         guard let lib = library(ref.library) else { return }
         Task {
             try? await lib.store.deleteNote(id)
+            try? await lib.store.logEdit(docID: ref.doc, detail: "Note deleted")
             reloadDetail()
         }
     }
@@ -242,6 +261,8 @@ extension AppModel {
                 guard let owned = lib.fields.first(where: { $0.key == field.key }) else { continue }
                 for row in rows {
                     try? await lib.store.setFieldValue(docID: row.doc, field: owned, value: value)
+                    try? await lib.store.logEdit(docID: row.doc,
+                                                 detail: Self.editDetail(field.name, value))
                 }
             }
             reloadDetail()
@@ -254,6 +275,7 @@ extension AppModel {
               let owned = lib.fields.first(where: { $0.key == field.key }) else { return }
         Task {
             try? await lib.store.setFieldValue(docID: ref.doc, field: owned, value: value)
+            try? await lib.store.logEdit(docID: ref.doc, detail: Self.editDetail(field.name, value))
             reloadDetail()
             refreshAll()
         }
@@ -344,17 +366,30 @@ extension AppModel {
 
     func editMetadata(_ ref: DocumentRef, column: String, value: String?) {
         guard let lib = library(ref.library) else { return }
+        let label = columnLabel(column)
         Task {
             try? await lib.store.overwriteMetadataField(ref.doc, column: column, value: value?.nilIfBlank)
+            try? await lib.store.logEdit(docID: ref.doc,
+                                         detail: Self.editDetail(label, value))
             reloadDetail()
             reloadDocuments()
         }
+    }
+
+    /// `title` and `summary` are edited straight; every other column is
+    /// reached through a `Field`, which carries the name the user gave it.
+    private func columnLabel(_ column: String) -> String {
+        if let field = fields.first(where: { $0.builtinColumn == column }) { return field.name }
+        return column == "summary" ? "Summary" : "Title"
     }
 
     func setDocumentDate(_ ref: DocumentRef, _ date: Date?) {
         guard let lib = library(ref.library) else { return }
         Task {
             try? await lib.store.setDocumentDate(ref.doc, date)
+            try? await lib.store.logEdit(
+                docID: ref.doc,
+                detail: Self.editDetail("Date", date.map(DayDate.display)))
             reloadDetail()
             reloadDocuments()
         }
