@@ -39,10 +39,6 @@ struct DocumentListView: View {
             }
         }
         .overlay(alignment: .center) { emptyState }
-        .onKeyPress(.space) {
-            model.quickLook()
-            return .handled
-        }
         .dropDestination(for: URL.self) { urls, _ in
             model.handleDroppedFiles(urls)
         } isTargeted: { dropTargeted = $0 }
