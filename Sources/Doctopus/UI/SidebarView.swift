@@ -474,32 +474,25 @@ private struct StatusFooter: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
+        VStack(alignment: .leading, spacing: 0) {
             Divider()
             HStack(spacing: 6) {
                 Circle()
                     .fill(model.modelStatus.isReady ? Color.green : Color.secondary.opacity(0.5))
                     .frame(width: 6, height: 6)
                 Text(model.modelStatus.isReady ? model.settings.llmBackend.label : "Heuristics only")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Spacer()
-            }
-            .help(model.modelStatus.label)
-            HStack {
-                Text("\(model.stats.total) docs · \(ByteFormat.string(model.stats.bytes))")
-                if model.stats.saved > 0 {
-                    Text("· saved \(ByteFormat.string(model.stats.saved))")
-                        .foregroundStyle(.green)
-                }
-                Spacer()
+                    .lineLimit(1)
+                Spacer(minLength: 6)
+                Text("\(model.stats.total.formatted()) doc\(model.stats.total == 1 ? "" : "s")")
+                    .monospacedDigit()
             }
             .font(.caption)
             .foregroundStyle(.secondary)
+            .help(model.modelStatus.label)
+            .padding(.top, 6)
         }
         .padding(.horizontal, 12)
         .padding(.bottom, 8)
-        .padding(.top, 2)
     }
 }
 
