@@ -439,11 +439,12 @@ private struct RoutingSettings: View {
     }
 
     private func save(_ rule: Rule) {
-        guard let store = model.settingsLibrary?.store else { return }
+        guard let library = model.settingsLibrary else { return }
         Task {
-            let id = (try? await store.upsertRule(rule)) ?? rule.id
+            let id = (try? await library.store.upsertRule(rule)) ?? rule.id
             await load()
             selected = id
+            model.refreshPendingRoutingSuggestions(in: library)
         }
     }
 
@@ -466,27 +467,29 @@ private struct RoutingSettings: View {
     }
 
     private func remove(_ id: Rule.ID) {
-        guard let store = model.settingsLibrary?.store else { return }
+        guard let library = model.settingsLibrary else { return }
         Task {
-            try? await store.deleteRule(id)
+            try? await library.store.deleteRule(id)
             if selected == id { selected = nil }
             await load()
+            model.refreshPendingRoutingSuggestions(in: library)
         }
     }
 
     /// Order is priority, so moving a rule rewrites every priority to match
     /// the new order rather than trying to squeeze one number in between.
     private func move(_ id: Rule.ID, by offset: Int) {
-        guard let store = model.settingsLibrary?.store,
+        guard let library = model.settingsLibrary,
               let index = rules.firstIndex(where: { $0.id == id }) else { return }
         let target = index + offset
         guard rules.indices.contains(target) else { return }
         var ordered = rules.map(\.id)
         ordered.swapAt(index, target)
         Task {
-            try? await store.reorderRules(ordered)
+            try? await library.store.reorderRules(ordered)
             await load()
             selected = id
+            model.refreshPendingRoutingSuggestions(in: library)
         }
     }
 }

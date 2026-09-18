@@ -12,6 +12,18 @@ extension AppModel {
         }
     }
 
+    /// A rule was added, edited, deleted or reordered — everything still
+    /// waiting in the queue should show what routing now says, not what it
+    /// said when it was filed.
+    func refreshPendingRoutingSuggestions(in lib: Library) {
+        Task {
+            let ids = (try? await lib.store.pendingDocumentIDs()) ?? []
+            await lib.indexer.refreshPathSuggestions(for: ids)
+            refreshAll()
+            reloadDetail()
+        }
+    }
+
     /// Approval is per document: approving settles every queue entry it has,
     /// so it leaves Needs Review for good rather than until the next entry.
     func setApproved(_ rows: [DocumentRow], _ approved: Bool) {

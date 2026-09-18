@@ -251,6 +251,63 @@ enum SelfTest {
                 .sorted { $0.priority > $1.priority }.map(\.id))
         }
 
+        print("\nSUGGESTION REFRESH")
+        func lastComponent(_ path: String?) -> String {
+            path.map { URL(fileURLWithPath: $0).lastPathComponent } ?? "—"
+        }
+
+        var invoiceRow: DocumentRow?
+        for row in rows {
+            let text = (try? await store.ocrText(row.doc)) ?? ""
+            let subject = Router.subject(for: Router.starterRules[0].field, text: text, filename: row.filename,
+                                         correspondent: row.correspondent, docType: row.docType)
+            if Router.matches(Router.starterRules[0], in: subject) { invoiceRow = row; break }
+        }
+        if let invoiceRow, let originalDate = invoiceRow.docDate {
+            // What a hand-corrected date should immediately change: the
+            // suggested folder, without a reprocess.
+            let shifted = DayDate.calendar.date(byAdding: .year, value: -5, to: originalDate) ?? originalDate
+            let expectedYear = String(DayDate.calendar.component(.year, from: shifted))
+            let before = (try? await store.pathSuggestions(for: invoiceRow.doc))?.first?.path
+            try? await store.setDocumentDate(invoiceRow.doc, shifted)
+            await indexer.refreshPathSuggestions(for: [invoiceRow.doc])
+            let after = (try? await store.pathSuggestions(for: invoiceRow.doc))?.first?.path
+            print("  \(invoiceRow.filename.padded(38)) \(lastComponent(before)) → \(lastComponent(after))")
+            Check.that("a hand-edited date updates the suggested path immediately",
+                       after != before && lastComponent(after) == expectedYear,
+                       "\(lastComponent(before)) → \(lastComponent(after)), expected \(expectedYear)")
+
+            // Put the date back so what follows sees the fixture as described.
+            try? await store.setDocumentDate(invoiceRow.doc, originalDate)
+            await indexer.refreshPathSuggestions(for: [invoiceRow.doc])
+        }
+
+        if let invoiceRow {
+            // Forced unapproved rather than trusting the fixture's own state,
+            // so this check exercises "awaiting review" regardless of how the
+            // demo library happened to route on import.
+            try? await store.setDocumentApproved(invoiceRow.doc, false)
+            let pendingIDs = (try? await store.pendingDocumentIDs()) ?? []
+            Check.that("an unapproved document is awaiting review", pendingIDs.contains(invoiceRow.doc),
+                       "\(pendingIDs.count) pending")
+
+            if var invoices = ((try? await store.rules()) ?? []).first(where: { $0.name == "Invoices" }) {
+                let originalDestination = invoices.destination
+                invoices.destination = "Finances/Invoices-Renamed/{year}"
+                _ = try? await store.upsertRule(invoices)
+                await indexer.refreshPathSuggestions(for: pendingIDs)
+                let top = (try? await store.pathSuggestions(for: invoiceRow.doc))?.first
+                Check.that("editing a rule is reflected in the queue's suggestions without reprocessing",
+                           top?.path.contains("Invoices-Renamed") == true, top?.path ?? "—")
+
+                // Restore, and put the queue's suggestions back too.
+                invoices.destination = originalDestination
+                _ = try? await store.upsertRule(invoices)
+                await indexer.refreshPathSuggestions(for: pendingIDs)
+            }
+            try? await store.setDocumentApproved(invoiceRow.doc, true)
+        }
+
         print("\nFIELDS")
         let fields = (try? await store.fields()) ?? []
         for field in fields {

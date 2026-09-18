@@ -69,4 +69,49 @@ extension Store {
                            source: $0.string(2), explanation: $0.stringOrNil(3))
         }
     }
+
+    // MARK: - Re-routing what is already in the library
+
+    /// What `Router` needs to re-evaluate a document that is already indexed,
+    /// built from its current fields rather than a fresh analysis — so a
+    /// hand-corrected date or correspondent is what the router sees, not
+    /// whatever it read the first time.
+    struct RoutingSample: Sendable {
+        var filename: String
+        var directory: URL
+        var text: String
+        var findings: DocumentAnalyzer.Findings
+    }
+
+    func routingSample(_ docID: Int64) throws -> RoutingSample? {
+        try db.first("""
+            SELECT d.filename, d.directory, ec.name, et.name, m.doc_date, m.confidence, m.amount,
+                   (SELECT f.body FROM doc_fts f WHERE f.rowid = d.id)
+            FROM documents d
+            LEFT JOIN metadata m ON m.doc_id = d.id
+            LEFT JOIN entities ec ON ec.id = m.correspondent_id
+            LEFT JOIN entities et ON et.id = m.doc_type_id
+            WHERE d.id = ? AND d.missing=0 AND d.deleted_at IS NULL
+            """, [.int(docID)]) { row in
+            var findings = DocumentAnalyzer.Findings()
+            findings.date = row.date(4)
+            findings.correspondent = row.stringOrNil(2)
+            findings.docType = row.stringOrNil(3)
+            findings.amount = row.stringOrNil(6)
+            findings.confidence = row.doubleOrNil(5) ?? 0.5
+            return RoutingSample(filename: row.string(0), directory: url(forRelative: row.string(1)),
+                                 text: row.stringOrNil(7) ?? "", findings: findings)
+        }
+    }
+
+    /// Documents still awaiting review — approval pending on the document
+    /// itself or on its newest processing entry. What a rule change has to
+    /// reach, so a suggestion the edit made stale does not linger.
+    func pendingDocumentIDs() throws -> [Int64] {
+        try db.map("""
+            SELECT id FROM documents
+            WHERE missing=0 AND deleted_at IS NULL
+              AND (approved=0 OR id IN (SELECT doc_id FROM processing WHERE status=0))
+            """) { $0.int(0) }
+    }
 }

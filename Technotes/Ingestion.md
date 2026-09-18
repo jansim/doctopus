@@ -41,6 +41,12 @@ and where it sits in the evaluation order. The editor shows how the pattern
 will be read, how many documents already in the library it matches, and where a
 document would land.
 
+Suggestions are never left stale. Saving, deleting or reordering a rule
+recomputes the candidates for everything still waiting in Needs Review, and
+hand-correcting a field the router reads — the date behind `{year}`, a
+correspondent, a document type — recomputes that one document's candidates
+immediately. Neither moves a file; only what is offered next changes.
+
 ## OCR
 
 PDFs are read through their embedded text layer first, which is nearly free;

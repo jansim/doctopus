@@ -419,6 +419,26 @@ actor Indexer {
         }
     }
 
+    /// Recomputes path suggestions for documents already in the library, from
+    /// whatever their fields say right now — a rule that just changed, or a
+    /// field someone corrected by hand. Only the suggestions move; nothing on
+    /// disk does, so this is safe to run for a whole queue's worth of documents
+    /// after a rule edit.
+    func refreshPathSuggestions(for docIDs: [Int64]) async {
+        guard !docIDs.isEmpty else { return }
+        let router = Router(rules: (try? await store.rules()) ?? [],
+                            threshold: settings.routingThreshold,
+                            derivedTemplate: settings.derivedTemplate,
+                            root: store.root, deriveWhenNoRule: settings.deriveWhenNoRule)
+        for docID in docIDs {
+            guard let sample = try? await store.routingSample(docID) else { continue }
+            let decision = router.evaluate(text: sample.text, filename: sample.filename,
+                                           findings: sample.findings, insight: nil,
+                                           currentDirectory: sample.directory)
+            try? await store.setPathSuggestions(decision.candidates, for: docID)
+        }
+    }
+
     /// Brings the on-disk aliases in line with the document's mirroring tags.
     ///
     /// Only tag aliases are Doctopus's to prune. An alias someone made by

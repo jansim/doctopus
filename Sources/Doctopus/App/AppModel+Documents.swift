@@ -264,6 +264,9 @@ extension AppModel {
                     try? await lib.store.logEdit(docID: row.doc,
                                                  detail: Self.editDetail(field.name, value))
                 }
+                // What was misread and just got fixed by hand should be what
+                // the suggested folder reflects too, straight away.
+                await lib.indexer.refreshPathSuggestions(for: rows.map(\.doc))
             }
             reloadDetail()
             refreshAll()
@@ -276,6 +279,7 @@ extension AppModel {
         Task {
             try? await lib.store.setFieldValue(docID: ref.doc, field: owned, value: value)
             try? await lib.store.logEdit(docID: ref.doc, detail: Self.editDetail(field.name, value))
+            await lib.indexer.refreshPathSuggestions(for: [ref.doc])
             reloadDetail()
             refreshAll()
         }
@@ -371,6 +375,7 @@ extension AppModel {
             try? await lib.store.overwriteMetadataField(ref.doc, column: column, value: value?.nilIfBlank)
             try? await lib.store.logEdit(docID: ref.doc,
                                          detail: Self.editDetail(label, value))
+            await lib.indexer.refreshPathSuggestions(for: [ref.doc])
             reloadDetail()
             reloadDocuments()
         }
@@ -390,6 +395,9 @@ extension AppModel {
             try? await lib.store.logEdit(
                 docID: ref.doc,
                 detail: Self.editDetail("Date", date.map(DayDate.display)))
+            // A rule keyed on {year} needs the corrected date reflected in the
+            // suggested folder immediately, not on the next reprocess.
+            await lib.indexer.refreshPathSuggestions(for: [ref.doc])
             reloadDetail()
             reloadDocuments()
         }
