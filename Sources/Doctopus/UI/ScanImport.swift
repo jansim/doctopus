@@ -108,6 +108,31 @@ struct ScanSession: Equatable, Sendable {
     }
 }
 
+/// Quits and reopens Doctopus — the only way back once the Continuity Camera
+/// item has stopped offering a device it plainly ought to see. It is
+/// installed exactly once, from `applicationDidFinishLaunching`; nothing
+/// later in the app's life can put it through that step again, and a fresh
+/// launch is the whole fix.
+enum AppRelauncher {
+    @MainActor
+    static func confirmAndRelaunch() {
+        let alert = NSAlert()
+        alert.messageText = "Relaunch Doctopus?"
+        alert.informativeText = "Everything here is already saved, so nothing is lost. Only a fresh launch can make Doctopus visible to Continuity Camera again."
+        alert.addButton(withTitle: "Relaunch")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        // Forced, since the instance being asked to open a new one is the very
+        // one about to quit — without it the request could just as easily
+        // activate the instance now terminating instead of starting a fresh one.
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.createsNewApplicationInstance = true
+        NSWorkspace.shared.openApplication(at: Bundle.main.bundleURL, configuration: configuration)
+        NSApp.terminate(nil)
+    }
+}
+
 /// Continuity Camera bridge.
 ///
 /// The mechanism is a single `NSMenuItem` carrying
@@ -331,6 +356,12 @@ struct ScanMenu: View {
         Menu("Import from iPhone or iPad") {
             if devices.isEmpty {
                 Button("No iPhone or iPad Nearby") {}.disabled(true)
+                Divider()
+                // The live submenu this reads is rebuilt by the system on its
+                // own schedule; when it has stopped finding a device that is
+                // plainly in range, nothing short of relaunching brings the
+                // Continuity Camera item back to life — see `ScanCoordinator`.
+                Button("Relaunch to Check Again…") { AppRelauncher.confirmAndRelaunch() }
             } else {
                 ForEach(devices) { device in
                     Section(device.name) {
