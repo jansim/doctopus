@@ -371,6 +371,11 @@ private struct DocumentGalleryView: View {
     @Binding var renameSheet: Bool
     @Binding var tagSheet: Bool
     @Binding var filingRow: DocumentRow?
+    /// Where a ⇧-extended selection reaches back to. Only a plain or ⌘ click
+    /// moves it; a ⇧ click reads it without disturbing it, the way Finder's
+    /// icon view does, so a run of ⇧ clicks keeps extending from the same spot
+    /// rather than walking forward one cell at a time.
+    @State private var selectionAnchor: DocumentRef?
 
     private var cell: CGFloat { CGFloat(model.settings.galleryThumbnailSize) }
 
@@ -416,11 +421,22 @@ private struct DocumentGalleryView: View {
     }
 
     private func select(_ row: DocumentRow) {
-        if NSEvent.modifierFlags.contains(.command) {
+        let modifiers = NSEvent.modifierFlags
+        if modifiers.contains(.shift), let anchor = selectionAnchor,
+           let anchorIndex = model.documents.firstIndex(where: { $0.id == anchor }),
+           let rowIndex = model.documents.firstIndex(where: { $0.id == row.id }) {
+            let range = anchorIndex < rowIndex ? anchorIndex...rowIndex : rowIndex...anchorIndex
+            let ids = Set(model.documents[range].map(\.id))
+            // ⌘⇧ adds the run to whatever was already selected, plain ⇧
+            // replaces the selection with it — the same split Finder makes.
+            model.selectedIDs = modifiers.contains(.command) ? model.selectedIDs.union(ids) : ids
+        } else if modifiers.contains(.command) {
             if model.selectedIDs.contains(row.id) { model.selectedIDs.remove(row.id) }
             else { model.selectedIDs.insert(row.id) }
+            selectionAnchor = row.id
         } else {
             model.selectedIDs = [row.id]
+            selectionAnchor = row.id
         }
     }
 }
