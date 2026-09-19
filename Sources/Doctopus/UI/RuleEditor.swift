@@ -67,10 +67,21 @@ struct RuleEditor: View {
                 }
 
                 Section {
-                    TextField(text: $draft.destination, prompt: Text("Finances/Invoices/{year}")) {
-                        Text("Destination").font(.body)
+                    HStack(spacing: 6) {
+                        TextField(text: $draft.destination, prompt: Text("Finances/Invoices/{year}")) {
+                            Text("Destination").font(.body)
+                        }
+                        .font(.system(.body, design: .monospaced))
+                        Button {
+                            guard let chosen = FolderPicker.chooseRelativePath(
+                                in: library, message: "Choose a folder inside \(library.displayName).")
+                            else { return }
+                            draft.destination = chosen
+                        } label: {
+                            Image(systemName: "folder")
+                        }
+                        .help("Choose a folder")
                     }
-                    .font(.system(.body, design: .monospaced))
                     HStack(spacing: 4) {
                         ForEach(["{year}", "{month}", "{correspondent}", "{type}"], id: \.self) { token in
                             Button(token) { append(token) }

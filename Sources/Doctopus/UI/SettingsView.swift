@@ -340,7 +340,8 @@ private struct RoutingSettings: View {
                     Toggle("Derive a folder when no rule matches", isOn: $model.settings.deriveWhenNoRule)
                         .disabled(!model.settings.autoRouteImports)
                     TemplateField(title: "Derived path template",
-                                  template: $model.settings.derivedTemplate, kind: .path)
+                                  template: $model.settings.derivedTemplate, kind: .path,
+                                  library: model.settingsLibrary)
                         .disabled(!model.settings.deriveWhenNoRule)
                     LabeledContent("Confidence threshold") {
                         HStack {

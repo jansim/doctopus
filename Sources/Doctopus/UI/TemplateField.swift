@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 /// One token `Naming.render` understands, described for the UI: what to type,
 /// and what it means.
@@ -24,6 +25,32 @@ enum TemplateTokens {
         TemplateToken(symbol: "{n}", help: "A counter (001, 002, …) so filenames never collide."),
         TemplateToken(symbol: "{original}", help: "The original filename, without its extension."),
     ]
+}
+
+/// Turns a folder chosen from an open panel into a path template can use:
+/// relative to a library's root, since that is what every path template is
+/// rendered against. Shared by the derived path template here and by a
+/// routing rule's own destination field, which is not a `TemplateField`.
+@MainActor
+enum FolderPicker {
+    /// Prompts for a folder inside `library` and hands back its path relative
+    /// to the library root — empty for the root itself. `nil` when the panel
+    /// was cancelled, or the folder picked is not inside the library at all
+    /// (its own `.doctopus` container included), which a path template could
+    /// never route into anyway.
+    static func chooseRelativePath(in library: Library, message: String) -> String? {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.directoryURL = library.root
+        panel.prompt = "Choose"
+        panel.message = message
+        guard panel.runModal() == .OK, let url = panel.url else { return nil }
+        let path = Store.canonical(url.standardizedFileURL.path)
+        guard library.owns(path: path), !FileScanner.isInsideLibraryContainer(url) else { return nil }
+        return path == library.root.path ? "" : String(path.dropFirst(library.root.path.count + 1))
+    }
 }
 
 /// What a `TemplateField` is for: a filename or a folder path. The two differ
@@ -77,6 +104,9 @@ struct TemplateField: View {
     @Binding var template: String
     var kind: TemplateFieldKind
     var tokens: [TemplateToken] = TemplateTokens.all
+    /// Where a folder path's picker button is rooted. `nil` leaves the button
+    /// off — there is no library to choose inside for a bare filename template.
+    var library: Library? = nil
 
     /// The field's own caret/selection, so a tapped token lands where the
     /// user was typing instead of always at the end.
@@ -96,12 +126,25 @@ struct TemplateField: View {
                 }
             }
             .frame(height: 26)
-            TextField(title, text: $template, selection: $selection)
-                .font(.system(.body, design: .monospaced))
-                .onChange(of: template) { _, newValue in
-                    guard kind.forbidsSlash, newValue.contains("/") else { return }
-                    template = newValue.filter { $0 != "/" }
+            HStack(spacing: 6) {
+                TextField(title, text: $template, selection: $selection)
+                    .font(.system(.body, design: .monospaced))
+                    .onChange(of: template) { _, newValue in
+                        guard kind.forbidsSlash, newValue.contains("/") else { return }
+                        template = newValue.filter { $0 != "/" }
+                    }
+                if kind == .path, let library {
+                    Button {
+                        guard let chosen = FolderPicker.chooseRelativePath(
+                            in: library, message: "Choose a folder inside \(library.displayName).")
+                        else { return }
+                        template = chosen
+                    } label: {
+                        Image(systemName: "folder")
+                    }
+                    .help("Choose a folder")
                 }
+            }
             LabeledContent("For example") {
                 Text(kind.preview(template))
                     .font(.caption.monospaced())
