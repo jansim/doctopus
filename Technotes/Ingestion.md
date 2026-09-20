@@ -35,10 +35,23 @@ moved when the best one clears the threshold *and* no other place fits about as
 well — two equally good homes leave it in the Inbox, in Needs Review, until
 someone picks. Routing never moves a file outside its library.
 
-Rules are edited in Settings › Routing: what a rule looks at (text, filename,
-correspondent or type), its pattern, destination template, tags and confidence,
-and where it sits in the evaluation order. The editor shows how the pattern
-will be read, how many documents already in the library it matches, and where a
+## Rules
+
+A rule is one or more conditions and one or more actions, in the spirit of a
+mail filter. A condition points at the text, the filename, the correspondent or
+the document type, says how its pattern is read — any of these words, all of
+them, an exact phrase, a regular expression, or roughly this for OCR noise —
+and can be inverted, so "an invoice, but not a credit note" is one rule rather
+than two that cannot say they belong together. The conditions are joined by
+*any* or *all*. The actions are filing into a folder, adding tags, and setting
+the correspondent or document type; each kind appears at most once, so what a
+rule does is never ambiguous.
+
+Rules live in Settings › Rules, per library, in the order they are evaluated.
+The first matching rule with a folder decides where a document goes; tags and
+metadata from *every* rule that matched are applied, so a rule that only labels
+needs no destination at all. The editor shows how each pattern will be read,
+how many documents already in the library the whole rule catches, and where a
 document would land.
 
 ## OCR

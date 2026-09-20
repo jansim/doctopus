@@ -1256,44 +1256,82 @@ actor Store {
 
     // MARK: - Rules
 
+    /// Every rule with its conditions and actions, in evaluation order. Three
+    /// queries rather than a join: a rule is read whole or not at all, and
+    /// there are tens of them, not thousands.
     func rules() throws -> [Rule] {
-        try db.map("""
-            SELECT id, name, pattern, field, destination, tag_names, weight, enabled, priority,
-                   match_mode, match_insensitive, set_correspondent, set_doc_type
+        var conditions: [Int64: [RuleCondition]] = [:]
+        for (ruleID, condition) in try db.map("""
+            SELECT rule_id, field, pattern, match_mode, match_insensitive, negated
+            FROM rule_conditions ORDER BY rule_id, position, id
+            """, [], { row in
+            (row.int(0), RuleCondition(field: RuleField(rawValue: row.string(1)) ?? .text,
+                                       pattern: row.string(2),
+                                       mode: MatchMode(rawValue: row.int(3)) ?? .anyWord,
+                                       caseInsensitive: row.bool(4),
+                                       negated: row.bool(5)))
+        }) {
+            conditions[ruleID, default: []].append(condition)
+        }
+
+        var actions: [Int64: [RuleAction]] = [:]
+        for (ruleID, kind, value) in try db.map("""
+            SELECT rule_id, kind, value FROM rule_actions ORDER BY rule_id, position, id
+            """, [], { ($0.int(0), $0.string(1), $0.string(2)) }) {
+            // An action kind this build does not know is skipped rather than
+            // guessed at.
+            guard let kind = RuleActionKind(rawValue: kind) else { continue }
+            actions[ruleID, default: []].append(RuleAction(kind: kind, value: value))
+        }
+
+        return try db.map("""
+            SELECT id, name, enabled, priority, weight, match_all
             FROM rules ORDER BY priority DESC, id
             """) {
-            Rule(id: $0.int(0), name: $0.string(1), pattern: $0.string(2), field: $0.string(3),
-                 destination: $0.string(4), tagNames: $0.stringOrNil(5), weight: $0.double(6),
-                 enabled: $0.bool(7), priority: $0.int(8),
-                 mode: MatchMode(rawValue: $0.int(9)) ?? .anyWord,
-                 caseInsensitive: $0.bool(10),
-                 setCorrespondent: $0.stringOrNil(11),
-                 setDocType: $0.stringOrNil(12))
+            let id = $0.int(0)
+            return Rule(id: id, name: $0.string(1), enabled: $0.bool(2), priority: $0.int(3),
+                        weight: $0.double(4), requiresAll: $0.bool(5),
+                        conditions: conditions[id] ?? [], actions: actions[id] ?? [])
         }
     }
 
+    /// Writes a rule whole: the row, then its conditions and actions, which are
+    /// replaced rather than merged. Editing a rule is editing one thing, and a
+    /// half-written rule would file documents somewhere nobody asked for.
     @discardableResult
     func upsertRule(_ r: Rule) throws -> Int64 {
-        if r.id > 0 {
-            try db.run("""
-                UPDATE rules SET name=?, pattern=?, field=?, destination=?, tag_names=?,
-                                 weight=?, enabled=?, priority=?, match_mode=?, match_insensitive=?,
-                                 set_correspondent=?, set_doc_type=?
-                WHERE id=?
-                """, [.text(r.name), .text(r.pattern), .text(r.field), .text(r.destination),
-                      .text(r.tagNames), .double(r.weight), .bool(r.enabled), .int(r.priority),
-                      .int(r.mode.rawValue), .bool(r.caseInsensitive),
-                      .text(r.setCorrespondent), .text(r.setDocType), .int(r.id)])
-            return r.id
+        try db.transaction { () -> Int64 in
+            var id = r.id
+            if id > 0 {
+                try db.run("""
+                    UPDATE rules SET name=?, enabled=?, priority=?, weight=?, match_all=? WHERE id=?
+                    """, [.text(r.name), .bool(r.enabled), .int(r.priority),
+                          .double(r.weight), .bool(r.requiresAll), .int(id)])
+                try db.run("DELETE FROM rule_conditions WHERE rule_id=?", [.int(id)])
+                try db.run("DELETE FROM rule_actions WHERE rule_id=?", [.int(id)])
+            } else {
+                id = try db.run("""
+                    INSERT INTO rules(name, enabled, priority, weight, match_all) VALUES(?,?,?,?,?)
+                    """, [.text(r.name), .bool(r.enabled), .int(r.priority),
+                          .double(r.weight), .bool(r.requiresAll)])
+            }
+            for (position, c) in r.conditions.enumerated() where c.pattern.nilIfBlank != nil {
+                try db.run("""
+                    INSERT INTO rule_conditions(rule_id, position, field, pattern,
+                                                match_mode, match_insensitive, negated)
+                    VALUES(?,?,?,?,?,?,?)
+                    """, [.int(id), .int(Int64(position)), .text(c.field.rawValue),
+                          .text(c.pattern.trimmingCharacters(in: .whitespaces)),
+                          .int(c.mode.rawValue), .bool(c.caseInsensitive), .bool(c.negated)])
+            }
+            for (position, a) in r.actions.enumerated() where a.value.nilIfBlank != nil {
+                try db.run("""
+                    INSERT INTO rule_actions(rule_id, position, kind, value) VALUES(?,?,?,?)
+                    """, [.int(id), .int(Int64(position)), .text(a.kind.rawValue),
+                          .text(a.value.trimmingCharacters(in: .whitespaces))])
+            }
+            return id
         }
-        return try db.run("""
-            INSERT INTO rules(name, pattern, field, destination, tag_names, weight, enabled, priority,
-                              match_mode, match_insensitive, set_correspondent, set_doc_type)
-            VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
-            """, [.text(r.name), .text(r.pattern), .text(r.field), .text(r.destination),
-                  .text(r.tagNames), .double(r.weight), .bool(r.enabled), .int(r.priority),
-                  .int(r.mode.rawValue), .bool(r.caseInsensitive),
-                  .text(r.setCorrespondent), .text(r.setDocType)])
     }
 
     func deleteRule(_ id: Int64) throws {
@@ -1309,16 +1347,6 @@ actor Store {
                            [.int(Int64((ids.count - index) * 10)), .int(id)])
             }
         }
-    }
-
-    /// What a rule sees of one document, for trying a pattern out before it is
-    /// saved. Filename and extracted metadata as well as text, since a rule can
-    /// be pointed at any of them.
-    struct RuleSample: Sendable {
-        var filename: String
-        var text: String
-        var correspondent: String?
-        var docType: String?
     }
 
     struct RuleApplyResult: Sendable {
@@ -1358,9 +1386,9 @@ actor Store {
         let router = Router(rules: [rule], threshold: 0.0, derivedTemplate: "", root: root, deriveWhenNoRule: false)
 
         for doc in docs {
-            let subject = Router.subject(for: rule.field, text: doc.text, filename: doc.filename,
-                                         correspondent: doc.correspondent, docType: doc.docType)
-            guard Router.matches(rule, in: subject) else { continue }
+            let subject = Rule.Subject(text: doc.text, filename: doc.filename,
+                                       correspondent: doc.correspondent, docType: doc.docType)
+            guard rule.matches(subject) else { continue }
             result.matched += 1
 
             // Documents already processed above must count even if a later
@@ -1368,23 +1396,21 @@ actor Store {
             // progress — the caller only ever sees `try?`'s empty fallback.
             do {
                 // 1. Assign tags
-                if let tagNames = rule.tagNames {
-                    let tags = tagNames.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
-                    for tag in tags {
-                        let tid = try tagID(named: tag)
-                        try assign(tag: tid, to: doc.id, auto: true)
-                    }
-                    if !tags.isEmpty { result.tagged += 1 }
+                let tags = rule.tagNames
+                for tag in tags {
+                    let tid = try tagID(named: tag)
+                    try assign(tag: tid, to: doc.id, auto: true)
                 }
+                if !tags.isEmpty { result.tagged += 1 }
 
                 // 2. Assign metadata
                 var patch = Store.MetadataPatch(docID: doc.id)
                 var updatedMeta = false
-                if let corr = rule.setCorrespondent, !corr.isEmpty {
+                if let corr = rule.setCorrespondent {
                     patch.correspondent = corr
                     updatedMeta = true
                 }
-                if let dtype = rule.setDocType, !dtype.isEmpty {
+                if let dtype = rule.setDocType {
                     patch.docType = dtype
                     updatedMeta = true
                 }
@@ -1393,9 +1419,8 @@ actor Store {
                     result.metadataUpdated += 1
                 }
 
-                // 3. Move if destination template specified
-                let destStr = rule.destination.trimmingCharacters(in: .whitespaces)
-                if !destStr.isEmpty {
+                // 3. Move if the rule files into a folder
+                if let destStr = rule.destination {
                     let destURL = router.expand(destStr, correspondent: patch.correspondent ?? doc.correspondent,
                                                 docType: patch.docType ?? doc.docType, date: doc.docDate ?? doc.created)
                     if router.isInsideLibrary(destURL) {
@@ -1421,10 +1446,11 @@ actor Store {
         return result
     }
 
-    /// The most recent documents, as rule samples. `doc_fts` is keyed by
-    /// `rowid`, so each document's text is one indexed lookup — the corpus no
-    /// longer has to be loaded into memory to avoid a scan per row.
-    func ruleSamples(limit: Int = 5000) throws -> [RuleSample] {
+    /// The most recent documents, as a rule would see them, for trying one out
+    /// before it is saved. `doc_fts` is keyed by `rowid`, so each document's
+    /// text is one indexed lookup — the corpus no longer has to be loaded into
+    /// memory to avoid a scan per row.
+    func ruleSamples(limit: Int = 5000) throws -> [Rule.Subject] {
         try db.map("""
             SELECT d.filename, ec.name, et.name,
                    (SELECT f.body FROM doc_fts f WHERE f.rowid = d.id)
@@ -1434,8 +1460,8 @@ actor Store {
             LEFT JOIN entities et ON et.id = m.doc_type_id
             WHERE d.missing=0 AND d.deleted_at IS NULL ORDER BY d.created_at DESC LIMIT ?
             """, [.int(Int64(limit))]) {
-            RuleSample(filename: $0.string(0), text: $0.stringOrNil(3) ?? "",
-                       correspondent: $0.stringOrNil(1), docType: $0.stringOrNil(2))
+            Rule.Subject(text: $0.stringOrNil(3) ?? "", filename: $0.string(0),
+                         correspondent: $0.stringOrNil(1), docType: $0.stringOrNil(2))
         }
     }
 

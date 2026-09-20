@@ -2,7 +2,7 @@ import Foundation
 
 /// Versioned schema. Migrations are append-only: bump `current` and add a case.
 enum Schema {
-    static let current = 17
+    static let current = 18
 
     static func migrate(_ db: Database) throws {
         let version = try db.first("PRAGMA user_version") { Int($0.int(0)) } ?? 0
@@ -23,6 +23,7 @@ enum Schema {
         if version < 15 { try v15(db) }
         if version < 16 { try v16(db) }
         if version < 17 { try v17(db) }
+        if version < 18 { try v18(db) }
         try db.exec("PRAGMA user_version=\(current)")
     }
 
@@ -36,6 +37,88 @@ enum Schema {
             [.text(table), .text(column)]) { $0.int(0) } ?? 0
         guard present == 0 else { return }
         try db.exec("ALTER TABLE \(table) ADD COLUMN \(column) \(declaration)")
+    }
+
+    /// Rules grow conditions and actions.
+    ///
+    /// A rule was one pattern against one field, with its effects spread over
+    /// four columns — `destination`, `tag_names`, `set_correspondent`,
+    /// `set_doc_type` — that were each either filled in or empty. Two things a
+    /// rule could not say, both of them ordinary: "an invoice from Acme, but
+    /// not a credit note", and "these three words, all of them". Splitting that
+    /// into two rules loses the fact that they are one decision.
+    ///
+    /// Conditions and actions become rows of their own, which is also what lets
+    /// a rule be read and written whole: both tables are rewritten as a block
+    /// per rule, so there is no partial state to reconcile.
+    ///
+    /// Every existing rule migrates to exactly one condition and the actions it
+    /// had filled in, which is the same rule — the shape is wider, not
+    /// different. `set_fields` goes: it was added for per-rule field values and
+    /// never written, so nothing can be lost with it.
+    private static func v18(_ db: Database) throws {
+        let already = try db.first(
+            "SELECT COUNT(*) FROM pragma_table_info('rules') WHERE name='match_all'") { $0.int(0) } ?? 0
+        guard already == 0 else { return }
+
+        try db.exec("""
+        CREATE TABLE IF NOT EXISTS rule_conditions (
+            id                INTEGER PRIMARY KEY,
+            rule_id           INTEGER NOT NULL REFERENCES rules(id) ON DELETE CASCADE,
+            position          INTEGER NOT NULL DEFAULT 0,
+            field             TEXT NOT NULL DEFAULT 'text',
+            pattern           TEXT NOT NULL,
+            match_mode        INTEGER NOT NULL DEFAULT 0,
+            match_insensitive INTEGER NOT NULL DEFAULT 1,
+            negated           INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_rule_conditions ON rule_conditions(rule_id, position);
+
+        CREATE TABLE IF NOT EXISTS rule_actions (
+            id       INTEGER PRIMARY KEY,
+            rule_id  INTEGER NOT NULL REFERENCES rules(id) ON DELETE CASCADE,
+            position INTEGER NOT NULL DEFAULT 0,
+            kind     TEXT NOT NULL,
+            value    TEXT NOT NULL DEFAULT ''
+        );
+        CREATE INDEX IF NOT EXISTS idx_rule_actions ON rule_actions(rule_id, position);
+        """)
+
+        // 0 = any of the conditions, which is what a single condition means
+        // either way.
+        try addColumn(db, table: "rules", column: "match_all",
+                      declaration: "INTEGER NOT NULL DEFAULT 0")
+
+        try db.exec("""
+        INSERT INTO rule_conditions(rule_id, position, field, pattern, match_mode, match_insensitive)
+        SELECT id, 0, COALESCE(field, 'text'), pattern,
+               COALESCE(match_mode, 0), COALESCE(match_insensitive, 1)
+        FROM rules;
+        """)
+
+        // The columns, in the order the editor shows the actions in.
+        for (position, column, kind) in [(0, "destination", "file_into"),
+                                         (1, "tag_names", "add_tags"),
+                                         (2, "set_correspondent", "set_correspondent"),
+                                         (3, "set_doc_type", "set_doc_type")] {
+            try db.exec("""
+            INSERT INTO rule_actions(rule_id, position, kind, value)
+            SELECT id, \(position), '\(kind)', TRIM(\(column)) FROM rules
+            WHERE \(column) IS NOT NULL AND TRIM(\(column)) <> '';
+            """)
+        }
+
+        try db.exec("""
+        ALTER TABLE rules DROP COLUMN pattern;
+        ALTER TABLE rules DROP COLUMN field;
+        ALTER TABLE rules DROP COLUMN destination;
+        ALTER TABLE rules DROP COLUMN tag_names;
+        ALTER TABLE rules DROP COLUMN match_mode;
+        ALTER TABLE rules DROP COLUMN match_insensitive;
+        ALTER TABLE rules DROP COLUMN set_correspondent;
+        ALTER TABLE rules DROP COLUMN set_doc_type;
+        ALTER TABLE rules DROP COLUMN set_fields;
+        """)
     }
 
     /// Rule metadata assignment and saved views.

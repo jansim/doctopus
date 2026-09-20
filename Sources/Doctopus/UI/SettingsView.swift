@@ -10,6 +10,7 @@ struct SettingsView: View {
             FieldSettings().tabItem { Label("Fields", systemImage: "list.bullet.rectangle") }
             TagSettings().tabItem { Label("Tags", systemImage: "tag") }
             RoutingSettings().tabItem { Label("Routing", systemImage: "arrow.triangle.branch") }
+            RulesSettings().tabItem { Label("Rules", systemImage: "line.3.horizontal.decrease") }
             OptimizationSettings().tabItem { Label("Optimization", systemImage: "arrow.down.circle") }
             IntelligenceSettings().tabItem { Label("Intelligence", systemImage: "sparkles") }
         }
@@ -23,7 +24,7 @@ struct SettingsView: View {
 /// Picks which library the per-library settings on a pane apply to. One choice,
 /// shared by every pane, so switching tabs never quietly changes the target.
 /// Hidden when there is nothing to choose between.
-private struct LibraryPicker: View {
+struct LibraryPicker: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
@@ -325,170 +326,36 @@ private struct TagSettings: View {
 
 private struct RoutingSettings: View {
     @Environment(AppModel.self) private var model
-    @State private var rules: [Rule] = []
-    @State private var selected: Rule.ID?
-    /// The rule open in the editor sheet — an unsaved draft when adding.
-    @State private var editing: Rule?
 
     var body: some View {
         @Bindable var model = model
-        VStack(spacing: 0) {
-            Form {
-                Section {
-                    LibraryPicker()
-                    Toggle("Auto-route imports and scans", isOn: $model.settings.autoRouteImports)
-                    Toggle("Derive a folder when no rule matches", isOn: $model.settings.deriveWhenNoRule)
-                        .disabled(!model.settings.autoRouteImports)
-                    TemplateField(title: "Derived path template",
-                                  template: $model.settings.derivedTemplate, kind: .path,
-                                  library: model.settingsLibrary)
-                        .disabled(!model.settings.deriveWhenNoRule)
-                    LabeledContent("Confidence threshold") {
-                        HStack {
-                            Slider(value: $model.settings.routingThreshold, in: 0.4...0.99)
-                            Text("\(Int(model.settings.routingThreshold * 100))%")
-                                .monospacedDigit().frame(width: 40)
-                        }
+        Form {
+            Section {
+                LibraryPicker()
+                Toggle("Auto-route imports and scans", isOn: $model.settings.autoRouteImports)
+                Toggle("Derive a folder when no rule matches", isOn: $model.settings.deriveWhenNoRule)
+                    .disabled(!model.settings.autoRouteImports)
+                TemplateField(title: "Derived path template",
+                              template: $model.settings.derivedTemplate, kind: .path,
+                              library: model.settingsLibrary)
+                    .disabled(!model.settings.deriveWhenNoRule)
+                LabeledContent("Confidence threshold") {
+                    HStack {
+                        Slider(value: $model.settings.routingThreshold, in: 0.4...0.99)
+                        Text("\(Int(model.settings.routingThreshold * 100))%")
+                            .monospacedDigit().frame(width: 40)
                     }
-                    Text("Only new scans and imports with no folder chosen are routed. Below the threshold — or when two places fit about equally well — a file stays in the Inbox and waits in Needs Review with its suggestions. Files already in your library are never moved automatically, and nothing is ever routed outside it.")
-                        .font(.caption).foregroundStyle(.secondary)
-                } header: {
-                    Text("Auto-Routing")
                 }
-            }
-            .formStyle(.grouped)
-
-            Divider()
-
-            Table(rules, selection: $selected) {
-                TableColumn("Rule") { r in
-                    Text(r.name).foregroundStyle(r.enabled ? .primary : .secondary)
-                }
-                TableColumn("Matches") { r in
-                    Text(r.pattern)
-                        .font(.caption.monospaced()).lineLimit(1)
-                        .help("\(RuleEditor.label(forField: r.field)): \(r.pattern)")
-                }
-                TableColumn("Destination") { r in
-                    Text(r.destination).font(.caption.monospaced()).lineLimit(1)
-                        .help(r.tagNames.map { "\(r.destination) · tags: \($0)" } ?? r.destination)
-                }
-                TableColumn("On") { r in
-                    Toggle("", isOn: Binding(get: { r.enabled }, set: { toggle(r, $0) })).labelsHidden()
-                }
-                .width(30)
-            }
-            .contextMenu(forSelectionType: Rule.ID.self) { ids in
-                if let id = ids.first, let rule = rules.first(where: { $0.id == id }) {
-                    Button("Edit…") { editing = rule }
-                    Button("Duplicate") { duplicate(rule) }
-                    Divider()
-                    Button("Move Up") { move(id, by: -1) }.disabled(rules.first?.id == id)
-                    Button("Move Down") { move(id, by: 1) }.disabled(rules.last?.id == id)
-                    Divider()
-                    Button("Delete", role: .destructive) { remove(id) }
-                }
-            } primaryAction: { ids in
-                // Double-click (or Return) opens the rule.
-                if let id = ids.first { editing = rules.first { $0.id == id } }
-            }
-            .frame(minHeight: 130)
-
-            HStack(spacing: 10) {
-                Button { addRule() } label: { Image(systemName: "plus") }
-                    .help("Add a rule")
-                Button { if let selected { remove(selected) } } label: { Image(systemName: "minus") }
-                    .disabled(selected == nil)
-                    .help("Delete the selected rule")
-                Button { editing = selectedRule } label: { Image(systemName: "pencil") }
-                    .disabled(selected == nil)
-                    .help("Edit the selected rule")
-                Divider().frame(height: 14)
-                Button { if let selected { move(selected, by: -1) } } label: { Image(systemName: "chevron.up") }
-                    .disabled(selected == nil || rules.first?.id == selected)
-                    .help("Evaluate earlier")
-                Button { if let selected { move(selected, by: 1) } } label: { Image(systemName: "chevron.down") }
-                    .disabled(selected == nil || rules.last?.id == selected)
-                    .help("Evaluate later")
-                Spacer()
-                Text("Top to bottom, the first match wins — unless a later one fits as well. Double-click to edit.")
+                Text("Only new scans and imports with no folder chosen are routed. Below the threshold — or when two places fit about equally well — a file stays in the Inbox and waits in Needs Review with its suggestions. Files already in your library are never moved automatically, and nothing is ever routed outside it.")
+                    .font(.caption).foregroundStyle(.secondary)
+            } header: {
+                Text("Auto-Routing")
+            } footer: {
+                Text("What a document is matched against, and where it goes, is in Rules.")
                     .font(.caption).foregroundStyle(.secondary)
             }
-            .buttonStyle(.borderless)
-            .padding(8)
         }
-        .task { await load() }
-        .task(id: model.settingsLibrary?.id) { await load() }
-        .sheet(item: $editing) { rule in
-            if let library = model.settingsLibrary {
-                RuleEditor(rule: rule, library: library,
-                           threshold: model.settings.routingThreshold) { save($0) }
-            }
-        }
-    }
-
-    private var selectedRule: Rule? { rules.first { $0.id == selected } }
-
-    private func load() async {
-        rules = (try? await model.settingsLibrary?.store.rules()) ?? []
-    }
-
-    private func toggle(_ rule: Rule, _ on: Bool) {
-        var r = rule
-        r.enabled = on
-        save(r)
-    }
-
-    private func save(_ rule: Rule) {
-        guard let store = model.settingsLibrary?.store else { return }
-        Task {
-            let id = (try? await store.upsertRule(rule)) ?? rule.id
-            await load()
-            selected = id
-        }
-    }
-
-    /// A new rule is only a draft until the editor saves it, so cancelling
-    /// leaves nothing behind. It goes to the bottom of the list, where it
-    /// cannot pre-empt a rule that already works.
-    private func addRule() {
-        let lowest = rules.map(\.priority).min() ?? 10
-        editing = Rule(id: 0, name: "", pattern: "", field: "text",
-                       destination: "", tagNames: nil, weight: 0.9,
-                       enabled: true, priority: lowest - 10)
-    }
-
-    private func duplicate(_ rule: Rule) {
-        var copy = rule
-        copy.id = 0
-        copy.name = rule.name + " copy"
-        copy.priority = rule.priority - 1
-        editing = copy
-    }
-
-    private func remove(_ id: Rule.ID) {
-        guard let store = model.settingsLibrary?.store else { return }
-        Task {
-            try? await store.deleteRule(id)
-            if selected == id { selected = nil }
-            await load()
-        }
-    }
-
-    /// Order is priority, so moving a rule rewrites every priority to match
-    /// the new order rather than trying to squeeze one number in between.
-    private func move(_ id: Rule.ID, by offset: Int) {
-        guard let store = model.settingsLibrary?.store,
-              let index = rules.firstIndex(where: { $0.id == id }) else { return }
-        let target = index + offset
-        guard rules.indices.contains(target) else { return }
-        var ordered = rules.map(\.id)
-        ordered.swapAt(index, target)
-        Task {
-            try? await store.reorderRules(ordered)
-            await load()
-            selected = id
-        }
+        .formStyle(.grouped)
     }
 }
 

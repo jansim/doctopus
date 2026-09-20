@@ -380,24 +380,6 @@ struct HistoryEvent: Identifiable, Hashable, Sendable {
     }
 }
 
-struct Rule: Identifiable, Hashable, Sendable {
-    var id: Int64
-    var name: String
-    var pattern: String
-    var field: String
-    var destination: String
-    var tagNames: String?
-    var weight: Double
-    var enabled: Bool
-    var priority: Int64
-    /// How the pattern is read. Said out loud rather than guessed from whether
-    /// the pattern happens to contain a bracket.
-    var mode: MatchMode = .anyWord
-    var caseInsensitive: Bool = true
-    var setCorrespondent: String?
-    var setDocType: String?
-}
-
 /// A pinned, saved search query with custom sort and presentation.
 struct SavedView: Identifiable, Hashable, Sendable {
     var id: Int64

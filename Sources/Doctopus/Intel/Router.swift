@@ -63,20 +63,26 @@ struct Router: Sendable {
         let correspondent = insight?.correspondent ?? findings.correspondent
         let docType = insight?.docType ?? findings.docType
         let quality = qualityFactor(findings, insight)
+        let subject = Rule.Subject(text: text, filename: filename,
+                                   correspondent: correspondent, docType: docType)
 
-        // Every enabled rule that matches, in the order the user put them.
-        var matched: [(rule: Rule, candidate: Candidate)] = []
+        // Every enabled rule that matches, in the order the user put them. A
+        // rule that only tags or only sets a correspondent matches like any
+        // other; it simply has no folder to offer, so it never becomes a
+        // candidate and never competes for the move.
+        var matched: [Rule] = []
+        var candidatesByRule: [(rule: Rule, candidate: Candidate)] = []
         var outside: [String] = []
-        for rule in rules where rule.enabled {
-            let subject = Self.subject(for: rule.field, text: text, filename: filename,
-                                       correspondent: correspondent, docType: docType)
-            guard Self.matches(rule, in: subject) else { continue }
-            let dest = expand(rule.destination, correspondent: correspondent,
+        for rule in rules where rule.enabled && rule.hasEffect {
+            guard rule.matches(subject) else { continue }
+            matched.append(rule)
+            guard let template = rule.destination else { continue }
+            let dest = expand(template, correspondent: correspondent,
                               docType: docType, date: findings.date)
             guard isInsideLibrary(dest) else { outside.append(rule.name); continue }
             let confidence = min(0.99, rule.weight * quality)
-            matched.append((rule, Candidate(destination: dest, confidence: confidence, rule: rule.name,
-                                            explanation: "Rule “\(rule.name)” matched \(Self.fieldLabel(rule.field))")))
+            candidatesByRule.append((rule, Candidate(destination: dest, confidence: confidence, rule: rule.name,
+                                                     explanation: Self.why(rule, subject))))
         }
 
         // The derived path is the fallback when no rule matches, and an extra
@@ -92,37 +98,46 @@ struct Router: Sendable {
             }
         }
 
-        var candidates = Self.deduplicated(matched.map(\.candidate) + (derived.map { [$0] } ?? []))
+        var candidates = Self.deduplicated(candidatesByRule.map(\.candidate) + (derived.map { [$0] } ?? []))
 
-        // No rule: the derived path, if there is one, decides on its own.
-        guard let first = matched.first else {
+        // Destination is winner-takes-all; everything else is the union of
+        // every rule that matched, whether or not it had a folder to offer.
+        var unionTags: [String] = []
+        var seenTags = Set<String>()
+        for rule in matched {
+            for tag in rule.tagNames where seenTags.insert(tag.lowercased()).inserted {
+                unionTags.append(tag)
+            }
+        }
+        let setCorr = matched.compactMap(\.setCorrespondent).first
+        let setType = matched.compactMap(\.setDocType).first
+
+        // Nothing to move it by: the derived path, if there is one, decides on
+        // its own. Tags and metadata a matching rule asked for still apply.
+        guard let first = candidatesByRule.first else {
             guard let derived else {
                 let why = outside.isEmpty
-                    ? "No rule matched and no correspondent was identified"
+                    ? (matched.isEmpty
+                       ? "No rule matched and no correspondent was identified"
+                       : "“\(matched[0].name)” matched, but no rule files this anywhere")
                     : "“\(outside[0])” matched but points outside the library, so nothing was moved"
-                return Decision(destination: nil, confidence: findings.confidence, rule: "none",
-                                tags: insight?.tags ?? [], explanation: why, candidates: candidates)
+                return Decision(destination: nil, confidence: findings.confidence,
+                                rule: matched.first?.name ?? "none",
+                                tags: matched.isEmpty ? (insight?.tags ?? []) : unionTags,
+                                tagsFromRule: !matched.isEmpty,
+                                explanation: why, candidates: candidates,
+                                setCorrespondent: setCorr, setDocType: setType)
             }
-            return decide(best: derived, runnerUp: nil, tags: insight?.tags ?? [], tagsFromRule: false,
+            return decide(best: derived, runnerUp: nil,
+                          tags: matched.isEmpty ? (insight?.tags ?? []) : unionTags,
+                          tagsFromRule: !matched.isEmpty,
+                          setCorrespondent: setCorr, setDocType: setType,
                           candidates: candidates, currentDirectory: currentDirectory)
         }
 
-        // Destination is winner-takes-all; tags are a union of all matching rules.
-        var unionTags: [String] = []
-        var seenTags = Set<String>()
-        for m in matched {
-            for tag in ruleTags(m.rule) {
-                if seenTags.insert(tag.lowercased()).inserted {
-                    unionTags.append(tag)
-                }
-            }
-        }
-        let setCorr = matched.compactMap(\.rule.setCorrespondent).first { !$0.isEmpty }
-        let setType = matched.compactMap(\.rule.setDocType).first { !$0.isEmpty }
-
         // The first matching rule is the user's own choice of winner, unless a
         // later one — pointing somewhere else — fits about as well.
-        let rival = matched.dropFirst()
+        let rival = candidatesByRule.dropFirst()
             .map(\.candidate)
             .filter { $0.destination.standardizedFileURL != first.candidate.destination.standardizedFileURL }
             .max { $0.confidence < $1.confidence }
@@ -181,13 +196,19 @@ struct Router: Sendable {
         return !FileScanner.isInsideLibraryContainer(URL(fileURLWithPath: path))
     }
 
-    private static func fieldLabel(_ field: String) -> String {
-        switch field {
-        case "filename": return "the filename"
-        case "correspondent": return "the correspondent"
-        case "type": return "the document type"
-        default: return "the text"
+    /// Why a rule fired, in the words of the conditions that did it. With one
+    /// condition that is the sentence it always was; with several, the review
+    /// still has to be able to tell which of them the document tripped.
+    private static func why(_ rule: Rule, _ subject: Rule.Subject) -> String {
+        let live = rule.liveConditions
+        let hits = live.filter { $0.matches(subject) }
+        guard live.count > 1 else {
+            return "Rule “\(rule.name)” matched \(live.first?.field.phrase ?? "the document")"
         }
+        let where_ = Set(hits.map(\.field.phrase)).sorted().joined(separator: " and ")
+        return rule.requiresAll
+            ? "Rule “\(rule.name)” matched all \(live.count) conditions"
+            : "Rule “\(rule.name)” matched \(hits.count) of \(live.count) conditions, on \(where_)"
     }
 
     /// The LLM agreeing with the heuristics is the strongest signal we have.
@@ -198,38 +219,6 @@ struct Router: Sendable {
            a.contains(b) || b.contains(a) { factor += 0.08 }
         if i.docType != nil, i.docType == f.docType { factor += 0.05 }
         return min(1.0, factor)
-    }
-
-    private func ruleTags(_ r: Rule) -> [String] {
-        (r.tagNames ?? "").split(separator: ",")
-            .map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
-    }
-
-    /// What a rule's `field` points it at, exactly as written. Case is the
-    /// matcher's business now that a rule can say it cares. The rule editor's
-    /// preview goes through here too, so it can never disagree with the router
-    /// about what a rule sees.
-    static func subject(for field: String, text: String, filename: String,
-                        correspondent: String?, docType: String?) -> String {
-        switch field {
-        case "filename": return filename
-        case "correspondent": return correspondent ?? ""
-        case "type": return docType ?? ""
-        default: return text + "\n" + filename
-        }
-    }
-
-    /// Whether a rule matches. One entry point for the router and the editor's
-    /// preview, so the count the editor shows is what routing will really do.
-    ///
-    /// "Any word" keeps the behaviour worth keeping: matching at the *start* of
-    /// a word catches "Rechnungsnummer" for the term "rechnung" without firing
-    /// on "Gehaltsabrechnung", where the term is buried inside an unrelated
-    /// compound. A `\b…\b` word boundary, which is what Paperless uses, misses
-    /// German compounds entirely.
-    static func matches(_ rule: Rule, in subject: String) -> Bool {
-        PatternMatcher.matches(rule.pattern, mode: rule.mode,
-                               insensitive: rule.caseInsensitive, in: subject)
     }
 
     /// What a pattern will do, for the editor to spell out.
@@ -275,19 +264,6 @@ struct Router: Sendable {
     }
 
     private func pct(_ v: Double) -> String { "\(Int((v * 100).rounded()))%" }
-
-    static let starterRules: [Rule] = [
-        Rule(id: 0, name: "Invoices", pattern: "invoice, rechnung, facture", field: "text",
-             destination: "Finances/Invoices/{year}", tagNames: "invoice", weight: 0.92, enabled: true, priority: 100),
-        Rule(id: 0, name: "Bank Statements", pattern: "kontoauszug, account statement, closing balance", field: "text",
-             destination: "Finances/Statements/{year}", tagNames: "bank", weight: 0.9, enabled: true, priority: 90),
-        Rule(id: 0, name: "Tax", pattern: "steuerbescheid, finanzamt, tax return, hmrc, irs", field: "text",
-             destination: "Finances/Tax-{year}", tagNames: "tax", weight: 0.93, enabled: true, priority: 95),
-        Rule(id: 0, name: "Insurance", pattern: "versicherungsschein, insurance policy, policy number", field: "text",
-             destination: "Insurance/{correspondent}", tagNames: "insurance", weight: 0.88, enabled: true, priority: 80),
-        Rule(id: 0, name: "Payslips", pattern: "gehaltsabrechnung, payslip, net pay", field: "text",
-             destination: "Work/Payslips/{year}", tagNames: "payslip", weight: 0.9, enabled: true, priority: 85),
-    ]
 }
 
 extension String {
