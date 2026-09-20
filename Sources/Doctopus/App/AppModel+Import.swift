@@ -1,5 +1,6 @@
 import Foundation
 import AppKit
+import os
 
 extension AppModel {
 
@@ -81,7 +82,13 @@ extension AppModel {
     }
 
     /// Writes scanner output into a folder and runs it through the pipeline.
-    func importScanned(_ items: [ScannedItem], into destination: URL?) {
+    ///
+    /// Every capture the device sent is accounted for. A scan is the one thing
+    /// here that cannot be fetched again — the pasteboard it arrived on is
+    /// already gone — so one that lands short says so instead of being filed
+    /// as though it were whole.
+    func importScanned(_ delivery: ScanDelivery, into destination: URL?) {
+        let items = delivery.items
         guard !items.isEmpty else { return }
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent("doctopus-scan-\(UUID().uuidString)", isDirectory: true)
@@ -95,7 +102,14 @@ extension AppModel {
         }
         // The scan was staged in the temporary directory by this app, so it is
         // ours to move rather than copy.
-        importFiles(urls, into: destination, movingSource: true)
+        if !urls.isEmpty { importFiles(urls, into: destination, movingSource: true) }
+
+        let lost = delivery.offered - urls.count
+        guard lost > 0 else { return }
+        ScanCapture.log.error("\(lost, privacy: .public) of \(delivery.offered, privacy: .public) capture(s) never reached the library")
+        scanIncomplete(urls.isEmpty
+            ? "Nothing your iPhone or iPad sent could be read. Scan it again."
+            : "\(lost) of the \(delivery.offered) captures your iPhone or iPad sent could not be read. What arrived has been filed — scan the rest again.")
     }
 
     // MARK: - Continuous scanning
@@ -148,11 +162,11 @@ extension AppModel {
     }
 
     /// A capture landed. Counts it, then asks for the next one.
-    func scanDelivered(_ documents: Int) {
+    func scanDelivered(_ delivery: ScanDelivery) {
         guard scanSession != nil else { return }
         scanRound?.cancel()
         scanRound = nil
-        scanSession?.received(documents)
+        scanSession?.received(delivery.items.count, pages: delivery.pages)
         guard scanSession?.isRunning == true else { return }
         fireNextScan(after: Self.scanRearm)
     }
@@ -166,6 +180,19 @@ extension AppModel {
             return
         }
         suspendScan(.failed)
+        notify(message, .warning)
+    }
+
+    /// Part of a delivery could not be read. Mid-run this stops the run: the
+    /// next round would wake the device while whatever swallowed the last
+    /// capture is still in play, and a stack scanned into a gap is worse than
+    /// a stack half scanned.
+    func scanIncomplete(_ message: String) {
+        guard scanSession != nil else {
+            errorMessage = message
+            return
+        }
+        suspendScan(.incomplete)
         notify(message, .warning)
     }
 
