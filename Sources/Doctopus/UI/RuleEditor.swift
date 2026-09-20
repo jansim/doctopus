@@ -93,7 +93,7 @@ struct RuleEditor: View {
             }
             .padding(12)
         }
-        .frame(width: 580, height: 540)
+        .frame(width: 580, height: 600)
         .task {
             samples = (try? await library.store.ruleSamples()) ?? []
             refreshMatches()
@@ -302,12 +302,15 @@ private struct ConditionRow: View {
                 .labelsHidden()
                 .fixedSize()
                 Spacer(minLength: 0)
-                Button(role: .destructive) { remove() } label: {
-                    Image(systemName: "minus.circle")
+                // Hidden rather than disabled on the last one: a control that
+                // is always there and never works reads as broken.
+                if removable {
+                    Button(role: .destructive) { remove() } label: {
+                        Image(systemName: "minus.circle")
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Remove this condition")
                 }
-                .buttonStyle(.borderless)
-                .disabled(!removable)
-                .help("Remove this condition")
             }
             HStack(spacing: 6) {
                 Picker("", selection: $condition.mode) {
@@ -366,12 +369,13 @@ private struct ActionRow: View {
                     .buttonStyle(.borderless)
                     .help("Choose a folder")
                 }
-                Button(role: .destructive) { remove() } label: {
-                    Image(systemName: "minus.circle")
+                if removable {
+                    Button(role: .destructive) { remove() } label: {
+                        Image(systemName: "minus.circle")
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Remove this action")
                 }
-                .buttonStyle(.borderless)
-                .disabled(!removable)
-                .help("Remove this action")
             }
             if action.kind == .fileInto {
                 HStack(spacing: 4) {

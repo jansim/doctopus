@@ -322,7 +322,7 @@ enum UITest {
         for (label, subject) in [("one condition", rule), ("every condition and action", full)] {
             let editor = RuleEditor(rule: subject, library: library,
                                     threshold: model.settings.routingThreshold) { _ in }
-            let (window, host) = host(editor.environment(model), size: NSSize(width: 580, height: 540))
+            let (window, host) = host(editor.environment(model), size: NSSize(width: 580, height: 600))
             defer { window.orderOut(nil) }
             try? await Task.sleep(for: .seconds(1))
             if let dir = snapshots {
