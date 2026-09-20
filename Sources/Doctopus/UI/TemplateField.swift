@@ -50,10 +50,8 @@ enum FolderPicker {
         return relativePath(for: url, in: library)
     }
 
-    /// What a chosen folder amounts to: its path relative to the library root,
-    /// empty for the root itself, and `nil` for a folder the library does not
-    /// own. Apart from the panel so a check can put a URL through it without
-    /// a modal to answer.
+    /// Apart from the panel so a check can put a URL through it without a
+    /// modal to answer.
     static func relativePath(for url: URL, in library: Library) -> String? {
         let path = Store.canonical(url.standardizedFileURL.path)
         guard library.owns(path: path), !FileScanner.isInsideLibraryContainer(url) else { return nil }

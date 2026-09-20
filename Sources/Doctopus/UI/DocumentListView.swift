@@ -429,19 +429,16 @@ private struct DocumentGalleryView: View {
     }
 }
 
-/// What a click in the gallery makes of the selection, given the modifiers
-/// held. Apart from the view because the modifiers it branches on come from
-/// `NSEvent.modifierFlags`, which reads the keyboard itself: a synthetic click
-/// cannot hold ⇧ down, so this is the only place a check can reach the rule.
+/// What a click makes of the gallery's selection. Apart from the view because
+/// the modifiers it branches on come from `NSEvent.modifierFlags`, which reads
+/// the keyboard rather than the event: a synthetic click cannot hold ⇧ down,
+/// so this is the only place a check can reach the rule.
 enum GallerySelection {
     struct Outcome: Equatable {
         var selection: Set<DocumentRef>
-        /// Where the next ⇧ click reaches back to.
         var anchor: DocumentRef?
     }
 
-    /// `order` is the rows as the grid lays them out; `selection` and `anchor`
-    /// are what the view holds at the moment of the click.
     static func click(_ id: DocumentRef, in order: [DocumentRef],
                       modifiers: NSEvent.ModifierFlags,
                       selection: Set<DocumentRef>, anchor: DocumentRef?) -> Outcome {

@@ -164,11 +164,9 @@ enum UITest {
         model.selectedIDs = []
     }
 
-    /// What the modifiers make of a gallery selection: ⇧ extends from the
-    /// anchor, ⌘⇧ adds that run to what was already picked, and only a plain
-    /// or ⌘ click moves the anchor. Asks `GallerySelection` rather than the
-    /// hosted grid because the branch turns on `NSEvent.modifierFlags`, which
-    /// reads the keyboard and not the event — a posted click cannot hold ⇧.
+    /// Asks `GallerySelection` rather than the hosted grid because the branch
+    /// turns on `NSEvent.modifierFlags`, which reads the keyboard and not the
+    /// event — a posted click cannot hold ⇧ down.
     private static func galleryModifierClicks(_ model: AppModel) {
         let order = model.documents.map(\.id)
         guard order.count >= 4 else {
@@ -222,11 +220,8 @@ enum UITest {
                    stale == .init(selection: [order[2]], anchor: order[2]))
     }
 
-    /// The folder button beside a routing destination has to hand back the
-    /// path templates are rendered against — relative to the library root —
-    /// and refuse a folder the library does not own. Checked through
-    /// `FolderPicker.relativePath`, since the panel in front of it wants
-    /// somebody to answer it.
+    /// Checked through `FolderPicker.relativePath`, since the panel in front
+    /// of it wants somebody to answer it.
     private static func folderPickerResolvesPaths(_ model: AppModel) {
         guard let library = model.libraries.first else {
             Check.that("a library to resolve chosen folders against", false)
@@ -242,8 +237,6 @@ enum UITest {
         Check.that("a folder inside the library comes back relative to the root",
                    relative(statements) == "Finances/Statements", relative(statements) ?? "refused")
 
-        // `..` on the way, which an open panel can hand back for a folder
-        // reached through a parent.
         let roundabout = root.appendingPathComponent("Finances", isDirectory: true)
             .appendingPathComponent("..", isDirectory: true)
             .appendingPathComponent("Personal", isDirectory: true)
@@ -261,8 +254,8 @@ enum UITest {
         Check.that("and so is a folder inside it",
                    relative(container.appendingPathComponent("thumbnails", isDirectory: true)) == nil)
 
-        // The temporary library lives under the `/var` symlink, so the path a
-        // panel hands back only matches the root once it is canonicalised.
+        // The temporary library lives under the `/var` symlink, so the path
+        // only matches the root once it is canonicalised.
         if root.path.hasPrefix("/private/var/") {
             let throughSymlink = URL(fileURLWithPath: String(root.path.dropFirst("/private".count)),
                                      isDirectory: true)
