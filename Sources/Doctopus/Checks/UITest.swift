@@ -46,6 +46,8 @@ enum UITest {
 
             await clickSelectsARow(model, snapshots: snapshots)
             await clickSelectsAGalleryThumbnail(model, snapshots: snapshots)
+            galleryModifierClicks(model)
+            folderPickerResolvesPaths(model)
             await headerClickSorts(model, snapshots: snapshots)
             await rowThumbnailIsAPage(model)
             await inspectorDraws(model, snapshots: snapshots)
@@ -160,6 +162,107 @@ enum UITest {
         Check.that("and does not open Quick Look instead", !QuickLookController.shared.isOpen)
         if QuickLookController.shared.isOpen { QLPreviewPanel.shared().orderOut(nil) }
         model.selectedIDs = []
+    }
+
+    /// Asks `GallerySelection` rather than the hosted grid because the branch
+    /// turns on `NSEvent.modifierFlags`, which reads the keyboard and not the
+    /// event — a posted click cannot hold ⇧ down.
+    private static func galleryModifierClicks(_ model: AppModel) {
+        let order = model.documents.map(\.id)
+        guard order.count >= 4 else {
+            Check.that("enough documents to select a run of", false, "\(order.count) documents")
+            return
+        }
+
+        let plain = GallerySelection.click(order[1], in: order, modifiers: [],
+                                           selection: [order[3]], anchor: order[3])
+        Check.that("a plain click selects only what was clicked",
+                   plain == .init(selection: [order[1]], anchor: order[1]))
+
+        let forwards = GallerySelection.click(order[3], in: order, modifiers: .shift,
+                                              selection: plain.selection, anchor: plain.anchor)
+        Check.that("⇧ extends the selection from the anchor to the click",
+                   forwards.selection == Set(order[1...3]), "\(forwards.selection.count) selected")
+        Check.that("and a ⇧ click leaves the anchor where it was", forwards.anchor == order[1])
+
+        // The point of holding the anchor still: the second ⇧ click reaches
+        // back to where the run started, not out from the cell last clicked.
+        let backwards = GallerySelection.click(order[0], in: order, modifiers: .shift,
+                                               selection: forwards.selection, anchor: forwards.anchor)
+        Check.that("a following ⇧ click extends from that same anchor",
+                   backwards == .init(selection: Set(order[0...1]), anchor: order[1]),
+                   "\(backwards.selection.count) selected")
+
+        let added = GallerySelection.click(order[3], in: order, modifiers: [.shift, .command],
+                                           selection: [order[0]], anchor: order[2])
+        Check.that("⌘⇧ adds the run to what was already selected",
+                   added.selection == Set([order[0], order[2], order[3]]),
+                   "\(added.selection.count) selected")
+
+        let picked = GallerySelection.click(order[2], in: order, modifiers: .command,
+                                            selection: [order[0]], anchor: order[0])
+        Check.that("⌘ adds a cell and moves the anchor to it",
+                   picked == .init(selection: [order[0], order[2]], anchor: order[2]))
+        let dropped = GallerySelection.click(order[2], in: order, modifiers: .command,
+                                             selection: picked.selection, anchor: picked.anchor)
+        Check.that("and ⌘ on a selected cell takes it back out",
+                   dropped.selection == [order[0]])
+
+        // Nothing clicked yet, and an anchor a refresh has dropped out of the
+        // pane: both have to land on the cell rather than select nothing.
+        let unanchored = GallerySelection.click(order[2], in: order, modifiers: .shift,
+                                                selection: [], anchor: nil)
+        Check.that("⇧ before anything has been clicked selects the one cell",
+                   unanchored == .init(selection: [order[2]], anchor: order[2]))
+        let stale = GallerySelection.click(order[2], in: order, modifiers: .shift, selection: [],
+                                           anchor: DocumentRef(library: "gone", doc: -1))
+        Check.that("⇧ with an anchor no longer in the pane selects the one cell",
+                   stale == .init(selection: [order[2]], anchor: order[2]))
+    }
+
+    /// Checked through `FolderPicker.relativePath`, since the panel in front
+    /// of it wants somebody to answer it.
+    private static func folderPickerResolvesPaths(_ model: AppModel) {
+        guard let library = model.libraries.first else {
+            Check.that("a library to resolve chosen folders against", false)
+            return
+        }
+        let root = library.root
+        func relative(_ url: URL) -> String? { FolderPicker.relativePath(for: url, in: library) }
+
+        Check.that("the library root itself is the empty path", relative(root) == "",
+                   relative(root).map { "\"\($0)\"" } ?? "refused")
+        let statements = root.appendingPathComponent("Finances", isDirectory: true)
+            .appendingPathComponent("Statements", isDirectory: true)
+        Check.that("a folder inside the library comes back relative to the root",
+                   relative(statements) == "Finances/Statements", relative(statements) ?? "refused")
+
+        let roundabout = root.appendingPathComponent("Finances", isDirectory: true)
+            .appendingPathComponent("..", isDirectory: true)
+            .appendingPathComponent("Personal", isDirectory: true)
+        Check.that("a path that doubles back is resolved before it is made relative",
+                   relative(roundabout) == "Personal", relative(roundabout) ?? "refused")
+
+        Check.that("a folder outside the library is refused",
+                   relative(root.deletingLastPathComponent()) == nil)
+        // Prefix, not containment, is the classic way this goes wrong.
+        Check.that("a sibling folder whose name merely starts with the root's is refused",
+                   relative(URL(fileURLWithPath: root.path + "-elsewhere", isDirectory: true)) == nil)
+
+        let container = root.appendingPathComponent("library.doctopus", isDirectory: true)
+        Check.that("the library's own container is refused", relative(container) == nil)
+        Check.that("and so is a folder inside it",
+                   relative(container.appendingPathComponent("thumbnails", isDirectory: true)) == nil)
+
+        // The temporary library lives under the `/var` symlink, so the path
+        // only matches the root once it is canonicalised.
+        if root.path.hasPrefix("/private/var/") {
+            let throughSymlink = URL(fileURLWithPath: String(root.path.dropFirst("/private".count)),
+                                     isDirectory: true)
+                .appendingPathComponent("Work", isDirectory: true)
+            Check.that("a folder reached through the /var symlink is still owned",
+                       relative(throughSymlink) == "Work", relative(throughSymlink) ?? "refused")
+        }
     }
 
     /// Clicking a column header sorts by that column, and clicking it again

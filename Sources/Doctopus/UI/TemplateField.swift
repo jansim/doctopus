@@ -47,6 +47,12 @@ enum FolderPicker {
         panel.prompt = "Choose"
         panel.message = message
         guard panel.runModal() == .OK, let url = panel.url else { return nil }
+        return relativePath(for: url, in: library)
+    }
+
+    /// Apart from the panel so a check can put a URL through it without a
+    /// modal to answer.
+    static func relativePath(for url: URL, in library: Library) -> String? {
         let path = Store.canonical(url.standardizedFileURL.path)
         guard library.owns(path: path), !FileScanner.isInsideLibraryContainer(url) else { return nil }
         return path == library.root.path ? "" : String(path.dropFirst(library.root.path.count + 1))

@@ -421,23 +421,43 @@ private struct DocumentGalleryView: View {
     }
 
     private func select(_ row: DocumentRow) {
-        let modifiers = NSEvent.modifierFlags
-        if modifiers.contains(.shift), let anchor = selectionAnchor,
-           let anchorIndex = model.documents.firstIndex(where: { $0.id == anchor }),
-           let rowIndex = model.documents.firstIndex(where: { $0.id == row.id }) {
-            let range = anchorIndex < rowIndex ? anchorIndex...rowIndex : rowIndex...anchorIndex
-            let ids = Set(model.documents[range].map(\.id))
+        let outcome = GallerySelection.click(row.id, in: model.documents.map(\.id),
+                                             modifiers: NSEvent.modifierFlags,
+                                             selection: model.selectedIDs, anchor: selectionAnchor)
+        model.selectedIDs = outcome.selection
+        selectionAnchor = outcome.anchor
+    }
+}
+
+/// What a click makes of the gallery's selection. Apart from the view because
+/// the modifiers it branches on come from `NSEvent.modifierFlags`, which reads
+/// the keyboard rather than the event: a synthetic click cannot hold ⇧ down,
+/// so this is the only place a check can reach the rule.
+enum GallerySelection {
+    struct Outcome: Equatable {
+        var selection: Set<DocumentRef>
+        var anchor: DocumentRef?
+    }
+
+    static func click(_ id: DocumentRef, in order: [DocumentRef],
+                      modifiers: NSEvent.ModifierFlags,
+                      selection: Set<DocumentRef>, anchor: DocumentRef?) -> Outcome {
+        if modifiers.contains(.shift), let anchor,
+           let anchorIndex = order.firstIndex(of: anchor),
+           let clickedIndex = order.firstIndex(of: id) {
+            let range = anchorIndex < clickedIndex ? anchorIndex...clickedIndex : clickedIndex...anchorIndex
+            let ids = Set(order[range])
             // ⌘⇧ adds the run to whatever was already selected, plain ⇧
             // replaces the selection with it — the same split Finder makes.
-            model.selectedIDs = modifiers.contains(.command) ? model.selectedIDs.union(ids) : ids
-        } else if modifiers.contains(.command) {
-            if model.selectedIDs.contains(row.id) { model.selectedIDs.remove(row.id) }
-            else { model.selectedIDs.insert(row.id) }
-            selectionAnchor = row.id
-        } else {
-            model.selectedIDs = [row.id]
-            selectionAnchor = row.id
+            return Outcome(selection: modifiers.contains(.command) ? selection.union(ids) : ids,
+                           anchor: anchor)
         }
+        if modifiers.contains(.command) {
+            var selection = selection
+            if selection.contains(id) { selection.remove(id) } else { selection.insert(id) }
+            return Outcome(selection: selection, anchor: id)
+        }
+        return Outcome(selection: [id], anchor: id)
     }
 }
 
