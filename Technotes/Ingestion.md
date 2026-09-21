@@ -30,7 +30,9 @@ preference — PDF first — rather than by whichever the device happened to nam
 first. Every raster form of a multi-page document scan is one page, so taking
 the wrong one silently throws the rest away. A capture that arrives as a
 multi-image container (a multi-page TIFF, a HEIC sequence) becomes a PDF with
-one page per image, never its first image alone.
+one page per image, never its first image alone. A capture handed over as a
+file rather than as bytes is read from that file while it still exists, since
+it goes when the pasteboard does.
 
 **Nothing arrives silently short.** A capture that cannot be read is gone — the
 pasteboard it came on is discarded moments later, and nothing asks the device

@@ -52,7 +52,12 @@ enum ScanCapture {
     /// Concrete image types are spelled out: SwiftUI turns these into pasteboard
     /// types literally, so `.image` alone is not offered `public.jpeg`. The
     /// order is the preference order `preferredType(among:accepting:)` applies.
-    static let importTypes: [UTType] = [.pdf, .jpeg, .png, .heic, .tiff, .image]
+    ///
+    /// A file URL is last, and is here because `ScanCoordinator.returnTypes`
+    /// tells the system this app takes one: a capture handed over as a file
+    /// rather than as bytes was being refused outright, and a form the app
+    /// asked for has to be a form it can read.
+    static let importTypes: [UTType] = [.pdf, .jpeg, .png, .heic, .tiff, .image, .fileURL]
 
     /// The type to ask a capture for, in the order this app prefers them —
     /// which is not the order the capture happens to advertise.
@@ -73,6 +78,16 @@ enum ScanCapture {
     /// a capture was lost, and the user can scan it again, but nobody can spot
     /// a page that was quietly dropped on the way in.
     static func item(from data: Data, declared: UTType) -> ScannedItem? {
+        // A capture can arrive as a reference to a file instead of its bytes.
+        // The file is the system's, in a temporary place of its choosing, and
+        // goes when the pasteboard does — so it is read here and now, and left
+        // where it is.
+        if declared.conforms(to: .fileURL) {
+            guard let url = URL(dataRepresentation: data, relativeTo: nil), url.isFileURL,
+                  let bytes = try? Data(contentsOf: url) else { return nil }
+            return item(from: bytes,
+                        declared: UTType(filenameExtension: url.pathExtension) ?? .data)
+        }
         // Read from the bytes rather than the label: a capture that says PDF
         // and is not one, or says nothing at all, is still whatever it is.
         if data.starts(with: Array("%PDF".utf8)) {

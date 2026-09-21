@@ -277,9 +277,9 @@ final class ScanCoordinator: NSObject {
             return false
         }
         if captures.count < providers.count {
-            // Logged, but not counted as a lost page: every image type and PDF
-            // is accepted, so something offering neither is not a page of a
-            // scan, and stopping a run over one would be a false alarm.
+            // Counted as lost below, along with everything else that does not
+            // make it: guessing that an item in a form this app cannot read is
+            // not part of the scan is exactly the guess that loses pages.
             ScanCapture.log.error("\(providers.count - captures.count, privacy: .public) item(s) offered nothing this app can read")
         }
 
@@ -316,7 +316,7 @@ final class ScanCoordinator: NSObject {
             ScanCapture.log.notice("\(capture.1.identifier, privacy: .public), \(data.count, privacy: .public) bytes -> \(item.ext, privacy: .public), \(item.pages, privacy: .public) page(s)")
             return item
         }
-        let delivery = ScanDelivery(offered: captures.count, items: items)
+        let delivery = ScanDelivery(offered: providers.count, items: items)
         ScanCapture.log.notice("delivered \(delivery.items.count, privacy: .public) of \(delivery.offered, privacy: .public) capture(s), \(delivery.pages, privacy: .public) page(s)")
 
         let destination = pendingDestination

@@ -1754,6 +1754,20 @@ enum SelfTest {
         Check.that("a capture that is not a document at all is declined rather than filed",
                    ScanCapture.item(from: Data("not a scan".utf8), declared: .pdf) == nil)
 
+        // A device may hand over a file rather than bytes — the app asks the
+        // system for that form — and the file goes with the pasteboard, so it
+        // has to be read while the capture is still being taken.
+        let staged = fm.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).jpg")
+        try? container(.jpeg, [0.6]).write(to: staged)
+        let byReference = ScanCapture.item(from: staged.dataRepresentation, declared: .fileURL)
+        Check.that("a capture handed over as a file is read rather than refused",
+                   byReference?.ext == "jpg" && byReference?.pages == 1)
+        Check.that("…and the file it points at is left where it is",
+                   fm.fileExists(atPath: staged.path))
+        try? fm.removeItem(at: staged)
+        Check.that("a file reference to nothing is declined",
+                   ScanCapture.item(from: staged.dataRepresentation, declared: .fileURL) == nil)
+
         let full = ScanDelivery(offered: 2, items: [ScannedItem(data: Data(), ext: "pdf", pages: 3),
                                                     ScannedItem(data: Data(), ext: "jpg")])
         Check.that("a delivery that lost nothing says so, and counts its pages",
