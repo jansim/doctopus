@@ -701,10 +701,44 @@ actor Store {
             """, [.int(Store.queueLength - 1)])
     }
 
-    func logEdit(docID: Int64, detail: String) throws {
+    /// How long after one hand edit the next still joins it. Someone tidying
+    /// a document touches a title, a date and a tag in a row; the history
+    /// should say that happened once, not list every keystroke that committed.
+    static let editGroupingWindow: TimeInterval = 5 * 60
+
+    func logEdit(docID: Int64, detail: String, at now: Date = Date()) throws {
+        // Only the newest event can absorb the edit, so anything the pipeline
+        // did in between still splits the edits around it.
+        if let last = try db.first("""
+            SELECT id, at, action, detail FROM events
+            WHERE doc_id=? ORDER BY at DESC, id DESC LIMIT 1
+            """, [.int(docID)], { (id: $0.int(0), at: $0.double(1),
+                                   action: $0.string(2), detail: $0.stringOrNil(3)) }),
+           last.action == "edited",
+           now.timeIntervalSince1970 - last.at < Store.editGroupingWindow {
+            try db.run("UPDATE events SET at=?, detail=? WHERE id=?",
+                       [.double(now.timeIntervalSince1970),
+                        .text(Self.mergedEditDetail(last.detail, detail)), .int(last.id)])
+            return
+        }
         try db.run("INSERT INTO events(doc_id, at, action, detail) VALUES(?,?,?,?)",
-                   [.int(docID), .double(Date().timeIntervalSince1970),
+                   [.int(docID), .double(now.timeIntervalSince1970),
                     .text("edited"), .text(detail)])
+    }
+
+    /// One line per change. A field set twice keeps only where it ended up,
+    /// and repeating a change adds nothing.
+    static func mergedEditDetail(_ existing: String?, _ addition: String) -> String {
+        func subject(_ line: String) -> String {
+            if let arrow = line.range(of: " → ") { return String(line[..<arrow.lowerBound]) }
+            if line.hasSuffix(" cleared") { return String(line.dropLast(" cleared".count)) }
+            return line
+        }
+        let key = subject(addition)
+        var lines = (existing ?? "").split(separator: "\n").map(String.init)
+        lines.removeAll { subject($0) == key }
+        lines.append(addition)
+        return lines.joined(separator: "\n")
     }
 
     func processingQueue(limit: Int = 200) throws -> [ProcessingEntry] {

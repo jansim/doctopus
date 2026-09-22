@@ -1253,6 +1253,26 @@ enum SelfTest {
             Check.that("a hand edit does not put the document back into review",
                        (try? await store.detail(subject.doc))?.row.approved == approvedBefore)
 
+            let window = Store.editGroupingWindow
+            let soon = Date().addingTimeInterval(60)
+            try? await store.logEdit(docID: subject.doc, detail: "Date → 1 Jan 2024", at: soon)
+            try? await store.logEdit(docID: subject.doc, detail: "Title → Typed again",
+                                     at: soon.addingTimeInterval(60))
+            let grouped = (try? await store.history(for: subject.doc, limit: 10_000)) ?? []
+            Check.that("hand edits within \(Int(window / 60)) minutes are grouped into one entry",
+                       grouped.count == edited.count, "\(grouped.count) events, was \(edited.count)")
+            Check.that("a grouped entry keeps each field's latest value, once",
+                       grouped.first?.detail == "Date → 1 Jan 2024\nTitle → Typed again",
+                       grouped.first?.detail ?? "no detail")
+            Check.that("a grouped entry is dated by its latest edit",
+                       grouped.first.map { abs($0.at.timeIntervalSince(soon) - 60) < 1 } == true)
+            try? await store.logEdit(docID: subject.doc, detail: "Title cleared",
+                                     at: soon.addingTimeInterval(60 + window + 1))
+            let later = (try? await store.history(for: subject.doc, limit: 10_000)) ?? []
+            Check.that("an edit after a longer pause starts a new entry",
+                       later.count == grouped.count + 1 && later.first?.detail == "Title cleared",
+                       "\(later.count) events, was \(grouped.count)")
+
             let origPath = subject.path
             let movedTarget = root.appendingPathComponent("Work/undotest-\(subject.filename)")
             if (try? FileManager.default.moveItem(at: subject.url, to: movedTarget)) != nil {

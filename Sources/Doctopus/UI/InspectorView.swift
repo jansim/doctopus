@@ -418,8 +418,9 @@ private struct DetailInspector: View {
                         if let move = event.move(relativeTo: model.library(row.library)?.root.path ?? "") {
                             Text(move).font(.caption2).foregroundStyle(.secondary)
                         } else if let note = event.detail?.nilIfBlank {
+                            // A grouped hand edit carries one line per change.
                             Text(note).font(.caption2).foregroundStyle(.secondary)
-                                .lineLimit(2)
+                                .lineLimit(event.action == "edited" ? 8 : 2)
                         }
                     }
                     Spacer(minLength: 0)
