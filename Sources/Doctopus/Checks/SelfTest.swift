@@ -1706,11 +1706,7 @@ enum SelfTest {
                    MetadataSource("heuristic").label == "Heuristics")
 
         print("\nSCAN CAPTURES")
-        // Where a scan can lose a page without anyone hearing about it: the
-        // pasteboard a capture arrives on is read once and then discarded, so
-        // whatever is not taken from it here is gone. Both halves are pure
-        // functions over bytes, so they check without a device in the room —
-        // `--scantest` is for the half that needs one.
+        // Decoding needs no device; `--scantest` is for the half that does.
         Check.that("a capture offering an image ahead of PDF is still taken as PDF",
                    ScanCapture.preferredType(among: [.tiff, .pdf, .jpeg],
                                              accepting: ScanCapture.importTypes) == .pdf)
@@ -1721,7 +1717,6 @@ enum SelfTest {
                    ScanCapture.preferredType(among: [.plainText],
                                              accepting: ScanCapture.importTypes) == nil)
 
-        /// A page of flat grey, as a scanner would hand one over.
         func page(_ shade: Double) -> CGImage? {
             guard let ctx = CGContext(data: nil, width: 120, height: 160, bitsPerComponent: 8,
                                       bytesPerRow: 0, space: CGColorSpaceCreateDeviceGray(),

@@ -82,11 +82,6 @@ extension AppModel {
     }
 
     /// Writes scanner output into a folder and runs it through the pipeline.
-    ///
-    /// Every capture the device sent is accounted for. A scan is the one thing
-    /// here that cannot be fetched again — the pasteboard it arrived on is
-    /// already gone — so one that lands short says so instead of being filed
-    /// as though it were whole.
     func importScanned(_ delivery: ScanDelivery, into destination: URL?) {
         let items = delivery.items
         guard !items.isEmpty else { return }
@@ -183,10 +178,8 @@ extension AppModel {
         notify(message, .warning)
     }
 
-    /// Part of a delivery could not be read. Mid-run this stops the run: the
-    /// next round would wake the device while whatever swallowed the last
-    /// capture is still in play, and a stack scanned into a gap is worse than
-    /// a stack half scanned.
+    /// Part of a delivery could not be read, and it cannot be fetched again.
+    /// Mid-run this stops the run rather than scan on into the same gap.
     func scanIncomplete(_ message: String) {
         guard scanSession != nil else {
             errorMessage = message

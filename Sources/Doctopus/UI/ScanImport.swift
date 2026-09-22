@@ -37,9 +37,7 @@ struct ScanSession: Equatable, Sendable {
         case timedOut
         /// A capture arrived and none of it could be read.
         case failed
-        /// Part of a delivery could not be read. The run stops rather than
-        /// carry on: whatever is losing captures is still losing them, and a
-        /// stack scanned into a gap is worse than a stack half scanned.
+        /// Part of a delivery could not be read.
         case incomplete
         /// The device stopped offering the action, usually by going out of range.
         case deviceGone
@@ -85,9 +83,6 @@ struct ScanSession: Equatable, Sendable {
     var destination: URL?
     /// Documents received so far.
     var count: Int = 0
-    /// Pages inside those documents, which is not the same number the moment a
-    /// device scanner returns a multi-page PDF — and is the number that gives
-    /// a short delivery away while the stack is still in the room.
     var pages: Int = 0
     var paused: Pause? = nil
 
@@ -295,9 +290,6 @@ final class ScanCoordinator: NSObject {
             RunLoop.current.run(mode: .default, before: Date(timeIntervalSinceNow: 0.05))
         }
         if loads.unfinished > 0 {
-            // Nothing can be done about it here — the pasteboard goes with this
-            // return — but a capture that times out used to be dropped without
-            // a word, which is how a scan could come up short in silence.
             ScanCapture.log.error("\(loads.unfinished, privacy: .public) capture(s) still loading after 30s")
         }
 
