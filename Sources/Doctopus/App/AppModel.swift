@@ -224,7 +224,13 @@ final class AppModel {
             StoredSort(field: sort.storageKey, ascending: sortAscending)))
         reloadDocuments()
     }
-    var selectedIDs: Set<DocumentRef> = [] { didSet { if selectedIDs != oldValue { reloadDetail() } } }
+    var selectedIDs: Set<DocumentRef> = [] {
+        didSet {
+            guard selectedIDs != oldValue else { return }
+            reloadDetail()
+            if revealingFolders { refreshRevealedFolders() }
+        }
+    }
     var viewMode: ViewMode = .list {
         didSet {
             guard viewMode != oldValue else { return }
@@ -285,6 +291,14 @@ final class AppModel {
     /// How much of the merged list is loaded — see `pageBatchSize`.
     var currentLimit = 500
     var hasMoreDocuments = false
+
+    // AppModel+Documents, the folders ⌥ points out
+    /// Whether ⌥ is down, and so whether the sidebar is pointing out where the
+    /// selection lives.
+    var revealingFolders = false { didSet { if revealingFolders != oldValue { refreshRevealedFolders() } } }
+    /// Every folder a selected document is in, as its master file or an alias.
+    var revealedFolders: Set<String> = []
+    var revealTask: Task<Void, Never>?
 
     // AppModel+Import, continuous scanning
     /// The run under way, if any: one capture after another from the same

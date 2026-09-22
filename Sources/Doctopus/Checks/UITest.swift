@@ -57,6 +57,7 @@ enum UITest {
             await uiStatePersists(model)
             await sidebarShowsBothTagSystems(model, snapshots: snapshots)
             await handEditsReachTheHistory(model)
+            await optionRevealsFolders(model)
             await secondLibraryMerges(model, alongside: library, snapshots: snapshots)
             // Last: they import documents, which the checks above count.
             await reviewPanelFiles(model, snapshots: snapshots)
@@ -613,6 +614,32 @@ enum UITest {
         // The index is a throwaway, but the Finder tag was written to the
         // user's own file and has to go back the way it was found.
         FinderTags.write(originalFinderTags, to: row.url)
+    }
+
+    /// Driven through `revealingFolders`, which is what the ⌥ monitor sets:
+    /// the checks have no keyboard to hold.
+    private static func optionRevealsFolders(_ model: AppModel) async {
+        let rows = Array(model.documents.prefix(2))
+        guard !rows.isEmpty else { return }
+        defer { model.revealingFolders = false; model.selectedIDs = [] }
+
+        model.selectedIDs = Set(rows.map(\.id))
+        Check.that("nothing is pointed out before ⌥ is held", model.revealedFolders.isEmpty)
+        model.revealingFolders = true
+        let expected = Set(rows.map(\.directory))
+        let lit = await settle { expected.isSubset(of: model.revealedFolders) }
+        Check.that("⌥ points out every selected document's folder", lit,
+                   "expected \(expected), got \(model.revealedFolders)")
+
+        model.selectedIDs = []
+        Check.that("and follows the selection while it is held", model.revealedFolders.isEmpty,
+                   "\(model.revealedFolders)")
+        model.selectedIDs = [rows[0].id]
+        let back = await settle { model.revealedFolders.contains(rows[0].directory) }
+        Check.that("including back onto a document", back)
+
+        model.revealingFolders = false
+        Check.that("letting go of ⌥ clears it", model.revealedFolders.isEmpty)
     }
 
     /// The history recorded only what the pipeline did, so a title somebody

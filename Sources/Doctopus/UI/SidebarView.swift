@@ -341,6 +341,14 @@ struct FolderRow: View {
     /// Which library this folder is in — a rescan started here should not run
     /// over the others.
     private var owningLibrary: Library? { model.libraries.first { $0.owns(path: node.path) } }
+    /// Lit while ⌥ is held and a selected document is in this folder. A
+    /// collapsed folder stands in for whatever it is hiding.
+    private var isRevealed: Bool {
+        let revealed = model.revealedFolders
+        guard !revealed.isEmpty else { return false }
+        if revealed.contains(node.path) { return true }
+        return !isExpanded && revealed.contains { $0.hasPrefix(node.path + "/") }
+    }
 
     var body: some View {
         Label {
@@ -381,6 +389,7 @@ struct FolderRow: View {
             Image(systemName: node.isRoot ? "externaldrive" : "folder")
         }
         .help(node.path)
+        .revealHighlight(isRevealed)
         .dropHighlight(hovering != nil)
         .padding(.leading, CGFloat(depth) * 11)
         .tag(Selection.folder(node.path))
@@ -534,6 +543,37 @@ extension View {
             RoundedRectangle(cornerRadius: 5)
                 .fill(Color.accentColor.opacity(active ? 0.3 : 0))
                 .padding(.horizontal, -4)
+        }
+    }
+
+    /// Marks a folder ⌥ is pointing out. Quieter than a drop target's, which
+    /// has to win when both apply.
+    func revealHighlight(_ active: Bool) -> some View {
+        background {
+            RoundedRectangle(cornerRadius: 5)
+                .strokeBorder(Color.accentColor.opacity(active ? 0.8 : 0), lineWidth: 1.5)
+                .background(RoundedRectangle(cornerRadius: 5)
+                    .fill(Color.accentColor.opacity(active ? 0.12 : 0)))
+                .padding(.horizontal, -4)
+        }
+    }
+}
+
+/// Holding ⌥ on its own points out, in the sidebar, the folders the selected
+/// documents are in. Only on its own: ⌥ is also half of several shortcuts,
+/// and those should not flash the sidebar on the way past.
+enum OptionReveal {
+    static func install(_ held: @escaping @MainActor (Bool) -> Void) {
+        _ = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { event in
+            let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+                .intersection([.command, .option, .control, .shift])
+            MainActor.assumeIsolated { held(flags == .option) }
+            return event
+        }
+        // A key let go while another app is in front never reaches the monitor.
+        _ = NotificationCenter.default.addObserver(forName: NSApplication.didResignActiveNotification,
+                                                   object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated { held(false) }
         }
     }
 }
