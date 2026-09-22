@@ -332,6 +332,26 @@ actor Indexer {
             }
         }
 
+        if let template = decision.rename {
+            let name = Naming.render(template, Naming.Context(
+                date: findings.date,
+                correspondent: decision.setCorrespondent ?? insight?.correspondent ?? findings.correspondent,
+                title: insight?.title ?? findings.title,
+                docType: decision.setDocType ?? insight?.docType ?? findings.docType,
+                language: insight?.language, counter: nil,
+                originalStem: url.deletingPathExtension().lastPathComponent, ext: url.pathExtension))
+            if name != url.lastPathComponent {
+                let target = Naming.uniqueURL(in: url.deletingLastPathComponent(), filename: name)
+                if (try? FileManager.default.moveItem(at: url, to: target)) != nil {
+                    try? await store.updatePath(id, to: target.path)
+                    try? await store.logProcessing(docID: id, action: "renamed", detail: name,
+                                                   confidence: nil, rule: decision.rule,
+                                                   from: url.path, to: target.path, approved: true)
+                    url = target
+                }
+            }
+        }
+
         guard let destination = decision.destination else {
             try? await store.logProcessing(docID: id, action: "imported", detail: decision.explanation,
                                            confidence: decision.confidence, rule: decision.rule,
@@ -348,10 +368,12 @@ actor Indexer {
             let oldDir = URL(fileURLWithPath: from).deletingLastPathComponent()
             FileScanner.pruneEmptyDirectories(startingFrom: oldDir, upTo: store.root)
             url = target
+            // A rule's move is certain, but what was read off the document
+            // still deserves a look, so it waits in Needs Review.
             try? await store.logProcessing(docID: id, action: "routed", detail: decision.explanation,
                                            confidence: decision.confidence, rule: decision.rule,
                                            from: from, to: target.path,
-                                           approved: decision.confidence >= 0.9)
+                                           approved: decision.rule == "derived" && decision.confidence >= 0.9)
         } catch {
             try? await store.logProcessing(docID: id, action: "imported",
                                            detail: "Could not move: \(error.localizedDescription)",

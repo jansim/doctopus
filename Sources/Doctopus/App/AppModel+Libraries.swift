@@ -44,7 +44,7 @@ extension AppModel {
             onDataChanged: { [weak self] in Task { @MainActor in self?.refreshAll() } })
 
         if (try? await store.rules())?.isEmpty ?? true {
-            for rule in Router.starterRules { _ = try? await store.upsertRule(rule) }
+            for rule in Rule.starters { _ = try? await store.upsertRule(rule) }
         }
 
         libraries.append(lib)

@@ -285,22 +285,6 @@ struct HistoryEvent: Identifiable, Hashable, Sendable {
     }
 }
 
-struct Rule: Identifiable, Hashable, Sendable {
-    var id: Int64
-    var name: String
-    var pattern: String
-    var field: String
-    var destination: String
-    var tagNames: String?
-    var weight: Double
-    var enabled: Bool
-    var priority: Int64
-    var mode: MatchMode = .anyWord
-    var caseInsensitive: Bool = true
-    var setCorrespondent: String?
-    var setDocType: String?
-}
-
 struct SavedView: Identifiable, Hashable, Sendable {
     var id: Int64
     var name: String

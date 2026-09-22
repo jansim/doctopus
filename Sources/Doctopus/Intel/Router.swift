@@ -1,9 +1,9 @@
 import Foundation
 
 /// Decides where a new document belongs: user rules first, then the derived
-/// path. It only moves when the best candidate is a clear call — above the
-/// threshold and not within `ambiguityMargin` of another. Destinations outside
-/// the library are never candidates.
+/// path. A matching rule is certain, but rules naming different folders leave
+/// the document for review, and the derived path has to clear the threshold.
+/// Destinations outside the library are never candidates.
 struct Router: Sendable {
 
     struct Candidate: Sendable, Equatable {
@@ -24,11 +24,10 @@ struct Router: Sendable {
         var ambiguous = false
         var setCorrespondent: String?
         var setDocType: String?
+        var rename: String?
 
         var shouldMove: Bool { destination != nil }
     }
-
-    static let ambiguityMargin = 0.05
 
     var rules: [Rule]
     var threshold: Double
@@ -40,20 +39,20 @@ struct Router: Sendable {
                   insight: DocumentInsight?, currentDirectory: URL) -> Decision {
         let correspondent = insight?.correspondent ?? findings.correspondent
         let docType = insight?.docType ?? findings.docType
-        let quality = qualityFactor(findings, insight)
+        let subject = Rule.Subject(text: text, filename: filename,
+                                   correspondent: correspondent, docType: docType)
 
-        var matched: [(rule: Rule, candidate: Candidate)] = []
+        var matched: [Rule] = []
+        var ruleCandidates: [Candidate] = []
         var outside: [String] = []
-        for rule in rules where rule.enabled {
-            let subject = Self.subject(for: rule.field, text: text, filename: filename,
-                                       correspondent: correspondent, docType: docType)
-            guard Self.matches(rule, in: subject) else { continue }
-            let dest = expand(rule.destination, correspondent: correspondent,
+        for rule in rules where rule.enabled && rule.hasEffect && rule.matches(subject) {
+            matched.append(rule)
+            guard let template = rule.destination else { continue }
+            let dest = expand(template, correspondent: correspondent,
                               docType: docType, date: findings.date)
             guard isInsideLibrary(dest) else { outside.append(rule.name); continue }
-            let confidence = min(0.99, rule.weight * quality)
-            matched.append((rule, Candidate(destination: dest, confidence: confidence, rule: rule.name,
-                                            explanation: "Rule “\(rule.name)” matched \(Self.fieldLabel(rule.field))")))
+            ruleCandidates.append(Candidate(destination: dest, confidence: 1, rule: rule.name,
+                                            explanation: Self.why(rule, subject)))
         }
 
         var derived: Candidate?
@@ -61,76 +60,68 @@ struct Router: Sendable {
             let dest = expand(derivedTemplate, correspondent: correspondent,
                               docType: docType, date: findings.date)
             if isInsideLibrary(dest), dest.standardizedFileURL != root.standardizedFileURL {
-                derived = Candidate(destination: dest, confidence: findings.confidence * quality,
+                derived = Candidate(destination: dest,
+                                    confidence: findings.confidence * qualityFactor(findings, insight),
                                     rule: "derived",
                                     explanation: "Derived from correspondent “\(correspondent)”")
             }
         }
 
-        var candidates = Self.deduplicated(matched.map(\.candidate) + (derived.map { [$0] } ?? []))
-
-        guard let first = matched.first else {
-            guard let derived else {
-                let why = outside.isEmpty
-                    ? "No rule matched and no correspondent was identified"
-                    : "“\(outside[0])” matched but points outside the library, so nothing was moved"
-                return Decision(destination: nil, confidence: findings.confidence, rule: "none",
-                                tags: insight?.tags ?? [], explanation: why, candidates: candidates)
-            }
-            return decide(best: derived, runnerUp: nil, tags: insight?.tags ?? [], tagsFromRule: false,
-                          candidates: candidates, currentDirectory: currentDirectory)
-        }
-
-        // Destination is winner-takes-all; tags are a union of all matching rules.
-        var unionTags: [String] = []
+        // Tags are the union of every matching rule; single-valued actions take the first.
+        var tags: [String] = []
         var seenTags = Set<String>()
-        for m in matched {
-            for tag in ruleTags(m.rule) {
-                if seenTags.insert(tag.lowercased()).inserted {
-                    unionTags.append(tag)
-                }
+        for rule in matched {
+            for tag in rule.tagNames where seenTags.insert(tag.lowercased()).inserted {
+                tags.append(tag)
             }
         }
-        let setCorr = matched.compactMap(\.rule.setCorrespondent).first { !$0.isEmpty }
-        let setType = matched.compactMap(\.rule.setDocType).first { !$0.isEmpty }
+        var decision = Decision(destination: nil, confidence: findings.confidence,
+                                rule: matched.first?.name ?? "none",
+                                tags: matched.isEmpty ? (insight?.tags ?? []) : tags,
+                                tagsFromRule: !matched.isEmpty,
+                                explanation: "",
+                                candidates: Self.deduplicated(ruleCandidates + (derived.map { [$0] } ?? [])),
+                                setCorrespondent: matched.lazy.compactMap(\.setCorrespondent).first,
+                                setDocType: matched.lazy.compactMap(\.setDocType).first,
+                                rename: matched.lazy.compactMap(\.rename).first)
 
-        let rival = matched.dropFirst()
-            .map(\.candidate)
-            .filter { $0.destination.standardizedFileURL != first.candidate.destination.standardizedFileURL }
-            .max { $0.confidence < $1.confidence }
-        let ambiguous = rival.map { $0.confidence >= first.candidate.confidence - Self.ambiguityMargin } ?? false
-        if ambiguous, let rival, rival.confidence > first.candidate.confidence {
-            candidates = Self.deduplicated([rival] + candidates)
+        let folders = Self.deduplicated(ruleCandidates)
+        if let best = folders.first {
+            decision.confidence = 1
+            decision.rule = best.rule
+            decision.explanation = best.explanation
+            if folders.count > 1 {
+                decision.ambiguous = true
+                decision.explanation = "“\(folders[0].rule)” and “\(folders[1].rule)” file this in different places — left for you to choose"
+            } else if best.destination.standardizedFileURL == currentDirectory.standardizedFileURL {
+                decision.explanation = "Already in the right place"
+            } else {
+                decision.destination = best.destination
+            }
+            return decision
         }
-        return decide(best: first.candidate, runnerUp: ambiguous ? rival : nil,
-                      tags: unionTags, tagsFromRule: true,
-                      setCorrespondent: setCorr, setDocType: setType,
-                      candidates: candidates, currentDirectory: currentDirectory)
-    }
 
-    private func decide(best: Candidate, runnerUp: Candidate?, tags: [String], tagsFromRule: Bool,
-                        setCorrespondent: String? = nil, setDocType: String? = nil,
-                        candidates: [Candidate], currentDirectory: URL) -> Decision {
-        var decision = Decision(destination: nil, confidence: best.confidence, rule: best.rule,
-                                tags: tags, tagsFromRule: tagsFromRule, explanation: best.explanation,
-                                candidates: candidates, ambiguous: false,
-                                setCorrespondent: setCorrespondent, setDocType: setDocType)
-        if let runnerUp {
-            decision.ambiguous = true
-            decision.explanation = "“\(best.rule)” (\(pct(best.confidence))) and “\(runnerUp.rule)” (\(pct(runnerUp.confidence))) fit equally well — left for you to choose"
+        if let derived {
+            decision.confidence = derived.confidence
+            if matched.isEmpty { decision.rule = derived.rule }
+            if derived.confidence < threshold {
+                decision.explanation = "Would file under \(derived.destination.lastPathComponent), but confidence \(pct(derived.confidence)) is below \(pct(threshold))"
+            } else if derived.destination.standardizedFileURL == currentDirectory.standardizedFileURL {
+                decision.explanation = "Already in the right place"
+            } else {
+                decision.explanation = derived.explanation
+                decision.destination = derived.destination
+            }
             return decision
         }
-        guard best.confidence >= threshold else {
-            decision.explanation = best.rule == "derived"
-                ? "Would file under \(best.destination.lastPathComponent), but confidence \(pct(best.confidence)) is below \(pct(threshold))"
-                : "Matched “\(best.rule)” but confidence \(pct(best.confidence)) is below the \(pct(threshold)) threshold"
-            return decision
+
+        decision.explanation = if let first = outside.first {
+            "“\(first)” matched but points outside the library, so nothing was moved"
+        } else if let first = matched.first {
+            "“\(first.name)” matched, but no rule moves this anywhere"
+        } else {
+            "No rule matched and no correspondent was identified"
         }
-        if best.destination.standardizedFileURL == currentDirectory.standardizedFileURL {
-            decision.explanation = "Already in the right place"
-            return decision
-        }
-        decision.destination = best.destination
         return decision
     }
 
@@ -149,13 +140,16 @@ struct Router: Sendable {
         return !FileScanner.isInsideLibraryContainer(URL(fileURLWithPath: path))
     }
 
-    private static func fieldLabel(_ field: String) -> String {
-        switch field {
-        case "filename": return "the filename"
-        case "correspondent": return "the correspondent"
-        case "type": return "the document type"
-        default: return "the text"
+    private static func why(_ rule: Rule, _ subject: Rule.Subject) -> String {
+        let live = rule.liveConditions
+        let hits = live.filter { $0.matches(subject) }
+        guard live.count > 1 else {
+            return "Rule “\(rule.name)” matched \(live.first?.field.phrase ?? "the document")"
         }
+        let where_ = Set(hits.map(\.field.phrase)).sorted().joined(separator: " and ")
+        return rule.requiresAll
+            ? "Rule “\(rule.name)” matched all \(live.count) conditions"
+            : "Rule “\(rule.name)” matched \(hits.count) of \(live.count) conditions, on \(where_)"
     }
 
     private func qualityFactor(_ f: DocumentAnalyzer.Findings, _ i: DocumentInsight?) -> Double {
@@ -165,28 +159,6 @@ struct Router: Sendable {
            a.contains(b) || b.contains(a) { factor += 0.08 }
         if i.docType != nil, i.docType == f.docType { factor += 0.05 }
         return min(1.0, factor)
-    }
-
-    private func ruleTags(_ r: Rule) -> [String] {
-        (r.tagNames ?? "").split(separator: ",")
-            .map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
-    }
-
-    static func subject(for field: String, text: String, filename: String,
-                        correspondent: String?, docType: String?) -> String {
-        switch field {
-        case "filename": return filename
-        case "correspondent": return correspondent ?? ""
-        case "type": return docType ?? ""
-        default: return text + "\n" + filename
-        }
-    }
-
-    /// Shared by the router and the editor's preview so the two never disagree.
-    /// "Any word" matches at the start of a word: `\b…\b` misses German compounds.
-    static func matches(_ rule: Rule, in subject: String) -> Bool {
-        PatternMatcher.matches(rule.pattern, mode: rule.mode,
-                               insensitive: rule.caseInsensitive, in: subject)
     }
 
     enum PatternKind: Equatable {
@@ -229,19 +201,6 @@ struct Router: Sendable {
     }
 
     private func pct(_ v: Double) -> String { "\(Int((v * 100).rounded()))%" }
-
-    static let starterRules: [Rule] = [
-        Rule(id: 0, name: "Invoices", pattern: "invoice, rechnung, facture", field: "text",
-             destination: "Finances/Invoices/{year}", tagNames: "invoice", weight: 0.92, enabled: true, priority: 100),
-        Rule(id: 0, name: "Bank Statements", pattern: "kontoauszug, account statement, closing balance", field: "text",
-             destination: "Finances/Statements/{year}", tagNames: "bank", weight: 0.9, enabled: true, priority: 90),
-        Rule(id: 0, name: "Tax", pattern: "steuerbescheid, finanzamt, tax return, hmrc, irs", field: "text",
-             destination: "Finances/Tax-{year}", tagNames: "tax", weight: 0.93, enabled: true, priority: 95),
-        Rule(id: 0, name: "Insurance", pattern: "versicherungsschein, insurance policy, policy number", field: "text",
-             destination: "Insurance/{correspondent}", tagNames: "insurance", weight: 0.88, enabled: true, priority: 80),
-        Rule(id: 0, name: "Payslips", pattern: "gehaltsabrechnung, payslip, net pay", field: "text",
-             destination: "Work/Payslips/{year}", tagNames: "payslip", weight: 0.9, enabled: true, priority: 85),
-    ]
 }
 
 extension String {

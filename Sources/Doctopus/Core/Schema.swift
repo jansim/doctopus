@@ -2,7 +2,7 @@ import Foundation
 
 /// Versioned schema. Migrations are append-only: bump `current` and add a case.
 enum Schema {
-    static let current = 17
+    static let current = 19
 
     static func migrate(_ db: Database) throws {
         let version = try db.first("PRAGMA user_version") { Int($0.int(0)) } ?? 0
@@ -23,6 +23,8 @@ enum Schema {
         if version < 15 { try v15(db) }
         if version < 16 { try v16(db) }
         if version < 17 { try v17(db) }
+        if version < 18 { try v18(db) }
+        if version < 19 { try v19(db) }
         try db.exec("PRAGMA user_version=\(current)")
     }
 
@@ -36,6 +38,91 @@ enum Schema {
             [.text(table), .text(column)]) { $0.int(0) } ?? 0
         guard present == 0 else { return }
         try db.exec("ALTER TABLE \(table) ADD COLUMN \(column) \(declaration)")
+    }
+
+    /// Word patterns used to match at the start of a word; the `*` keeps every
+    /// existing one matching what it matched.
+    private static func v19(_ db: Database) throws {
+        let already = try db.first(
+            "SELECT COUNT(*) FROM pragma_table_info('rules') WHERE name='weight'") { $0.int(0) } ?? 0
+        guard already > 0 else { return }
+
+        try db.exec("UPDATE rule_actions SET kind='move_file' WHERE kind='file_into'")
+
+        let words = "(\(MatchMode.anyWord.rawValue), \(MatchMode.allWords.rawValue))"
+        for (table, column) in [("rule_conditions", "pattern"), ("entities", "match")] {
+            let rows = try db.map(
+                "SELECT id, \(column) FROM \(table) WHERE match_mode IN \(words) AND \(column) IS NOT NULL"
+            ) { ($0.int(0), $0.string(1)) }
+            for (id, pattern) in rows {
+                try db.run("UPDATE \(table) SET \(column)=? WHERE id=?",
+                           [.text(PatternMatcher.openingEnds(pattern)), .int(id)])
+            }
+        }
+
+        try db.exec("ALTER TABLE rules DROP COLUMN weight")
+    }
+
+    private static func v18(_ db: Database) throws {
+        let already = try db.first(
+            "SELECT COUNT(*) FROM pragma_table_info('rules') WHERE name='match_all'") { $0.int(0) } ?? 0
+        guard already == 0 else { return }
+
+        try db.exec("""
+        CREATE TABLE IF NOT EXISTS rule_conditions (
+            id                INTEGER PRIMARY KEY,
+            rule_id           INTEGER NOT NULL REFERENCES rules(id) ON DELETE CASCADE,
+            position          INTEGER NOT NULL DEFAULT 0,
+            field             TEXT NOT NULL DEFAULT 'text',
+            pattern           TEXT NOT NULL,
+            match_mode        INTEGER NOT NULL DEFAULT 0,
+            match_insensitive INTEGER NOT NULL DEFAULT 1,
+            negated           INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_rule_conditions ON rule_conditions(rule_id, position);
+
+        CREATE TABLE IF NOT EXISTS rule_actions (
+            id       INTEGER PRIMARY KEY,
+            rule_id  INTEGER NOT NULL REFERENCES rules(id) ON DELETE CASCADE,
+            position INTEGER NOT NULL DEFAULT 0,
+            kind     TEXT NOT NULL,
+            value    TEXT NOT NULL DEFAULT ''
+        );
+        CREATE INDEX IF NOT EXISTS idx_rule_actions ON rule_actions(rule_id, position);
+        """)
+
+        try addColumn(db, table: "rules", column: "match_all",
+                      declaration: "INTEGER NOT NULL DEFAULT 0")
+
+        try db.exec("""
+        INSERT INTO rule_conditions(rule_id, position, field, pattern, match_mode, match_insensitive)
+        SELECT id, 0, COALESCE(field, 'text'), pattern,
+               COALESCE(match_mode, 0), COALESCE(match_insensitive, 1)
+        FROM rules;
+        """)
+
+        for (position, column, kind) in [(0, "destination", "file_into"),
+                                         (1, "tag_names", "add_tags"),
+                                         (2, "set_correspondent", "set_correspondent"),
+                                         (3, "set_doc_type", "set_doc_type")] {
+            try db.exec("""
+            INSERT INTO rule_actions(rule_id, position, kind, value)
+            SELECT id, \(position), '\(kind)', TRIM(\(column)) FROM rules
+            WHERE \(column) IS NOT NULL AND TRIM(\(column)) <> '';
+            """)
+        }
+
+        try db.exec("""
+        ALTER TABLE rules DROP COLUMN pattern;
+        ALTER TABLE rules DROP COLUMN field;
+        ALTER TABLE rules DROP COLUMN destination;
+        ALTER TABLE rules DROP COLUMN tag_names;
+        ALTER TABLE rules DROP COLUMN match_mode;
+        ALTER TABLE rules DROP COLUMN match_insensitive;
+        ALTER TABLE rules DROP COLUMN set_correspondent;
+        ALTER TABLE rules DROP COLUMN set_doc_type;
+        ALTER TABLE rules DROP COLUMN set_fields;
+        """)
     }
 
     private static func v17(_ db: Database) throws {

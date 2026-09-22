@@ -73,7 +73,7 @@ enum SelfTest {
                               },
                               onDataChanged: {})
 
-        for rule in Router.starterRules { _ = try? await store.upsertRule(rule) }
+        for rule in Rule.starters { _ = try? await store.upsertRule(rule) }
 
         let clock = Date()
         await indexer.indexAll()
@@ -190,6 +190,8 @@ enum SelfTest {
             print("  \(row.filename.padded(38)) → \(target.padded(28)) \(Int(decision.confidence * 100))%  [\(decision.rule)]")
         }
 
+        ruleMigration()
+
         print("\nRULE EDITING")
         let samples = (try? await store.ruleSamples()) ?? []
         Check.that("every document is a rule sample", samples.count == stats.total,
@@ -204,17 +206,17 @@ enum SelfTest {
            let payslip = rows.first(where: { $0.filename.lowercased().contains("gehalt") }) {
             let original = rule
             rule.name = "Edited"
-            rule.field = "filename"
-            rule.pattern = "gehaltsabrechnung"
-            rule.destination = "Edited/{year}"
-            rule.weight = 0.99
+            rule.conditions = [RuleCondition(field: .filename, pattern: "gehaltsabrechnung")]
+            rule.actions = [RuleAction(kind: .moveFile, value: "Edited/{year}")]
             _ = try? await store.upsertRule(rule)
             let others = ((try? await store.rules()) ?? []).map(\.id).filter { $0 != rule.id }
             try? await store.reorderRules([rule.id] + others)
             let edited = (try? await store.rules()) ?? []
             Check.that("an edited rule is saved and can be moved to the top",
-                       edited.first?.id == rule.id && edited.first?.pattern == "gehaltsabrechnung"
-                           && edited.first?.field == "filename")
+                       edited.first?.id == rule.id
+                           && edited.first?.conditions.first?.pattern == "gehaltsabrechnung"
+                           && edited.first?.conditions.first?.field == .filename
+                           && edited.first?.destination == "Edited/{year}")
             let text = (try? await store.ocrText(payslip.doc)) ?? ""
             let findings = DocumentAnalyzer.analyze(url: payslip.url, text: text,
                                                     fallbackDate: payslip.createdAt, knownCorrespondents: [])
@@ -224,13 +226,21 @@ enum SelfTest {
                 .evaluate(text: text, filename: payslip.filename, findings: findings, insight: nil,
                           currentDirectory: payslip.url.deletingLastPathComponent())
             print("  \(payslip.filename) → \(decision.destination?.path.replacingOccurrences(of: root.path + "/", with: "") ?? "(stays put)") [\(decision.rule)]")
-            Check.that("routing follows the edited rule", decision.rule == "Edited"
-                       && decision.destination?.path.contains("/Edited/") == true)
+            // The Payslips starter rule matches too, and names another folder.
+            Check.that("routing follows the edited rule, in its new place",
+                       decision.rule == "Edited"
+                           && decision.candidates.first?.destination.path.contains("/Edited/") == true)
+            Check.that("…and two rules naming different folders leave it for review",
+                       decision.ambiguous && decision.destination == nil)
 
-            let ruleA = Rule(id: 0, name: "RuleA", pattern: "gehaltsabrechnung", field: "filename",
-                             destination: "A/{year}", tagNames: "tagA, commonTag", weight: 0.9, enabled: true, priority: 100)
-            let ruleB = Rule(id: 0, name: "RuleB", pattern: "februar", field: "filename",
-                             destination: "B/{year}", tagNames: "tagB, commonTag", weight: 0.8, enabled: true, priority: 90)
+            let ruleA = Rule(id: 0, name: "RuleA", priority: 100,
+                             conditions: [RuleCondition(field: .filename, pattern: "gehaltsabrechnung")],
+                             actions: [RuleAction(kind: .moveFile, value: "A/{year}"),
+                                       RuleAction(kind: .addTags, value: "tagA, commonTag")])
+            let ruleB = Rule(id: 0, name: "RuleB", priority: 90,
+                             conditions: [RuleCondition(field: .filename, pattern: "februar")],
+                             actions: [RuleAction(kind: .moveFile, value: "B/{year}"),
+                                       RuleAction(kind: .addTags, value: "tagB, commonTag")])
             let unionDecision = Router(rules: [ruleA, ruleB], threshold: 0.5,
                                        derivedTemplate: "", root: root, deriveWhenNoRule: false)
                 .evaluate(text: text, filename: payslip.filename, findings: findings, insight: nil,
@@ -238,9 +248,14 @@ enum SelfTest {
             Check.that("matching rules combine tags as a union",
                        unionDecision.tags.contains("tagA") && unionDecision.tags.contains("tagB") && unionDecision.tags.count == 3)
 
-            let assignRule = Rule(id: 0, name: "SetPayroll", pattern: "gehaltsabrechnung", field: "filename",
-                                  destination: "", tagNames: "payroll", weight: 0.9, enabled: true, priority: 100,
-                                  setCorrespondent: "Acme HR", setDocType: "Payslip")
+            await conditionsAndActions(store: store, root: root, text: text,
+                                       findings: findings, payslip: payslip)
+
+            let assignRule = Rule(id: 0, name: "SetPayroll", priority: 100,
+                                  conditions: [RuleCondition(field: .filename, pattern: "gehaltsabrechnung")],
+                                  actions: [RuleAction(kind: .addTags, value: "payroll"),
+                                            RuleAction(kind: .setCorrespondent, value: "Acme HR"),
+                                            RuleAction(kind: .setDocType, value: "Payslip")])
             let savedAssignID = (try? await store.upsertRule(assignRule)) ?? 0
             let applyResult = (try? await store.applyRuleToExisting(ruleID: savedAssignID)) ?? Store.RuleApplyResult()
             Check.that("rule can assign metadata and tags to existing documents",
@@ -842,13 +857,24 @@ enum SelfTest {
         }
         Check.that("“Acme (UK) Ltd” is a name when the rule says it is one",
                    hits("Acme (UK) Ltd", .anyWord, "Invoice from Acme (UK) Ltd"))
-        Check.that("a new rule defaults to reading its pattern as words",
-                   Rule(id: 0, name: "", pattern: "Acme (UK) Ltd", field: "text",
-                        destination: "", tagNames: nil, weight: 0.9, enabled: true,
-                        priority: 0).mode == .anyWord)
-        Check.that("any word still matches at the start of a word, not inside a compound",
-                   hits("rechnung", .anyWord, "Rechnungsnummer 42")
+        Check.that("a new condition defaults to reading its pattern as words",
+                   RuleCondition(pattern: "Acme (UK) Ltd").mode == .anyWord)
+        Check.that("a word matches the whole word and nothing longer",
+                   hits("rechnung", .anyWord, "Ihre Rechnung, Nr. 42")
+                       && !hits("rechnung", .anyWord, "Rechnungsnummer 42")
                        && !hits("rechnung", .anyWord, "Gehaltsabrechnung"))
+        Check.that("a trailing * matches the start of a word",
+                   hits("rechnung*", .anyWord, "Rechnungsnummer 42")
+                       && !hits("rechnung*", .anyWord, "Gehaltsabrechnung"))
+        Check.that("a leading * matches the end of one, and both anywhere in it",
+                   hits("*rechnung", .anyWord, "Gehaltsabrechnung")
+                       && !hits("*rechnung", .anyWord, "Rechnungsnummer")
+                       && hits("*rechnung*", .anyWord, "Gehaltsabrechnungen"))
+        Check.that("a phrase in a word pattern is matched whole too",
+                   hits("net pay", .anyWord, "Total net pay: 2.400")
+                       && !hits("net pay", .anyWord, "net payment"))
+        Check.that("a pattern written before * existed keeps its meaning",
+                   PatternMatcher.openingEnds("invoice,  rechnung*, net pay") == "invoice*, rechnung*, net pay*")
         Check.that("all words needs every one of them",
                    hits("amount, due", .allWords, "the amount due is")
                        && !hits("amount, missing", .allWords, "the amount due is"))
@@ -873,13 +899,28 @@ enum SelfTest {
                    MatchMode.inferred(from: "inv(oice") == .anyWord)
 
         if let id = try? await store.upsertRule(
-            Rule(id: 0, name: "Phrase Test", pattern: "amount due", field: "text",
-                 destination: "Filed/Phrase", tagNames: nil, weight: 0.9, enabled: false,
-                 priority: 1, mode: .exactPhrase, caseInsensitive: false)) {
+            Rule(id: 0, name: "Phrase Test", enabled: false, priority: 1,
+                 requiresAll: true,
+                 conditions: [RuleCondition(field: .text, pattern: "amount due",
+                                            mode: .exactPhrase, caseInsensitive: false),
+                              RuleCondition(field: .filename, pattern: "credit note",
+                                            negated: true)],
+                 actions: [RuleAction(kind: .moveFile, value: "Filed/Phrase"),
+                           RuleAction(kind: .addTags, value: "phrase, filed")])) {
             let saved = ((try? await store.rules()) ?? []).first { $0.id == id }
-            Check.that("a rule remembers how it reads its pattern",
-                       saved?.mode == .exactPhrase && saved?.caseInsensitive == false)
+            Check.that("a rule remembers how it reads its patterns",
+                       saved?.conditions.count == 2 && saved?.requiresAll == true
+                           && saved?.conditions.first?.mode == .exactPhrase
+                           && saved?.conditions.first?.caseInsensitive == false
+                           && saved?.conditions.last?.negated == true
+                           && saved?.conditions.last?.field == .filename)
+            Check.that("…and what it does, in the order it was given",
+                       saved?.actions.map(\.kind) == [.moveFile, .addTags]
+                           && saved?.destination == "Filed/Phrase"
+                           && saved?.tagNames == ["phrase", "filed"])
             try? await store.deleteRule(id)
+            Check.that("deleting a rule takes its conditions and actions with it",
+                       ((try? await store.rules()) ?? []).allSatisfy { $0.id != id })
         }
 
         print("\nNESTED TAGS")
@@ -1339,6 +1380,136 @@ enum SelfTest {
         Check.finish("pipeline self-test")
     }
 
+    private static func ruleMigration() {
+        print("\nRULE MIGRATION")
+        let path = FileManager.default.temporaryDirectory
+            .appendingPathComponent("doctopus-rules-v17-\(UUID().uuidString).sqlite").path
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        guard let db = try? Database(path: path) else {
+            Check.that("a database in the old shape can be opened", false); return
+        }
+        // The `rules` table exactly as version 17 left it.
+        try? db.exec("""
+        CREATE TABLE rules (
+            id          INTEGER PRIMARY KEY,
+            name        TEXT NOT NULL,
+            pattern     TEXT NOT NULL,
+            field       TEXT NOT NULL DEFAULT 'text',
+            destination TEXT NOT NULL,
+            tag_names   TEXT,
+            weight      REAL NOT NULL DEFAULT 0.9,
+            enabled     INTEGER NOT NULL DEFAULT 1,
+            priority    INTEGER NOT NULL DEFAULT 0,
+            match_mode        INTEGER NOT NULL DEFAULT 0,
+            match_insensitive INTEGER NOT NULL DEFAULT 1,
+            set_correspondent TEXT,
+            set_doc_type      TEXT,
+            set_fields        TEXT
+        );
+        INSERT INTO rules(name, pattern, field, destination, tag_names, weight, enabled,
+                          priority, match_mode, match_insensitive, set_correspondent, set_doc_type)
+        VALUES ('Filing', 'invoice, rechnung', 'text', 'Finances/Invoices/{year}', 'invoice, finances',
+                0.92, 1, 100, 0, 1, NULL, NULL),
+               ('Labelling', '^inv-\\d+', 'filename', '', NULL,
+                0.8, 0, 10, 3, 0, 'Acme', 'Invoice');
+        CREATE TABLE entities (
+            id INTEGER PRIMARY KEY, name TEXT NOT NULL, match TEXT,
+            match_mode INTEGER NOT NULL DEFAULT 0
+        );
+        INSERT INTO entities(name, match, match_mode)
+        VALUES ('Stadtwerke', 'stadtwerke, swm', 0), ('Bank', 'DE12 3456', 2);
+        PRAGMA user_version=17;
+        """)
+        try? Schema.migrate(db)
+
+        let conditions = (try? db.map("""
+            SELECT r.name, c.field, c.pattern, c.match_mode, c.match_insensitive
+            FROM rules r JOIN rule_conditions c ON c.rule_id = r.id ORDER BY r.id
+            """) { ($0.string(0), $0.string(1), $0.string(2), $0.int(3), $0.bool(4)) }) ?? []
+        // Word patterns matched at the start of a word; `*` is how that is said now.
+        Check.that("every rule becomes exactly one condition, reading its pattern as it always did",
+                   conditions.count == 2
+                       && conditions[0] == ("Filing", "text", "invoice*, rechnung*", 0, true)
+                       && conditions[1] == ("Labelling", "filename", "^inv-\\d+", 3, false),
+                   "\(conditions)")
+
+        let actions = (try? db.map("""
+            SELECT r.name, a.kind, a.value FROM rules r JOIN rule_actions a ON a.rule_id = r.id
+            ORDER BY r.id, a.position
+            """) { ($0.string(0), $0.string(1), $0.string(2)) }) ?? []
+        Check.that("…and every column it had filled in becomes an action, in order",
+                   actions.map { "\($0.1)=\($0.2)" } == ["move_file=Finances/Invoices/{year}",
+                                                          "add_tags=invoice, finances",
+                                                          "set_correspondent=Acme",
+                                                          "set_doc_type=Invoice"],
+                   "\(actions)")
+        Check.that("a rule with no destination is not given one",
+                   !actions.contains { $0.0 == "Labelling" && $0.1 == "move_file" })
+        let kept = (try? db.map("SELECT name, enabled, priority, match_all FROM rules ORDER BY id") {
+            ($0.string(0), $0.bool(1), $0.int(2), $0.bool(3))
+        }) ?? []
+        Check.that("the rule itself is untouched, and joins its conditions with “any”",
+                   kept.count == 2 && kept[0].1 && kept[0].2 == 100 && !kept[1].1
+                       && kept.allSatisfy { !$0.3 })
+        let entityPatterns = (try? db.map("SELECT match FROM entities ORDER BY id") { $0.string(0) }) ?? []
+        Check.that("a correspondent's own words keep matching what they matched, and a phrase is left alone",
+                   entityPatterns == ["stadtwerke*, swm*", "DE12 3456"], "\(entityPatterns)")
+    }
+
+    private static func conditionsAndActions(store: Store, root: URL, text: String,
+                                             findings: DocumentAnalyzer.Findings,
+                                             payslip: DocumentRow) async {
+        func decide(_ rule: Rule) -> Router.Decision {
+            Router(rules: [rule], threshold: 0.5, derivedTemplate: "", root: root,
+                   deriveWhenNoRule: false)
+                .evaluate(text: text, filename: payslip.filename, findings: findings, insight: nil,
+                          currentDirectory: payslip.url.deletingLastPathComponent())
+        }
+
+        let both = Rule(id: 0, name: "Both", requiresAll: true,
+                        conditions: [RuleCondition(field: .filename, pattern: "gehaltsabrechnung"),
+                                     RuleCondition(field: .filename, pattern: "februar")],
+                        actions: [RuleAction(kind: .moveFile, value: "Filed/Both")])
+        var missing = both
+        missing.conditions[1].pattern = "doctopus-nothing-matches-this"
+        Check.that("all of the conditions means all of them",
+                   decide(both).destination?.path.contains("/Filed/Both") == true
+                       && decide(missing).destination == nil)
+
+        var either = missing
+        either.requiresAll = false
+        Check.that("…and any of them means one is enough",
+                   decide(either).destination?.path.contains("/Filed/Both") == true)
+
+        var excluded = both
+        excluded.conditions[1] = RuleCondition(field: .filename, pattern: "februar", negated: true)
+        Check.that("a condition can rule a document out", decide(excluded).destination == nil)
+
+        let labelOnly = Rule(id: 0, name: "Label",
+                             conditions: [RuleCondition(field: .filename, pattern: "gehaltsabrechnung")],
+                             actions: [RuleAction(kind: .addTags, value: "labelled"),
+                                       RuleAction(kind: .setDocType, value: "Payslip")])
+        let labelled = decide(labelOnly)
+        Check.that("a rule that files nothing still tags and labels",
+                   labelled.destination == nil && labelled.tags == ["labelled"]
+                       && labelled.tagsFromRule && labelled.setDocType == "Payslip")
+
+        var renaming = labelOnly
+        renaming.actions.append(RuleAction(kind: .renameFile, value: "{date}_{type}"))
+        Check.that("a rule can ask for a rename without moving anything",
+                   decide(renaming).rename == "{date}_{type}" && decide(renaming).destination == nil)
+
+        var halfTyped = labelOnly
+        halfTyped.requiresAll = true
+        halfTyped.conditions.append(RuleCondition())
+        Check.that("a condition with nothing in it changes nothing",
+                   decide(halfTyped).tags == ["labelled"])
+        Check.that("…and a rule with no condition at all matches nothing",
+                   !Rule(id: 0, name: "Empty",
+                         actions: [RuleAction(kind: .addTags, value: "x")])
+                       .matches(Rule.Subject(text: text, filename: payslip.filename)))
+    }
+
     /// Doctopus may only ever move or rewrite a file it just brought in itself,
     /// and only when nobody said where it should go. Everything else — files
     /// already in the library, imports into a chosen folder, the user's own
@@ -1400,24 +1571,29 @@ enum SelfTest {
         var neutral: DocumentRow?
         for row in rows where row.ext == "pdf" {
             let text = (try? await store.ocrText(row.doc)) ?? ""
-            let hit = existing.contains {
-                Router.matches($0, in: Router.subject(for: $0.field, text: text, filename: row.filename,
-                                                     correspondent: row.correspondent, docType: row.docType))
-            }
+            let subject = Rule.Subject(text: text, filename: row.filename,
+                                       correspondent: row.correspondent, docType: row.docType)
+            let hit = existing.contains { $0.matches(subject) }
             if !hit { neutral = row; break }
         }
 
         let outside = fm.temporaryDirectory.appendingPathComponent("doctopus-escape-\(UUID().uuidString)",
                                                                     isDirectory: true)
+        func filingRule(_ name: String, _ pattern: String, _ folder: String,
+                        priority: Int64) -> Rule {
+            Rule(id: 0, name: name, priority: priority,
+                 conditions: [RuleCondition(field: .filename, pattern: pattern)],
+                 actions: [RuleAction(kind: .moveFile, value: folder)])
+        }
         let testRules = [
-            Rule(id: 0, name: "Clear", pattern: "doctopus-clear", field: "filename",
-                 destination: "Filed/Clear", tagNames: nil, weight: 0.99, enabled: true, priority: 1000),
-            Rule(id: 0, name: "Tie A", pattern: "doctopus-tie", field: "filename",
-                 destination: "Filed/A", tagNames: nil, weight: 0.95, enabled: true, priority: 999),
-            Rule(id: 0, name: "Tie B", pattern: "doctopus-tie", field: "filename",
-                 destination: "Filed/B", tagNames: nil, weight: 0.94, enabled: true, priority: 998),
-            Rule(id: 0, name: "Escape", pattern: "doctopus-escape", field: "filename",
-                 destination: outside.path, tagNames: nil, weight: 0.99, enabled: true, priority: 997),
+            filingRule("Clear", "doctopus-clear", "Filed/Clear", priority: 1000),
+            filingRule("Tie A", "doctopus-tie", "Filed/A", priority: 999),
+            filingRule("Tie B", "doctopus-tie", "Filed/B", priority: 998),
+            filingRule("Escape", "doctopus-escape", outside.path, priority: 997),
+            Rule(id: 0, name: "Rename", priority: 996,
+                 conditions: [RuleCondition(field: .filename, pattern: "doctopus-rename")],
+                 actions: [RuleAction(kind: .moveFile, value: "Filed/Renamed"),
+                           RuleAction(kind: .renameFile, value: "renamed-{original}")]),
         ]
         var ruleIDs: [Int64] = []
         for rule in testRules { if let id = try? await store.upsertRule(rule) { ruleIDs.append(id) } }
@@ -1441,6 +1617,10 @@ enum SelfTest {
             Check.that("a new document with one clear home is filed there",
                        row?.directory == root.appendingPathComponent("Filed/Clear").path)
             Check.that("…and the file it was copied from is left alone", fm.fileExists(atPath: clear.path))
+            let waiting = ((try? await store.listDocuments(selection: .needsReview, query: SearchQuery(""),
+                                                           sort: .added, ascending: false)) ?? [])
+                .contains { $0.id == row?.id }
+            Check.that("…and still waits in Needs Review for a look at what was read", waiting)
             try? fm.removeItem(at: clear)
         }
 
@@ -1483,6 +1663,29 @@ enum SelfTest {
             try? fm.removeItem(at: escape)
         }
 
+        if let named = stage("doctopus-rename") {
+            await indexer.importFiles([named], into: inbox, route: true)
+            let row = await imported("doctopus-rename")
+            print("  rename and move    → \(row.map { $0.path.replacingOccurrences(of: root.path + "/", with: "") } ?? "nowhere")")
+            Check.that("a new document is renamed and moved by the rule that matched it",
+                       row?.filename.hasPrefix("renamed-") == true
+                           && row?.filename.hasSuffix("doctopus-rename.pdf") == true
+                           && row?.directory == root.appendingPathComponent("Filed/Renamed").path,
+                       row?.path ?? "nowhere")
+            Check.that("…and the file it was copied from keeps its name", fm.fileExists(atPath: named.path))
+            try? fm.removeItem(at: named)
+
+            let again = Rule(id: 0, name: "Again",
+                             conditions: [RuleCondition(field: .filename, pattern: "*doctopus-rename")],
+                             actions: [RuleAction(kind: .renameFile, value: "again-{original}")])
+            let applied = (try? await store.applyRuleToExisting(again)) ?? Store.RuleApplyResult()
+            let after = await imported("doctopus-rename")
+            Check.that("applying a rule to existing documents renames them in place",
+                       applied.renamed == 1 && after?.filename.hasPrefix("again-renamed-") == true
+                           && after.map { fm.fileExists(atPath: $0.path) } == true
+                           && after?.directory == row?.directory,
+                       after?.path ?? "nowhere")
+        }
         if let doc = rows.first(where: { $0.directory.hasSuffix("Personal") }) {
             let folder = root.appendingPathComponent("Work", isDirectory: true)
             if let alias = try? AliasManager.createAlias(to: doc.url, in: folder) {
