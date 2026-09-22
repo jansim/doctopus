@@ -427,10 +427,12 @@ actor Indexer {
             let oldDir = URL(fileURLWithPath: from).deletingLastPathComponent()
             FileScanner.pruneEmptyDirectories(startingFrom: oldDir, upTo: store.root)
             url = target
+            // A rule's move is certain, but what was read off the document
+            // still deserves a look, so it waits in Needs Review.
             try? await store.logProcessing(docID: id, action: "routed", detail: decision.explanation,
                                            confidence: decision.confidence, rule: decision.rule,
                                            from: from, to: target.path,
-                                           approved: decision.confidence >= 0.9)
+                                           approved: decision.rule == "derived" && decision.confidence >= 0.9)
         } catch {
             try? await store.logProcessing(docID: id, action: "imported",
                                            detail: "Could not move: \(error.localizedDescription)",

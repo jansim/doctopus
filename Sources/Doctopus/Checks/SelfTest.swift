@@ -1771,6 +1771,10 @@ enum SelfTest {
             Check.that("a new document with one clear home is filed there",
                        row?.directory == root.appendingPathComponent("Filed/Clear").path)
             Check.that("…and the file it was copied from is left alone", fm.fileExists(atPath: clear.path))
+            let waiting = ((try? await store.listDocuments(selection: .needsReview, query: SearchQuery(""),
+                                                           sort: .added, ascending: false)) ?? [])
+                .contains { $0.id == row?.id }
+            Check.that("…and still waits in Needs Review for a look at what was read", waiting)
             try? fm.removeItem(at: clear)
         }
 
