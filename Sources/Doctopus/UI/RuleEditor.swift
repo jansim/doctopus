@@ -4,17 +4,13 @@ import SwiftUI
 /// to it when it does. Works on a draft, so Cancel really does leave the rule —
 /// and for a new one, the rule list — exactly as it was.
 ///
-/// What the rule will do is spelled out as it is typed: a regex that does not
-/// compile says so on the condition that owns it, the folder shows where a
-/// document would land, and the count says how many documents already in the
-/// library the whole rule catches — conditions, join and all, through the same
-/// matcher routing uses.
+/// The count of documents already in the library the rule catches goes
+/// through the same matcher routing uses, so it is what routing will do.
 struct RuleEditor: View {
     @Environment(\.dismiss) private var dismiss
     @State private var draft: Rule
     private let isNew: Bool
     private let library: Library
-    private let threshold: Double
     private let onSave: (Rule) -> Void
 
     @State private var samples: [Rule.Subject]?
@@ -23,17 +19,13 @@ struct RuleEditor: View {
     @State private var applying = false
     @State private var applyStatus: String?
 
-    init(rule: Rule, library: Library, threshold: Double, onSave: @escaping (Rule) -> Void) {
+    init(rule: Rule, library: Library, onSave: @escaping (Rule) -> Void) {
         var rule = rule
-        // A rule always shows at least one condition and one action: an empty
-        // list would make the first thing anyone has to do be finding the
-        // button that adds one.
         if rule.conditions.isEmpty { rule.conditions = [RuleCondition()] }
-        if rule.actions.isEmpty { rule.actions = [RuleAction(kind: .fileInto)] }
+        if rule.actions.isEmpty { rule.actions = [RuleAction(kind: .moveFile)] }
         _draft = State(initialValue: rule)
         isNew = rule.id == 0
         self.library = library
-        self.threshold = threshold
         self.onSave = onSave
     }
 
@@ -63,19 +55,6 @@ struct RuleEditor: View {
                         Text("Apply to Existing")
                     }
                 }
-
-                Section {
-                    LabeledContent("Confidence") {
-                        HStack {
-                            Slider(value: $draft.weight, in: 0.5...0.99)
-                            Text("\(Int((draft.weight * 100).rounded()))%")
-                                .monospacedDigit().frame(width: 40)
-                        }
-                    }
-                    Text(confidenceExplanation)
-                        .font(.caption)
-                        .foregroundStyle(draft.weight < threshold ? AnyShapeStyle(Color.orange) : AnyShapeStyle(.secondary))
-                }
             }
             .formStyle(.grouped)
 
@@ -102,8 +81,8 @@ struct RuleEditor: View {
         .onChange(of: draft.requiresAll) { refreshMatches() }
     }
 
-    /// The draft as it deserves to be stored: trimmed, named, and without the
-    /// rows the editor keeps on screen but nobody filled in.
+    /// The draft without the rows the editor keeps on screen but nobody
+    /// filled in.
     private func tidied() -> Rule {
         var rule = draft
         rule.name = rule.name.nilIfBlank ?? "Untitled Rule"
@@ -121,12 +100,11 @@ struct RuleEditor: View {
     @ViewBuilder
     private var conditionsSection: some View {
         Section {
-            if draft.conditions.count > 1 {
-                Picker("Match", selection: $draft.requiresAll) {
-                    Text("Any of these conditions").tag(false)
-                    Text("All of these conditions").tag(true)
-                }
+            Picker("Match", selection: $draft.requiresAll) {
+                Text("Any of these conditions").tag(false)
+                Text("All of these conditions").tag(true)
             }
+            .disabled(draft.conditions.count < 2)
             ForEach($draft.conditions) { $condition in
                 ConditionRow(condition: $condition,
                              removable: draft.conditions.count > 1) {
@@ -143,7 +121,7 @@ struct RuleEditor: View {
         } header: {
             Text("If")
         } footer: {
-            Text("Comma-separated words are matched at the start of a word, so “rechnung” catches “Rechnungsnummer” without firing on “Gehaltsabrechnung”.")
+            Text("Comma-separated words are matched as whole words. A * widens one: “rechnung*” also catches “Rechnungsnummer”, “*rechnung” catches “Gehaltsabrechnung”.")
                 .font(.caption).foregroundStyle(.secondary)
         }
     }
@@ -167,9 +145,6 @@ struct RuleEditor: View {
         }
     }
 
-    /// Runs the rule over the library with its own matcher, so the count is
-    /// what routing would really do. Cheap enough to redo on every keystroke
-    /// for a few thousand documents.
     private func refreshMatches() {
         guard let samples else { return }
         let rule = draft
@@ -205,50 +180,60 @@ struct RuleEditor: View {
                 .menuStyle(.borderlessButton)
                 .fixedSize()
             }
-            if let folder = destinationURL {
+            if let example {
                 LabeledContent("For example") {
-                    Text(describe(folder))
+                    Text(example)
                         .font(.caption.monospaced())
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
                         .truncationMode(.middle)
                         .textSelection(.enabled)
                 }
-                if !previewRouter.isInsideLibrary(folder) {
-                    Label("Outside the library. Doctopus only ever routes within a library, so this rule will file nothing.",
-                          systemImage: "exclamationmark.triangle.fill")
-                        .font(.caption).foregroundStyle(.orange)
-                }
+            }
+            if let folder = destinationURL, !previewRouter.isInsideLibrary(folder) {
+                Label("Outside the library. Doctopus only ever routes within a library, so this rule will move nothing.",
+                      systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption).foregroundStyle(.orange)
             }
         } header: {
             Text("Then")
         } footer: {
-            Text("Folders are relative to the library. Tags and metadata are assigned whenever the rule matches, whether or not the document is moved.")
+            Text("Folders are relative to the library. When matching rules move a document to different folders, it waits in Needs Review for you to choose.")
                 .font(.caption).foregroundStyle(.secondary)
         }
     }
 
-    /// Each kind of action says one thing, so a rule that already files into a
-    /// folder is not offered a second folder to file into.
     private var unusedActionKinds: [RuleActionKind] {
         let used = Set(draft.actions.map(\.kind))
         return RuleActionKind.allCases.filter { !used.contains($0) }
     }
 
     private var previewRouter: Router {
-        Router(rules: [], threshold: threshold, derivedTemplate: "",
+        Router(rules: [], threshold: 1, derivedTemplate: "",
                root: library.root, deriveWhenNoRule: false)
     }
 
     private var destinationURL: URL? {
         guard let template = draft.destination else { return nil }
-        return previewRouter.expand(template, correspondent: "Acme Corp",
-                                    docType: "Invoice", date: Date())
+        return previewRouter.expand(template, correspondent: "Acme Corp", docType: "Invoice",
+                                    date: DayDate.calendar.date(from: DateComponents(year: 2026, month: 3, day: 14)))
+    }
+
+    /// Rendered from the same sample values as the template fields elsewhere.
+    private var example: String? {
+        let folder = destinationURL.map(describe)
+        let name = draft.rename.map { TemplateFieldKind.filename.preview($0) }
+        switch (folder, name) {
+        case let (folder?, name?): return folder + "/" + name
+        case let (folder?, nil): return folder + "/"
+        case let (nil, name?): return name
+        case (nil, nil): return nil
+        }
     }
 
     private func describe(_ url: URL) -> String {
         let rootPath = library.root.path
-        if url.path == rootPath { return "\(library.displayName) (the library folder itself)" }
+        if url.path == rootPath { return library.displayName }
         if url.path.hasPrefix(rootPath + "/") {
             return library.displayName + "/" + url.path.dropFirst(rootPath.count + 1)
         }
@@ -261,28 +246,15 @@ struct RuleEditor: View {
         applying = true
         applyStatus = nil
         Task {
-            // Applied from the draft rather than a saved copy: the rule is only
-            // written to the library when the user presses Add Rule / Save.
+            // The draft, not a saved copy: the rule is only written to the
+            // library when the user presses Add Rule / Save.
             let res = (try? await library.store.applyRuleToExisting(tidied())) ?? Store.RuleApplyResult()
-            applyStatus = "Applied to \(res.matched) document\(res.matched == 1 ? "" : "s") (\(res.moved) moved, \(res.tagged) tagged)."
+            applyStatus = "Applied to \(res.matched) document\(res.matched == 1 ? "" : "s") (\(res.moved) moved, \(res.renamed) renamed, \(res.tagged) tagged)."
             applying = false
         }
     }
-
-    private var confidenceExplanation: String {
-        let pct = { (v: Double) in "\(Int((v * 100).rounded()))%" }
-        if draft.destination == nil {
-            return "This rule files nothing, so its confidence only labels what it did in the queue."
-        }
-        if draft.weight < threshold {
-            return "Below the \(pct(threshold)) routing threshold, so a match only tags the document and leaves it for review."
-        }
-        return "How sure a match makes Doctopus. It is scaled down a little when the extracted details disagree, and a document is only moved at \(pct(threshold)) or more."
-    }
 }
 
-/// One condition: what to look at, whether the match is wanted or unwanted,
-/// how to read the pattern, and the pattern itself.
 private struct ConditionRow: View {
     @Binding var condition: RuleCondition
     let removable: Bool
@@ -302,15 +274,7 @@ private struct ConditionRow: View {
                 .labelsHidden()
                 .fixedSize()
                 Spacer(minLength: 0)
-                // Hidden rather than disabled on the last one: a control that
-                // is always there and never works reads as broken.
-                if removable {
-                    Button(role: .destructive) { remove() } label: {
-                        Image(systemName: "minus.circle")
-                    }
-                    .buttonStyle(.borderless)
-                    .help("Remove this condition")
-                }
+                RemoveButton(help: "Remove this condition", enabled: removable, action: remove)
             }
             HStack(spacing: 6) {
                 Picker("", selection: $condition.mode) {
@@ -335,14 +299,14 @@ private struct ConditionRow: View {
 
     private var prompt: String {
         switch condition.mode {
-        case .anyWord, .allWords, .fuzzy: return "invoice, rechnung, facture"
+        case .anyWord, .allWords: return "invoice, rechnung*"
+        case .fuzzy: return "invoice, rechnung"
         case .exactPhrase: return "amount due"
         case .regex: return "^inv-\\d+"
         }
     }
 }
 
-/// One action: what to do, and the one value it takes.
 private struct ActionRow: View {
     @Binding var action: RuleAction
     let library: Library
@@ -355,9 +319,12 @@ private struct ActionRow: View {
                 Text(action.kind.label)
                     .frame(width: 130, alignment: .leading)
                 TextField("", text: $action.value, prompt: Text(action.kind.placeholder))
-                    .font(action.kind == .fileInto
-                          ? .system(.body, design: .monospaced) : .body)
-                if action.kind == .fileInto {
+                    .font(templateKind != nil ? .system(.body, design: .monospaced) : .body)
+                    .onChange(of: action.value) { _, value in
+                        guard templateKind == .filename, value.contains("/") else { return }
+                        action.value = value.filter { $0 != "/" }
+                    }
+                if action.kind == .moveFile {
                     Button {
                         guard let chosen = FolderPicker.chooseRelativePath(
                             in: library, message: "Choose a folder inside \(library.displayName).")
@@ -369,20 +336,15 @@ private struct ActionRow: View {
                     .buttonStyle(.borderless)
                     .help("Choose a folder")
                 }
-                if removable {
-                    Button(role: .destructive) { remove() } label: {
-                        Image(systemName: "minus.circle")
-                    }
-                    .buttonStyle(.borderless)
-                    .help("Remove this action")
-                }
+                RemoveButton(help: "Remove this action", enabled: removable, action: remove)
             }
-            if action.kind == .fileInto {
+            if let templateKind {
                 HStack(spacing: 4) {
-                    ForEach(["{year}", "{month}", "{correspondent}", "{type}"], id: \.self) { token in
-                        Button(token) { append(token) }
+                    ForEach(tokens, id: \.self) { token in
+                        Button(token) { append(token, separator: templateKind.separator) }
                             .buttonStyle(.borderless)
                             .font(.caption.monospaced())
+                            .help(TemplateTokens.all.first { $0.symbol == token }?.help ?? "")
                     }
                     Spacer()
                 }
@@ -390,11 +352,40 @@ private struct ActionRow: View {
         }
     }
 
-    private func append(_ token: String) {
-        if action.value.isEmpty || action.value.hasSuffix("/") {
+    private var templateKind: TemplateFieldKind? {
+        switch action.kind {
+        case .moveFile: return .path
+        case .renameFile: return .filename
+        default: return nil
+        }
+    }
+
+    private var tokens: [String] {
+        action.kind == .moveFile
+            ? ["{year}", "{month}", "{correspondent}", "{type}"]
+            : ["{date}", "{correspondent}", "{title}", "{type}"]
+    }
+
+    private func append(_ token: String, separator: Character) {
+        if action.value.isEmpty || action.value.last == separator {
             action.value += token
         } else {
-            action.value += "/" + token
+            action.value += String(separator) + token
         }
+    }
+}
+
+private struct RemoveButton: View {
+    let help: String
+    let enabled: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(role: .destructive, action: action) {
+            Image(systemName: "minus.circle")
+        }
+        .buttonStyle(.borderless)
+        .disabled(!enabled)
+        .help(help)
     }
 }

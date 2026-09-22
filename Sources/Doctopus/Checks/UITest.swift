@@ -304,8 +304,7 @@ enum UITest {
 
     /// The rule editor is a sheet over a fixed-size Settings window, so a
     /// layout that overflows it shows up as a blank or clipped pane. Drawn
-    /// twice: as a starter rule is, and with the conditions and actions a rule
-    /// can now carry, which is what makes the sheet grow.
+    /// short and with every kind of action, which is what makes it grow.
     private static func ruleEditorDraws(_ model: AppModel, snapshots: String?) async {
         guard let library = model.libraries.first,
               let rule = (try? await library.store.rules())?.first else {
@@ -320,8 +319,7 @@ enum UITest {
         }
 
         for (label, subject) in [("one condition", rule), ("every condition and action", full)] {
-            let editor = RuleEditor(rule: subject, library: library,
-                                    threshold: model.settings.routingThreshold) { _ in }
+            let editor = RuleEditor(rule: subject, library: library) { _ in }
             let (window, host) = host(editor.environment(model), size: NSSize(width: 580, height: 600))
             defer { window.orderOut(nil) }
             try? await Task.sleep(for: .seconds(1))

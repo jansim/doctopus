@@ -1285,35 +1285,34 @@ actor Store {
         }
 
         return try db.map("""
-            SELECT id, name, enabled, priority, weight, match_all
+            SELECT id, name, enabled, priority, match_all
             FROM rules ORDER BY priority DESC, id
             """) {
             let id = $0.int(0)
             return Rule(id: id, name: $0.string(1), enabled: $0.bool(2), priority: $0.int(3),
-                        weight: $0.double(4), requiresAll: $0.bool(5),
+                        requiresAll: $0.bool(4),
                         conditions: conditions[id] ?? [], actions: actions[id] ?? [])
         }
     }
 
-    /// Writes a rule whole: the row, then its conditions and actions, which are
-    /// replaced rather than merged. Editing a rule is editing one thing, and a
-    /// half-written rule would file documents somewhere nobody asked for.
+    /// Writes a rule whole, replacing its conditions and actions in one
+    /// transaction: a half-written rule would file documents nobody asked for.
     @discardableResult
     func upsertRule(_ r: Rule) throws -> Int64 {
         try db.transaction { () -> Int64 in
             var id = r.id
             if id > 0 {
                 try db.run("""
-                    UPDATE rules SET name=?, enabled=?, priority=?, weight=?, match_all=? WHERE id=?
+                    UPDATE rules SET name=?, enabled=?, priority=?, match_all=? WHERE id=?
                     """, [.text(r.name), .bool(r.enabled), .int(r.priority),
-                          .double(r.weight), .bool(r.requiresAll), .int(id)])
+                          .bool(r.requiresAll), .int(id)])
                 try db.run("DELETE FROM rule_conditions WHERE rule_id=?", [.int(id)])
                 try db.run("DELETE FROM rule_actions WHERE rule_id=?", [.int(id)])
             } else {
                 id = try db.run("""
-                    INSERT INTO rules(name, enabled, priority, weight, match_all) VALUES(?,?,?,?,?)
+                    INSERT INTO rules(name, enabled, priority, match_all) VALUES(?,?,?,?)
                     """, [.text(r.name), .bool(r.enabled), .int(r.priority),
-                          .double(r.weight), .bool(r.requiresAll)])
+                          .bool(r.requiresAll)])
             }
             for (position, c) in r.conditions.enumerated() where c.pattern.nilIfBlank != nil {
                 try db.run("""
@@ -1352,6 +1351,7 @@ actor Store {
     struct RuleApplyResult: Sendable {
         var matched: Int = 0
         var moved: Int = 0
+        var renamed: Int = 0
         var tagged: Int = 0
         var metadataUpdated: Int = 0
     }
@@ -1369,7 +1369,7 @@ actor Store {
     func applyRuleToExisting(_ rule: Rule) async throws -> RuleApplyResult {
         let docs = try db.map("""
             SELECT d.id, d.path, d.filename, d.created_at, m.doc_date, ec.name, et.name,
-                   (SELECT f.body FROM doc_fts f WHERE f.rowid = d.id)
+                   (SELECT f.body FROM doc_fts f WHERE f.rowid = d.id), m.title, m.language
             FROM documents d
             LEFT JOIN metadata m ON m.doc_id = d.id
             LEFT JOIN entities ec ON ec.id = m.correspondent_id
@@ -1379,7 +1379,8 @@ actor Store {
             (id: $0.int(0), path: absPath($0.string(1)), filename: $0.string(2),
              created: Date(timeIntervalSince1970: $0.double(3)),
              docDate: $0.date(4), correspondent: $0.stringOrNil(5),
-             docType: $0.stringOrNil(6), text: $0.stringOrNil(7) ?? "")
+             docType: $0.stringOrNil(6), text: $0.stringOrNil(7) ?? "",
+             title: $0.stringOrNil(8), language: $0.stringOrNil(9))
         }
 
         var result = RuleApplyResult()
@@ -1419,23 +1420,44 @@ actor Store {
                     result.metadataUpdated += 1
                 }
 
-                // 3. Move if the rule files into a folder
-                if let destStr = rule.destination {
-                    let destURL = router.expand(destStr, correspondent: patch.correspondent ?? doc.correspondent,
-                                                docType: patch.docType ?? doc.docType, date: doc.docDate ?? doc.created)
-                    if router.isInsideLibrary(destURL) {
-                        let currentDir = URL(fileURLWithPath: doc.path).deletingLastPathComponent()
-                        if currentDir.standardizedFileURL != destURL.standardizedFileURL {
-                            try? FileManager.default.createDirectory(at: destURL, withIntermediateDirectories: true)
-                            let target = Naming.uniqueURL(in: destURL, filename: doc.filename)
-                            if (try? FileManager.default.moveItem(at: URL(fileURLWithPath: doc.path), to: target)) != nil {
-                                try updatePath(doc.id, to: target.path)
-                                FileScanner.pruneEmptyDirectories(startingFrom: currentDir, upTo: root)
-                                try logProcessing(docID: doc.id, action: "routed", detail: "Applied rule “\(rule.name)”",
-                                                  confidence: rule.weight, rule: rule.name,
-                                                  from: doc.path, to: target.path, approved: true)
-                                result.moved += 1
-                            }
+                // 3. Move, then rename, each from wherever the file is by then
+                var path = doc.path
+                let correspondent = patch.correspondent ?? doc.correspondent
+                let docType = patch.docType ?? doc.docType
+                let date = doc.docDate ?? doc.created
+                if let template = rule.destination {
+                    let folder = router.expand(template, correspondent: correspondent,
+                                               docType: docType, date: date)
+                    let current = URL(fileURLWithPath: path).deletingLastPathComponent()
+                    if router.isInsideLibrary(folder),
+                       current.standardizedFileURL != folder.standardizedFileURL {
+                        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+                        let target = Naming.uniqueURL(in: folder, filename: URL(fileURLWithPath: path).lastPathComponent)
+                        if (try? FileManager.default.moveItem(at: URL(fileURLWithPath: path), to: target)) != nil {
+                            try updatePath(doc.id, to: target.path)
+                            FileScanner.pruneEmptyDirectories(startingFrom: current, upTo: root)
+                            try logProcessing(docID: doc.id, action: "routed", detail: "Applied rule “\(rule.name)”",
+                                              confidence: 1, rule: rule.name,
+                                              from: path, to: target.path, approved: true)
+                            path = target.path
+                            result.moved += 1
+                        }
+                    }
+                }
+                if let template = rule.rename {
+                    let url = URL(fileURLWithPath: path)
+                    let name = Naming.render(template, Naming.Context(
+                        date: date, correspondent: correspondent, title: doc.title, docType: docType,
+                        language: doc.language, counter: nil,
+                        originalStem: url.deletingPathExtension().lastPathComponent, ext: url.pathExtension))
+                    if name != url.lastPathComponent {
+                        let target = Naming.uniqueURL(in: url.deletingLastPathComponent(), filename: name)
+                        if (try? FileManager.default.moveItem(at: url, to: target)) != nil {
+                            try updatePath(doc.id, to: target.path)
+                            try logProcessing(docID: doc.id, action: "renamed", detail: target.lastPathComponent,
+                                              confidence: nil, rule: rule.name,
+                                              from: url.path, to: target.path, approved: true)
+                            result.renamed += 1
                         }
                     }
                 }

@@ -2,7 +2,7 @@ import Foundation
 
 /// Versioned schema. Migrations are append-only: bump `current` and add a case.
 enum Schema {
-    static let current = 18
+    static let current = 19
 
     static func migrate(_ db: Database) throws {
         let version = try db.first("PRAGMA user_version") { Int($0.int(0)) } ?? 0
@@ -24,6 +24,7 @@ enum Schema {
         if version < 16 { try v16(db) }
         if version < 17 { try v17(db) }
         if version < 18 { try v18(db) }
+        if version < 19 { try v19(db) }
         try db.exec("PRAGMA user_version=\(current)")
     }
 
@@ -37,6 +38,40 @@ enum Schema {
             [.text(table), .text(column)]) { $0.int(0) } ?? 0
         guard present == 0 else { return }
         try db.exec("ALTER TABLE \(table) ADD COLUMN \(column) \(declaration)")
+    }
+
+    /// Words match whole, rules drop their confidence, and "file into"
+    /// becomes "move file" alongside a new "rename file".
+    ///
+    /// The word modes matched at the start of a word, so "rechnung" caught
+    /// "Rechnungsnummer" whether or not anyone meant it to. Now a word is a
+    /// word, and `rechnung*` asks for the rest. Every pattern already written
+    /// — a rule's, or a correspondent's or type's own — gets the `*` it was
+    /// implicitly carrying, so nothing that matched yesterday stops matching.
+    ///
+    /// A rule's `weight` scaled how sure a match was, which made a rule you
+    /// wrote about a filename less sure when a model disagreed about the
+    /// correspondent. A rule that matches is certain; two rules that disagree
+    /// about the folder are what leaves a document for review.
+    private static func v19(_ db: Database) throws {
+        let already = try db.first(
+            "SELECT COUNT(*) FROM pragma_table_info('rules') WHERE name='weight'") { $0.int(0) } ?? 0
+        guard already > 0 else { return }
+
+        try db.exec("UPDATE rule_actions SET kind='move_file' WHERE kind='file_into'")
+
+        let words = "(\(MatchMode.anyWord.rawValue), \(MatchMode.allWords.rawValue))"
+        for (table, column) in [("rule_conditions", "pattern"), ("entities", "match")] {
+            let rows = try db.map(
+                "SELECT id, \(column) FROM \(table) WHERE match_mode IN \(words) AND \(column) IS NOT NULL"
+            ) { ($0.int(0), $0.string(1)) }
+            for (id, pattern) in rows {
+                try db.run("UPDATE \(table) SET \(column)=? WHERE id=?",
+                           [.text(PatternMatcher.openingEnds(pattern)), .int(id)])
+            }
+        }
+
+        try db.exec("ALTER TABLE rules DROP COLUMN weight")
     }
 
     /// Rules grow conditions and actions.
@@ -84,8 +119,6 @@ enum Schema {
         CREATE INDEX IF NOT EXISTS idx_rule_actions ON rule_actions(rule_id, position);
         """)
 
-        // 0 = any of the conditions, which is what a single condition means
-        // either way.
         try addColumn(db, table: "rules", column: "match_all",
                       declaration: "INTEGER NOT NULL DEFAULT 0")
 
@@ -96,7 +129,6 @@ enum Schema {
         FROM rules;
         """)
 
-        // The columns, in the order the editor shows the actions in.
         for (position, column, kind) in [(0, "destination", "file_into"),
                                          (1, "tag_names", "add_tags"),
                                          (2, "set_correspondent", "set_correspondent"),

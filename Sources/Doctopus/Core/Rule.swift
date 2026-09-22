@@ -1,36 +1,20 @@
 import Foundation
 
 /// A filing rule: one or more conditions, and one or more things to do to a
-/// document that satisfies them.
-///
-/// A rule used to be a single pattern pointed at a single field, with its
-/// effects spread over four columns that were each either set or not. That
-/// covered "invoices go to Finances/Invoices" and nothing else: "an invoice
-/// from Acme, but not the credit notes" needed two rules that could not say
-/// they belonged together, and a rule that only tagged still had to carry an
-/// empty destination.
-///
-/// Conditions and actions are both lists now, which is the whole of the added
-/// power — deliberately. A rule still cannot call another rule, branch, or run
-/// anything: it is a test and a list of consequences, the way a mail filter is.
+/// document that satisfies them. Deliberately no more than that — no branching,
+/// no rule calling another — the way a mail filter is.
 struct Rule: Identifiable, Hashable, Sendable {
     var id: Int64
     var name: String
     var enabled: Bool = true
-    /// Higher runs first. Rewritten as a block when the list is reordered.
+    /// Higher runs first.
     var priority: Int64 = 0
-    /// How sure a match makes Doctopus, before the routing threshold and the
-    /// quality of what was extracted are weighed against it.
-    var weight: Double = 0.9
-    /// Whether every condition has to hold, or just one of them.
     var requiresAll: Bool = false
     var conditions: [RuleCondition] = []
     var actions: [RuleAction] = []
 
-    /// Everything a condition can be pointed at, gathered once per document so
-    /// that a rule with several conditions reads it rather than rebuilding it,
-    /// and so the router, the editor's preview and Apply to Existing can never
-    /// disagree about what a rule sees.
+    /// Everything a condition can look at. The router, the editor's preview and
+    /// Apply to Existing all build one, so they cannot disagree about a match.
     struct Subject: Sendable {
         var text: String = ""
         var filename: String = ""
@@ -48,9 +32,7 @@ struct Rule: Identifiable, Hashable, Sendable {
     }
 
     /// Conditions with nothing to match are skipped rather than treated as
-    /// matching everything: a half-typed condition must not widen a rule, least
-    /// of all in "all of" mode, where an empty one that matched would be
-    /// invisible.
+    /// matching everything, so a half-typed one can never widen a rule.
     var liveConditions: [RuleCondition] {
         conditions.filter { $0.pattern.nilIfBlank != nil }
     }
@@ -65,15 +47,14 @@ struct Rule: Identifiable, Hashable, Sendable {
 
     // MARK: - Actions
 
-    /// Each kind of action appears at most once in a rule, so every one of
-    /// these is a single answer rather than a list to resolve.
     func action(_ kind: RuleActionKind) -> String? {
         actions.first { $0.kind == kind }?.value.nilIfBlank
     }
 
-    /// Where the rule files a document, as a path template, or nil when it
-    /// does not move anything.
-    var destination: String? { action(.fileInto) }
+    /// Where the rule moves a document, as a path template.
+    var destination: String? { action(.moveFile) }
+    /// A naming template.
+    var rename: String? { action(.renameFile) }
     var setCorrespondent: String? { action(.setCorrespondent) }
     var setDocType: String? { action(.setDocType) }
 
@@ -88,9 +69,7 @@ struct Rule: Identifiable, Hashable, Sendable {
 
     // MARK: - How it reads in a list
 
-    /// The conditions in one line. A rule with several of them shows the first
-    /// and says how many more there are, along with the join — which is the
-    /// part that changes what the rule means.
+    /// The first condition, and how many more there are and how they join.
     var conditionSummary: String {
         let live = liveConditions
         guard let first = live.first else { return "—" }
@@ -99,7 +78,6 @@ struct Rule: Identifiable, Hashable, Sendable {
         return "\(lead) + \(live.count - 1) more (\(requiresAll ? "all" : "any"))"
     }
 
-    /// What it does, in one line.
     var actionSummary: String {
         actions.compactMap { action in
             action.value.nilIfBlank.map { action.kind.summaryPrefix + $0 }
@@ -135,7 +113,6 @@ enum RuleField: String, CaseIterable, Sendable {
     }
 }
 
-/// One test a document has to pass.
 struct RuleCondition: Identifiable, Hashable, Sendable {
     /// Identity for the editor's list only. Conditions are rewritten as a
     /// block whenever their rule is saved, so a database row id would be zero
@@ -145,7 +122,6 @@ struct RuleCondition: Identifiable, Hashable, Sendable {
     var pattern: String = ""
     var mode: MatchMode = .anyWord
     var caseInsensitive: Bool = true
-    /// Inverts the test: the condition holds when the pattern is *not* found.
     var negated: Bool = false
 
     func matches(_ subject: Rule.Subject) -> Bool {
@@ -155,29 +131,29 @@ struct RuleCondition: Identifiable, Hashable, Sendable {
     }
 }
 
-/// What a rule does to a document that matched. One value per kind: a rule
-/// that filed into two folders, or set two correspondents, would have to pick
-/// one anyway, so the editor never offers a second of the same kind.
+/// What a rule does to a document that matched. A rule has at most one action
+/// of each kind: two folders, or two correspondents, would need a tiebreak.
 enum RuleActionKind: String, CaseIterable, Sendable {
-    case fileInto = "file_into"
+    case moveFile = "move_file"
+    case renameFile = "rename_file"
     case addTags = "add_tags"
     case setCorrespondent = "set_correspondent"
     case setDocType = "set_doc_type"
 
     var label: String {
         switch self {
-        case .fileInto: return "File into"
+        case .moveFile: return "Move file"
+        case .renameFile: return "Rename file"
         case .addTags: return "Add tags"
         case .setCorrespondent: return "Set correspondent"
         case .setDocType: return "Set document type"
         }
     }
 
-    /// How the action reads in the rule list, where the column is too narrow
-    /// for its name.
     var summaryPrefix: String {
         switch self {
-        case .fileInto: return "→ "
+        case .moveFile: return "→ "
+        case .renameFile: return "name: "
         case .addTags: return "tags: "
         case .setCorrespondent: return "from: "
         case .setDocType: return "type: "
@@ -186,7 +162,8 @@ enum RuleActionKind: String, CaseIterable, Sendable {
 
     var placeholder: String {
         switch self {
-        case .fileInto: return "Finances/Invoices/{year}"
+        case .moveFile: return "Finances/Invoices/{year}"
+        case .renameFile: return "{date}_{correspondent}_{title}"
         case .addTags: return "invoice, finances"
         case .setCorrespondent: return "Stadtwerke München"
         case .setDocType: return "Invoice"
@@ -201,26 +178,27 @@ struct RuleAction: Identifiable, Hashable, Sendable {
 }
 
 extension Rule {
-    /// The rules a new library starts with. Written the way the editor would
-    /// write them: one condition, one or two actions.
+    /// The rules a new library starts with. The German terms are open at the
+    /// end, because German runs them into compounds: "Rechnungsnummer",
+    /// "Kontoauszugsnummer".
     static let starters: [Rule] = [
-        starter("Invoices", "invoice, rechnung, facture",
-                folder: "Finances/Invoices/{year}", tags: "invoice", priority: 100, weight: 0.92),
-        starter("Bank Statements", "kontoauszug, account statement, closing balance",
-                folder: "Finances/Statements/{year}", tags: "bank", priority: 90, weight: 0.9),
-        starter("Tax", "steuerbescheid, finanzamt, tax return, hmrc, irs",
-                folder: "Finances/Tax-{year}", tags: "tax", priority: 95, weight: 0.93),
-        starter("Insurance", "versicherungsschein, insurance policy, policy number",
-                folder: "Insurance/{correspondent}", tags: "insurance", priority: 80, weight: 0.88),
-        starter("Payslips", "gehaltsabrechnung, payslip, net pay",
-                folder: "Work/Payslips/{year}", tags: "payslip", priority: 85, weight: 0.9),
+        starter("Invoices", "invoice, rechnung*, facture",
+                folder: "Finances/Invoices/{year}", tags: "invoice", priority: 100),
+        starter("Bank Statements", "kontoauszug*, account statement, closing balance",
+                folder: "Finances/Statements/{year}", tags: "bank", priority: 90),
+        starter("Tax", "steuerbescheid*, finanzamt, tax return, hmrc, irs",
+                folder: "Finances/Tax-{year}", tags: "tax", priority: 95),
+        starter("Insurance", "versicherungsschein*, insurance policy, policy number",
+                folder: "Insurance/{correspondent}", tags: "insurance", priority: 80),
+        starter("Payslips", "gehaltsabrechnung*, payslip, net pay",
+                folder: "Work/Payslips/{year}", tags: "payslip", priority: 85),
     ]
 
     private static func starter(_ name: String, _ pattern: String, folder: String,
-                                tags: String, priority: Int64, weight: Double) -> Rule {
-        Rule(id: 0, name: name, priority: priority, weight: weight,
+                                tags: String, priority: Int64) -> Rule {
+        Rule(id: 0, name: name, priority: priority,
              conditions: [RuleCondition(field: .text, pattern: pattern)],
-             actions: [RuleAction(kind: .fileInto, value: folder),
+             actions: [RuleAction(kind: .moveFile, value: folder),
                        RuleAction(kind: .addTags, value: tags)])
     }
 }

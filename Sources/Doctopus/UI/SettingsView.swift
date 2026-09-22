@@ -346,7 +346,8 @@ private struct RoutingSettings: View {
                             .monospacedDigit().frame(width: 40)
                     }
                 }
-                Text("Only new scans and imports with no folder chosen are routed. Below the threshold — or when two places fit about equally well — a file stays in the Inbox and waits in Needs Review with its suggestions. Files already in your library are never moved automatically, and nothing is ever routed outside it.")
+                .disabled(!model.settings.deriveWhenNoRule)
+                Text("Only new scans and imports with no folder chosen are routed. A derived folder is only used above the threshold, and when matching rules name different folders a file stays in the Inbox and waits in Needs Review with its suggestions. Files already in your library are never moved automatically, and nothing is ever routed outside it.")
                     .font(.caption).foregroundStyle(.secondary)
             } header: {
                 Text("Auto-Routing")

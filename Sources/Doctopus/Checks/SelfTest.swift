@@ -228,8 +228,7 @@ enum SelfTest {
             // the top: the router has to pick up both the edit and the order.
             rule.name = "Edited"
             rule.conditions = [RuleCondition(field: .filename, pattern: "gehaltsabrechnung")]
-            rule.actions = [RuleAction(kind: .fileInto, value: "Edited/{year}")]
-            rule.weight = 0.99
+            rule.actions = [RuleAction(kind: .moveFile, value: "Edited/{year}")]
             _ = try? await store.upsertRule(rule)
             let others = ((try? await store.rules()) ?? []).map(\.id).filter { $0 != rule.id }
             try? await store.reorderRules([rule.id] + others)
@@ -248,17 +247,21 @@ enum SelfTest {
                 .evaluate(text: text, filename: payslip.filename, findings: findings, insight: nil,
                           currentDirectory: payslip.url.deletingLastPathComponent())
             print("  \(payslip.filename) → \(decision.destination?.path.replacingOccurrences(of: root.path + "/", with: "") ?? "(stays put)") [\(decision.rule)]")
-            Check.that("routing follows the edited rule", decision.rule == "Edited"
-                       && decision.destination?.path.contains("/Edited/") == true)
+            // The Payslips starter rule matches too, and names another folder.
+            Check.that("routing follows the edited rule, in its new place",
+                       decision.rule == "Edited"
+                           && decision.candidates.first?.destination.path.contains("/Edited/") == true)
+            Check.that("…and two rules naming different folders leave it for review",
+                       decision.ambiguous && decision.destination == nil)
 
             // Tag union across multiple matching rules
-            let ruleA = Rule(id: 0, name: "RuleA", priority: 100, weight: 0.9,
+            let ruleA = Rule(id: 0, name: "RuleA", priority: 100,
                              conditions: [RuleCondition(field: .filename, pattern: "gehaltsabrechnung")],
-                             actions: [RuleAction(kind: .fileInto, value: "A/{year}"),
+                             actions: [RuleAction(kind: .moveFile, value: "A/{year}"),
                                        RuleAction(kind: .addTags, value: "tagA, commonTag")])
-            let ruleB = Rule(id: 0, name: "RuleB", priority: 90, weight: 0.8,
+            let ruleB = Rule(id: 0, name: "RuleB", priority: 90,
                              conditions: [RuleCondition(field: .filename, pattern: "februar")],
-                             actions: [RuleAction(kind: .fileInto, value: "B/{year}"),
+                             actions: [RuleAction(kind: .moveFile, value: "B/{year}"),
                                        RuleAction(kind: .addTags, value: "tagB, commonTag")])
             let unionDecision = Router(rules: [ruleA, ruleB], threshold: 0.5,
                                        derivedTemplate: "", root: root, deriveWhenNoRule: false)
@@ -267,12 +270,11 @@ enum SelfTest {
             Check.that("matching rules combine tags as a union",
                        unionDecision.tags.contains("tagA") && unionDecision.tags.contains("tagB") && unionDecision.tags.count == 3)
 
-            // A rule with several conditions, and one that only labels.
             await conditionsAndActions(store: store, root: root, text: text,
                                        findings: findings, payslip: payslip)
 
             // Metadata assignment via rule apply-to-existing
-            let assignRule = Rule(id: 0, name: "SetPayroll", priority: 100, weight: 0.9,
+            let assignRule = Rule(id: 0, name: "SetPayroll", priority: 100,
                                   conditions: [RuleCondition(field: .filename, pattern: "gehaltsabrechnung")],
                                   actions: [RuleAction(kind: .addTags, value: "payroll"),
                                             RuleAction(kind: .setCorrespondent, value: "Acme HR"),
@@ -949,9 +951,22 @@ enum SelfTest {
         // meant yesterday is what it goes on meaning.
         Check.that("a new condition defaults to reading its pattern as words",
                    RuleCondition(pattern: "Acme (UK) Ltd").mode == .anyWord)
-        Check.that("any word still matches at the start of a word, not inside a compound",
-                   hits("rechnung", .anyWord, "Rechnungsnummer 42")
+        Check.that("a word matches the whole word and nothing longer",
+                   hits("rechnung", .anyWord, "Ihre Rechnung, Nr. 42")
+                       && !hits("rechnung", .anyWord, "Rechnungsnummer 42")
                        && !hits("rechnung", .anyWord, "Gehaltsabrechnung"))
+        Check.that("a trailing * matches the start of a word",
+                   hits("rechnung*", .anyWord, "Rechnungsnummer 42")
+                       && !hits("rechnung*", .anyWord, "Gehaltsabrechnung"))
+        Check.that("a leading * matches the end of one, and both anywhere in it",
+                   hits("*rechnung", .anyWord, "Gehaltsabrechnung")
+                       && !hits("*rechnung", .anyWord, "Rechnungsnummer")
+                       && hits("*rechnung*", .anyWord, "Gehaltsabrechnungen"))
+        Check.that("a phrase in a word pattern is matched whole too",
+                   hits("net pay", .anyWord, "Total net pay: 2.400")
+                       && !hits("net pay", .anyWord, "net payment"))
+        Check.that("a pattern written before * existed keeps its meaning",
+                   PatternMatcher.openingEnds("invoice,  rechnung*, net pay") == "invoice*, rechnung*, net pay*")
         Check.that("all words needs every one of them",
                    hits("amount, due", .allWords, "the amount due is")
                        && !hits("amount, missing", .allWords, "the amount due is"))
@@ -977,9 +992,6 @@ enum SelfTest {
         Check.that("…and one that never compiled is migrated as the words it was matching",
                    MatchMode.inferred(from: "inv(oice") == .anyWord)
 
-        // A rule's conditions and actions survive the round trip through the
-        // database, in the order they were written and with everything each
-        // one says about how it reads its pattern.
         if let id = try? await store.upsertRule(
             Rule(id: 0, name: "Phrase Test", enabled: false, priority: 1,
                  requiresAll: true,
@@ -987,7 +999,7 @@ enum SelfTest {
                                             mode: .exactPhrase, caseInsensitive: false),
                               RuleCondition(field: .filename, pattern: "credit note",
                                             negated: true)],
-                 actions: [RuleAction(kind: .fileInto, value: "Filed/Phrase"),
+                 actions: [RuleAction(kind: .moveFile, value: "Filed/Phrase"),
                            RuleAction(kind: .addTags, value: "phrase, filed")])) {
             let saved = ((try? await store.rules()) ?? []).first { $0.id == id }
             Check.that("a rule remembers how it reads its patterns",
@@ -997,10 +1009,9 @@ enum SelfTest {
                            && saved?.conditions.last?.negated == true
                            && saved?.conditions.last?.field == .filename)
             Check.that("…and what it does, in the order it was given",
-                       saved?.actions.map(\.kind) == [.fileInto, .addTags]
+                       saved?.actions.map(\.kind) == [.moveFile, .addTags]
                            && saved?.destination == "Filed/Phrase"
                            && saved?.tagNames == ["phrase", "filed"])
-            // Conditions and actions belong to the rule and go with it.
             try? await store.deleteRule(id)
             Check.that("deleting a rule takes its conditions and actions with it",
                        ((try? await store.rules()) ?? []).allSatisfy { $0.id != id })
@@ -1540,6 +1551,12 @@ enum SelfTest {
                 0.92, 1, 100, 0, 1, NULL, NULL),
                ('Labelling', '^inv-\\d+', 'filename', '', NULL,
                 0.8, 0, 10, 3, 0, 'Acme', 'Invoice');
+        CREATE TABLE entities (
+            id INTEGER PRIMARY KEY, name TEXT NOT NULL, match TEXT,
+            match_mode INTEGER NOT NULL DEFAULT 0
+        );
+        INSERT INTO entities(name, match, match_mode)
+        VALUES ('Stadtwerke', 'stadtwerke, swm', 0), ('Bank', 'DE12 3456', 2);
         PRAGMA user_version=17;
         """)
         try? Schema.migrate(db)
@@ -1548,9 +1565,10 @@ enum SelfTest {
             SELECT r.name, c.field, c.pattern, c.match_mode, c.match_insensitive
             FROM rules r JOIN rule_conditions c ON c.rule_id = r.id ORDER BY r.id
             """) { ($0.string(0), $0.string(1), $0.string(2), $0.int(3), $0.bool(4)) }) ?? []
+        // Word patterns matched at the start of a word; `*` is how that is said now.
         Check.that("every rule becomes exactly one condition, reading its pattern as it always did",
                    conditions.count == 2
-                       && conditions[0] == ("Filing", "text", "invoice, rechnung", 0, true)
+                       && conditions[0] == ("Filing", "text", "invoice*, rechnung*", 0, true)
                        && conditions[1] == ("Labelling", "filename", "^inv-\\d+", 3, false),
                    "\(conditions)")
 
@@ -1559,29 +1577,26 @@ enum SelfTest {
             ORDER BY r.id, a.position
             """) { ($0.string(0), $0.string(1), $0.string(2)) }) ?? []
         Check.that("…and every column it had filled in becomes an action, in order",
-                   actions.map { "\($0.1)=\($0.2)" } == ["file_into=Finances/Invoices/{year}",
+                   actions.map { "\($0.1)=\($0.2)" } == ["move_file=Finances/Invoices/{year}",
                                                           "add_tags=invoice, finances",
                                                           "set_correspondent=Acme",
                                                           "set_doc_type=Invoice"],
                    "\(actions)")
-        // The one that filed nowhere must not have gained a folder.
         Check.that("a rule with no destination is not given one",
-                   !actions.contains { $0.0 == "Labelling" && $0.1 == "file_into" })
-        let kept = (try? db.map("SELECT name, enabled, priority, weight, match_all FROM rules ORDER BY id") {
-            ($0.string(0), $0.bool(1), $0.int(2), $0.double(3), $0.bool(4))
+                   !actions.contains { $0.0 == "Labelling" && $0.1 == "move_file" })
+        let kept = (try? db.map("SELECT name, enabled, priority, match_all FROM rules ORDER BY id") {
+            ($0.string(0), $0.bool(1), $0.int(2), $0.bool(3))
         }) ?? []
         Check.that("the rule itself is untouched, and joins its conditions with “any”",
                    kept.count == 2 && kept[0].1 && kept[0].2 == 100 && !kept[1].1
-                       && kept.allSatisfy { !$0.4 })
+                       && kept.allSatisfy { !$0.3 })
+        let entityPatterns = (try? db.map("SELECT match FROM entities ORDER BY id") { $0.string(0) }) ?? []
+        Check.that("a correspondent's own words keep matching what they matched, and a phrase is left alone",
+                   entityPatterns == ["stadtwerke*, swm*", "DE12 3456"], "\(entityPatterns)")
     }
 
-    /// What the wider rule shape buys: a rule that says two things at once, a
-    /// rule that rules something out, and a rule that labels without filing.
-    ///
-    /// All three were impossible when a rule was one pattern and one
-    /// destination — the "all of" and the exclusion needed rules that could not
-    /// say they belonged together, and a labelling rule had to carry a folder
-    /// it did not want.
+    /// What conditions and actions as lists buy: joins, exclusions, and rules
+    /// that label or rename without moving anything.
     private static func conditionsAndActions(store: Store, root: URL, text: String,
                                              findings: DocumentAnalyzer.Findings,
                                              payslip: DocumentRow) async {
@@ -1592,30 +1607,26 @@ enum SelfTest {
                           currentDirectory: payslip.url.deletingLastPathComponent())
         }
 
-        // "All of": both conditions hold, so it files; drop one and it must not.
-        let both = Rule(id: 0, name: "Both", weight: 0.95, requiresAll: true,
+        let both = Rule(id: 0, name: "Both", requiresAll: true,
                         conditions: [RuleCondition(field: .filename, pattern: "gehaltsabrechnung"),
                                      RuleCondition(field: .filename, pattern: "februar")],
-                        actions: [RuleAction(kind: .fileInto, value: "Filed/Both")])
+                        actions: [RuleAction(kind: .moveFile, value: "Filed/Both")])
         var missing = both
         missing.conditions[1].pattern = "doctopus-nothing-matches-this"
         Check.that("all of the conditions means all of them",
                    decide(both).destination?.path.contains("/Filed/Both") == true
                        && decide(missing).destination == nil)
 
-        // The same two conditions joined by "any" fire on either one.
         var either = missing
         either.requiresAll = false
         Check.that("…and any of them means one is enough",
                    decide(either).destination?.path.contains("/Filed/Both") == true)
 
-        // An exclusion, which is the case two separate rules cannot express.
         var excluded = both
         excluded.conditions[1] = RuleCondition(field: .filename, pattern: "februar", negated: true)
         Check.that("a condition can rule a document out", decide(excluded).destination == nil)
 
-        // A rule with no folder still labels what it matched.
-        let labelOnly = Rule(id: 0, name: "Label", weight: 0.95,
+        let labelOnly = Rule(id: 0, name: "Label",
                              conditions: [RuleCondition(field: .filename, pattern: "gehaltsabrechnung")],
                              actions: [RuleAction(kind: .addTags, value: "labelled"),
                                        RuleAction(kind: .setDocType, value: "Payslip")])
@@ -1624,8 +1635,11 @@ enum SelfTest {
                    labelled.destination == nil && labelled.tags == ["labelled"]
                        && labelled.tagsFromRule && labelled.setDocType == "Payslip")
 
-        // An empty condition must not quietly widen a rule — least of all in
-        // "all of", where it would be a condition nobody can see.
+        var renaming = labelOnly
+        renaming.actions.append(RuleAction(kind: .renameFile, value: "{date}_{type}"))
+        Check.that("a rule can ask for a rename without moving anything",
+                   decide(renaming).rename == "{date}_{type}" && decide(renaming).destination == nil)
+
         var halfTyped = labelOnly
         halfTyped.requiresAll = true
         halfTyped.conditions.append(RuleCondition())
@@ -1718,16 +1732,20 @@ enum SelfTest {
         let outside = fm.temporaryDirectory.appendingPathComponent("doctopus-escape-\(UUID().uuidString)",
                                                                     isDirectory: true)
         func filingRule(_ name: String, _ pattern: String, _ folder: String,
-                        weight: Double, priority: Int64) -> Rule {
-            Rule(id: 0, name: name, priority: priority, weight: weight,
+                        priority: Int64) -> Rule {
+            Rule(id: 0, name: name, priority: priority,
                  conditions: [RuleCondition(field: .filename, pattern: pattern)],
-                 actions: [RuleAction(kind: .fileInto, value: folder)])
+                 actions: [RuleAction(kind: .moveFile, value: folder)])
         }
         let testRules = [
-            filingRule("Clear", "doctopus-clear", "Filed/Clear", weight: 0.99, priority: 1000),
-            filingRule("Tie A", "doctopus-tie", "Filed/A", weight: 0.95, priority: 999),
-            filingRule("Tie B", "doctopus-tie", "Filed/B", weight: 0.94, priority: 998),
-            filingRule("Escape", "doctopus-escape", outside.path, weight: 0.99, priority: 997),
+            filingRule("Clear", "doctopus-clear", "Filed/Clear", priority: 1000),
+            filingRule("Tie A", "doctopus-tie", "Filed/A", priority: 999),
+            filingRule("Tie B", "doctopus-tie", "Filed/B", priority: 998),
+            filingRule("Escape", "doctopus-escape", outside.path, priority: 997),
+            Rule(id: 0, name: "Rename", priority: 996,
+                 conditions: [RuleCondition(field: .filename, pattern: "doctopus-rename")],
+                 actions: [RuleAction(kind: .moveFile, value: "Filed/Renamed"),
+                           RuleAction(kind: .renameFile, value: "renamed-{original}")]),
         ]
         var ruleIDs: [Int64] = []
         for rule in testRules { if let id = try? await store.upsertRule(rule) { ruleIDs.append(id) } }
@@ -1796,6 +1814,31 @@ enum SelfTest {
             Check.that("routing never moves a file outside its library",
                        inside && !fm.fileExists(atPath: outside.path), row?.directory ?? "nowhere")
             try? fm.removeItem(at: escape)
+        }
+
+        // 6b. A rule that renames names the new file, and moves it under that name.
+        if let named = stage("doctopus-rename") {
+            await indexer.importFiles([named], into: inbox, route: true)
+            let row = await imported("doctopus-rename")
+            print("  rename and move    → \(row.map { $0.path.replacingOccurrences(of: root.path + "/", with: "") } ?? "nowhere")")
+            Check.that("a new document is renamed and moved by the rule that matched it",
+                       row?.filename.hasPrefix("renamed-") == true
+                           && row?.filename.hasSuffix("doctopus-rename.pdf") == true
+                           && row?.directory == root.appendingPathComponent("Filed/Renamed").path,
+                       row?.path ?? "nowhere")
+            Check.that("…and the file it was copied from keeps its name", fm.fileExists(atPath: named.path))
+            try? fm.removeItem(at: named)
+
+            let again = Rule(id: 0, name: "Again",
+                             conditions: [RuleCondition(field: .filename, pattern: "*doctopus-rename")],
+                             actions: [RuleAction(kind: .renameFile, value: "again-{original}")])
+            let applied = (try? await store.applyRuleToExisting(again)) ?? Store.RuleApplyResult()
+            let after = await imported("doctopus-rename")
+            Check.that("applying a rule to existing documents renames them in place",
+                       applied.renamed == 1 && after?.filename.hasPrefix("again-renamed-") == true
+                           && after.map { fm.fileExists(atPath: $0.path) } == true
+                           && after?.directory == row?.directory,
+                       after?.path ?? "nowhere")
         }
 
         // 7. A folder alias the user made survives a reprocess.

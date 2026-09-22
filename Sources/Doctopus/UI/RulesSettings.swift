@@ -1,11 +1,6 @@
 import SwiftUI
 
-/// The rules pane: every rule in the chosen library, in the order they are
-/// evaluated, with the editor behind a double-click.
-///
-/// Rules have a section of their own rather than a corner of Routing, because
-/// they are the part anyone actually maintains — Routing is five settings you
-/// choose once, and a list you keep working on does not belong underneath one.
+/// Every rule in the chosen library, in the order they are evaluated.
 struct RulesSettings: View {
     @Environment(AppModel.self) private var model
     @State private var rules: [Rule] = []
@@ -73,7 +68,7 @@ struct RulesSettings: View {
                     .disabled(selected == nil || rules.last?.id == selected)
                     .help("Evaluate later")
                 Spacer()
-                Text("Top to bottom, the first match decides where a document goes — unless a later one fits as well. Tags and metadata from every rule that matched are applied. Double-click to edit.")
+                Text("Every rule that matches applies. If matching rules move a document to different folders, it waits in Needs Review; otherwise the higher rule wins. Double-click to edit.")
                     .font(.caption).foregroundStyle(.secondary)
                     .multilineTextAlignment(.trailing)
             }
@@ -84,8 +79,7 @@ struct RulesSettings: View {
         .task(id: model.settingsLibrary?.id) { await load() }
         .sheet(item: $editing) { rule in
             if let library = model.settingsLibrary {
-                RuleEditor(rule: rule, library: library,
-                           threshold: model.settings.routingThreshold) { save($0) }
+                RuleEditor(rule: rule, library: library) { save($0) }
             }
         }
     }

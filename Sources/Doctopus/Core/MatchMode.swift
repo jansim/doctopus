@@ -10,7 +10,8 @@ import Foundation
 /// preview was honest about all of it, which is good design covering for a bad
 /// default. This is the default being fixed instead.
 enum MatchMode: Int64, CaseIterable, Sendable, Codable {
-    /// Any of the comma-separated words, matched at the start of a word.
+    /// Any of the comma-separated words, each matched as a whole word unless
+    /// a `*` widens it.
     case anyWord = 0
     /// Every one of them, anywhere in the subject.
     case allWords = 1
@@ -82,10 +83,10 @@ enum PatternMatcher {
 
         switch mode {
         case .anyWord:
-            return words(in: p, insensitive: insensitive).contains { hay.startsWithWord($0) }
+            return terms(in: p, insensitive: insensitive).contains { $0.occurs(in: hay) }
         case .allWords:
-            let needles = words(in: p, insensitive: insensitive)
-            return !needles.isEmpty && needles.allSatisfy { hay.startsWithWord($0) }
+            let needles = terms(in: p, insensitive: insensitive)
+            return !needles.isEmpty && needles.allSatisfy { $0.occurs(in: hay) }
         case .exactPhrase:
             return phraseRegex(p, insensitive: insensitive)?
                 .firstMatch(in: subject, range: NSRange(location: 0, length: (subject as NSString).length)) != nil
@@ -95,18 +96,63 @@ enum PatternMatcher {
             return re.firstMatch(in: subject,
                                  range: NSRange(location: 0, length: (subject as NSString).length)) != nil
         case .fuzzy:
-            return words(in: p, insensitive: insensitive).contains { isNear($0, in: hay) }
+            return terms(in: p, insensitive: insensitive).contains { isNear($0.core, in: hay) }
         }
     }
 
-    /// Comma-separated terms. Matching is by word, so "acme, globex" behaves
-    /// the way anyone writing it expects.
+    /// One comma-separated term. A whole word unless a `*` opens a side:
+    /// `rechnung*` also catches "Rechnungsnummer", `*rechnung` catches
+    /// "Gehaltsabrechnung", and `*rechnung*` catches both.
+    struct Term: Equatable {
+        var core: String
+        var openStart = false
+        var openEnd = false
+
+        init(_ raw: String) {
+            var t = raw
+            if t.hasPrefix("*") { openStart = true; t.removeFirst() }
+            if t.hasSuffix("*") { openEnd = true; t.removeLast() }
+            core = t.trimmingCharacters(in: .whitespaces)
+        }
+
+        func occurs(in hay: String) -> Bool {
+            guard !core.isEmpty else { return false }
+            var searchStart = hay.startIndex
+            while let found = hay.range(of: core, range: searchStart..<hay.endIndex) {
+                let startOK = openStart || found.lowerBound == hay.startIndex
+                    || !Self.isWordCharacter(hay[hay.index(before: found.lowerBound)])
+                let endOK = openEnd || found.upperBound == hay.endIndex
+                    || !Self.isWordCharacter(hay[found.upperBound])
+                if startOK && endOK { return true }
+                searchStart = hay.index(after: found.lowerBound)
+            }
+            return false
+        }
+
+        private static func isWordCharacter(_ c: Character) -> Bool { c.isLetter || c.isNumber }
+    }
+
+    static func terms(in pattern: String, insensitive: Bool = true) -> [Term] {
+        words(in: pattern, insensitive: insensitive).map(Term.init).filter { !$0.core.isEmpty }
+    }
+
     static func words(in pattern: String, insensitive: Bool = true) -> [String] {
         pattern.split(separator: ",")
             .map { insensitive
                 ? $0.trimmingCharacters(in: .whitespaces).lowercased()
                 : $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }
+    }
+
+    /// What the word modes used to do — match at the start of a word — spelled
+    /// in today's syntax, for migrating patterns written before `*` existed.
+    static func openingEnds(_ pattern: String) -> String {
+        pattern.split(separator: ",", omittingEmptySubsequences: false)
+            .map { part -> String in
+                let t = part.trimmingCharacters(in: .whitespaces)
+                return t.isEmpty || t.hasSuffix("*") ? t : t + "*"
+            }
+            .joined(separator: ", ")
     }
 
     /// A phrase, with every run of whitespace allowed to be any whitespace.
