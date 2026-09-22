@@ -277,9 +277,6 @@ final class ScanCoordinator: NSObject {
             return false
         }
         if captures.count < providers.count {
-            // Counted as lost below, along with everything else that does not
-            // make it: guessing that an item in a form this app cannot read is
-            // not part of the scan is exactly the guess that loses pages.
             ScanCapture.log.error("\(providers.count - captures.count, privacy: .public) item(s) offered nothing this app can read")
         }
 

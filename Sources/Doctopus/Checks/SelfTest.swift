@@ -1754,9 +1754,6 @@ enum SelfTest {
         Check.that("a capture that is not a document at all is declined rather than filed",
                    ScanCapture.item(from: Data("not a scan".utf8), declared: .pdf) == nil)
 
-        // A device may hand over a file rather than bytes — the app asks the
-        // system for that form — and the file goes with the pasteboard, so it
-        // has to be read while the capture is still being taken.
         let staged = fm.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).jpg")
         try? container(.jpeg, [0.6]).write(to: staged)
         let byReference = ScanCapture.item(from: staged.dataRepresentation, declared: .fileURL)
