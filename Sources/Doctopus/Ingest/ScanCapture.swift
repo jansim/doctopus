@@ -19,18 +19,11 @@ struct ScanDelivery: Sendable {
     var isComplete: Bool { unread == 0 }
 }
 
-/// Apart from `ScanCoordinator` so a check can decode a capture without a
-/// device in the room.
 enum ScanCapture {
 
-    /// Always on, since a short delivery cannot be reproduced on demand:
-    ///
-    ///     log show --last 1h --predicate 'subsystem == "io.doctopus"'
+    /// log show --last 1h --predicate 'subsystem == "io.doctopus"'
     static let log = Logger(subsystem: "io.doctopus", category: "scan")
 
-    /// What the app takes from a capture: PDF for document scans, and still
-    /// images in whatever format the device chooses.
-    ///
     /// Concrete image types are spelled out: SwiftUI turns these into pasteboard
     /// types literally, so `.image` alone is not offered `public.jpeg`.
     static let importTypes: [UTType] = [.pdf, .jpeg, .png, .heic, .tiff, .image, .fileURL]
@@ -44,7 +37,6 @@ enum ScanCapture {
         return nil
     }
 
-    /// Nil rather than a shortened document, so a lost capture can be reported.
     static func item(from data: Data, declared: UTType) -> ScannedItem? {
         if declared.conforms(to: .fileURL) {
             guard let url = URL(dataRepresentation: data, relativeTo: nil), url.isFileURL,
@@ -65,8 +57,6 @@ enum ScanCapture {
             return ScannedItem(data: pdf, ext: "pdf", pages: count)
         }
 
-        // The index handles PDF, JPEG and PNG. Anything else a device might
-        // send — HEIC above all — is transcoded rather than just renamed.
         let kind = CGImageSourceGetType(source).flatMap { UTType($0 as String) } ?? declared
         if kind.conforms(to: .png) { return ScannedItem(data: data, ext: "png") }
         if kind.conforms(to: .jpeg) { return ScannedItem(data: data, ext: "jpg") }
@@ -81,12 +71,9 @@ enum ScanCapture {
         return document.numberOfPages
     }
 
-    // MARK: - Assembly
-
     private static func pdf(from source: CGImageSource, count: Int) -> Data? {
         let out = NSMutableData()
         guard let consumer = CGDataConsumer(data: out as CFMutableData) else { return nil }
-        // Only to create the context; each page sets its own.
         var initial = CGRect(x: 0, y: 0, width: 612, height: 792)
         guard let ctx = CGContext(consumer: consumer, mediaBox: &initial, nil) else { return nil }
 
@@ -97,8 +84,6 @@ enum ScanCapture {
             guard box.width >= 1, box.height >= 1 else { return nil }
             ctx.beginPage(mediaBox: &box)
             ctx.interpolationQuality = .high
-            // Round-tripped through JPEG so Core Graphics embeds the compressed
-            // bytes rather than a fresh lossless bitmap per page.
             ctx.draw(compressed(image) ?? image, in: box)
             ctx.endPage()
         }
@@ -109,7 +94,6 @@ enum ScanCapture {
         return data
     }
 
-    /// Without a stated resolution, 72 dpi rather than a guessed paper size.
     private static func pageSize(of image: CGImage, in source: CGImageSource, at index: Int) -> CGSize {
         let properties = CGImageSourceCopyPropertiesAtIndex(source, index, nil) as? [CFString: Any]
         let dpiX = properties?[kCGImagePropertyDPIWidth] as? Double ?? 0

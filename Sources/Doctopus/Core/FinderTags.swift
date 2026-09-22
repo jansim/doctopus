@@ -2,15 +2,8 @@ import Foundation
 import AppKit
 import SwiftUI
 
-/// The Finder's own tags, which live on the file in extended attributes rather
-/// than in this app's index. Reading them is cheap; writing one is a deliberate
-/// change to the user's file and only ever happens on an explicit action.
-///
-/// The attribute is read and written directly rather than through
-/// `URLResourceValues.tagNames`, which carries names only: it cannot express a
-/// colour on the way in, and on the way out it strips the colour off every
-/// other tag on the file. A tag is stored as `"Name\nLabel"`, where the label
-/// is one of the seven colours the Finder offers, or 0 for none.
+/// The xattr is read and written directly: `URLResourceValues.tagNames` carries
+/// names only, and writing through it strips the colour off every other tag.
 enum FinderTags {
     struct Entry: Hashable, Sendable {
         var name: String
@@ -34,15 +27,10 @@ enum FinderTags {
 
     private static let attribute = "com.apple.metadata:_kMDItemUserTags"
 
-    // MARK: - Reading
-
-    /// One file's tags, with their colours.
     static func entries(_ url: URL) -> [Entry] {
         guard let data = attributeData(url),
               let raw = (try? PropertyListSerialization.propertyList(from: data, format: nil)) as? [String]
         else {
-            // Volumes that do not expose the attribute still answer the
-            // resource key, and there is nothing but names to be had there.
             return names(url).map { Entry(name: $0, label: label(for: $0)) }
         }
         let parsed = raw.compactMap(Entry.init(stored:))
@@ -62,14 +50,10 @@ enum FinderTags {
         return Data(buffer)
     }
 
-    // MARK: - Writing
-
     @discardableResult
     static func write(_ entries: [Entry], to url: URL) -> Bool {
         Registry.shared.learn(entries)
         guard !entries.isEmpty else {
-            // A file with no tags carries no attribute at all, which is what
-            // the Finder leaves behind when the last one is removed.
             removexattr(url.path, attribute, 0)
             return true
         }
@@ -96,24 +80,14 @@ enum FinderTags {
         return write(kept, to: url)
     }
 
-    // MARK: - Colours
-
-    /// The Finder's colours, in the order macOS numbers its labels. Index 0 is
-    /// "no colour", which the Finder draws as an empty ring.
     static let labelColors: [Color?] = [nil, .gray, .green, .purple, .blue, .yellow, .red, .orange]
 
     static func color(label: Int) -> Color? {
         labelColors.indices.contains(label) ? labelColors[label] : nil
     }
 
-    /// The colour this tag is drawn in, taken from the label macOS actually
-    /// stored on the files carrying it.
     static func color(for name: String) -> Color? { color(label: label(for: name)) }
 
-    /// The label to draw, or to give a tag that is about to be created. What
-    /// has been seen on disk wins; the seven tags macOS ships with are named
-    /// after their colours, which is all there is to go on for a tag no
-    /// indexed file carries yet.
     static func label(for name: String) -> Int {
         Registry.shared.label(for: name) ?? systemLabels[name.lowercased()] ?? 0
     }
@@ -123,13 +97,8 @@ enum FinderTags {
         "blue": 4, "yellow": 5, "red": 6, "orange": 7,
     ]
 
-    /// Seeds the colours from the index, so the sidebar is right at launch
-    /// without re-reading every file.
     static func learn(_ labels: [String: Int]) { Registry.shared.learn(labels) }
 
-    /// Name → colour label, learned from every file whose tags are read and
-    /// from the index. Shared by the whole process because the views ask for a
-    /// colour by name alone, wherever a tag happens to be drawn.
     private final class Registry: @unchecked Sendable {
         static let shared = Registry()
         private let lock = NSLock()

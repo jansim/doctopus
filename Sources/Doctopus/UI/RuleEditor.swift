@@ -1,12 +1,5 @@
 import SwiftUI
 
-/// Edits one routing rule. Works on a draft, so Cancel really does leave the
-/// rule — and for a new one, the rule list — exactly as it was.
-///
-/// Everything the router reads is here, and what it will make of the pattern
-/// and the destination is spelled out as it is typed: which words it looks for
-/// (or that it is a regex, or a regex that does not compile), where a document
-/// would land, and how many documents already in the library it would catch.
 struct RuleEditor: View {
     @Environment(\.dismiss) private var dismiss
     @State private var draft: Rule
@@ -201,8 +194,6 @@ struct RuleEditor: View {
         }
     }
 
-    // MARK: - Pattern
-
     private var patternPrompt: String {
         switch draft.mode {
         case .anyWord, .allWords, .fuzzy: return "invoice, rechnung, facture"
@@ -264,9 +255,6 @@ struct RuleEditor: View {
         }
     }
 
-    /// Runs the pattern over the library with the router's own matcher, so the
-    /// count is what routing would actually do. Cheap enough to redo on every
-    /// keystroke for a few thousand documents.
     private func refreshMatches() {
         guard let samples else { return }
         let rule = draft
@@ -282,8 +270,6 @@ struct RuleEditor: View {
         matchCount = count
         matched = names
     }
-
-    // MARK: - Destination
 
     private func append(_ token: String) {
         if draft.destination.isEmpty || draft.destination.hasSuffix("/") {

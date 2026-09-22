@@ -4,21 +4,14 @@ import UniformTypeIdentifiers
 import QuickLookThumbnailing
 import QuickLookUI
 
-/// Headless checks for the parts of the UI that only break when they are
-/// actually on screen: hit testing and thumbnail rendering. Runs a real
-/// AppModel against a throwaway index, hosts the panes in an off-screen
-/// window and drives them with synthetic events.
-///
-/// `Doctopus --uitest <library> [snapshot dir]`
+/// Headless checks for UI that only breaks on screen: hit testing and thumbnail
+/// rendering. `Doctopus --uitest <library> [snapshot dir]`
 @MainActor
 enum UITest {
     static func run(root: String, snapshots: String?) {
         let app = NSApplication.shared
-        // Accessory, and windows are hosted off-screen: nothing of this should
-        // appear in front of whoever is running it. The one unavoidable
-        // intrusion is that `NSTableView` ignores a synthetic click unless the
-        // process is genuinely frontmost, so the checks that drive the list ask
-        // for focus and hand it straight back to whatever had it.
+        // `NSTableView` ignores a synthetic click unless the process is frontmost, so
+        // the list checks take focus and hand it straight back.
         app.setActivationPolicy(.accessory)
         previousApp = NSWorkspace.shared.frontmostApplication
         let library = URL(fileURLWithPath: (root as NSString).expandingTildeInPath).standardizedFileURL
@@ -47,6 +40,7 @@ enum UITest {
             await clickSelectsARow(model, snapshots: snapshots)
             await clickSelectsAGalleryThumbnail(model, snapshots: snapshots)
             galleryModifierClicks(model)
+            dragCountsTheSelection(model)
             folderPickerResolvesPaths(model)
             await headerClickSorts(model, snapshots: snapshots)
             await rowThumbnailIsAPage(model)
@@ -58,7 +52,6 @@ enum UITest {
             await sidebarShowsBothTagSystems(model, snapshots: snapshots)
             await handEditsReachTheHistory(model)
             await secondLibraryMerges(model, alongside: library, snapshots: snapshots)
-            // Last: they import documents, which the checks above count.
             await reviewPanelFiles(model, snapshots: snapshots)
             await droppingAFolderImportsIt(model)
             await draggingOntoAFolderFilesOrMoves(model)
@@ -69,17 +62,11 @@ enum UITest {
 
     private static var previousApp: NSRunningApplication?
 
-    /// Gives focus back to the app the checks took it from.
     private static func yieldFocus() {
         guard NSApp.isActive, let previousApp, !previousApp.isTerminated else { return }
         previousApp.activate()
     }
 
-    // MARK: - Checks
-
-    /// Regression: with the drag attached to the cell rather than the row, a
-    /// click on the document name — the largest target in the row — selected
-    /// nothing at all.
     private static func clickSelectsARow(_ model: AppModel, snapshots: String?) async {
         let size = NSSize(width: 760, height: 420)
         let (window, host) = host(DocumentListView().environment(model), size: size)
@@ -88,7 +75,6 @@ enum UITest {
         if let dir = snapshots { snapshot(host, to: dir + "/list.png") }
 
         model.selectedIDs = []
-        // Over the title text of the first row, well clear of the thumbnail.
         let selected = await click(window, at: NSPoint(x: 140, y: size.height - 43),
                                    activating: true) {
             !model.selectedIDs.isEmpty
@@ -97,8 +83,6 @@ enum UITest {
                    model.documents.filter { model.selectedIDs.contains($0.id) }
                        .map(\.filename).joined(separator: ", "))
 
-        // The row thumbnail is hit-testable now, which must not mean it eats
-        // the click on its way to the row.
         model.selectedIDs = []
         let viaThumbnail = await click(window, at: NSPoint(x: 22, y: size.height - 43),
                                        activating: true) {
@@ -108,10 +92,6 @@ enum UITest {
         yieldFocus()
     }
 
-    /// Regression: the gallery cell had no hit shape of its own, so only the
-    /// pixels the fitted page actually covered responded. The padding around
-    /// the thumbnail, the bands either side of a page narrower than its frame
-    /// and the gap above the title all swallowed clicks.
     private static func clickSelectsAGalleryThumbnail(_ model: AppModel, snapshots: String?) async {
         let size = NSSize(width: 760, height: 420)
         model.viewMode = .gallery
@@ -123,23 +103,15 @@ enum UITest {
 
         let cell = CGFloat(model.settings.galleryThumbnailSize)
         let middle = NSPoint(x: 18 + cell / 2, y: size.height - (18 + cell * 0.65))
-        // Middle of the first thumbnail, and its top-left corner — the corner
-        // is the one that used to do nothing.
         for (where_, point) in [("middle", middle),
                                 ("corner", NSPoint(x: 22, y: size.height - 24))] {
             model.selectedIDs = []
-            // One click, briefly: this is about a click landing, not about
-            // eventually landing after a few tries.
             let selected = await click(window, at: point, attempts: 1, settling: 0.6) {
                 !model.selectedIDs.isEmpty
             }
             Check.that("clicking the \(where_) of a gallery thumbnail selects it", selected)
         }
 
-        // Regression: a double-click gesture stacked on the single-click one
-        // made SwiftUI hold every click back for the double-click interval, in
-        // case a second one followed, so a selection in the gallery trailed
-        // the mouse by half a second where the list's was instant.
         model.selectedIDs = []
         let start = Date()
         post(window, at: middle)
@@ -149,7 +121,6 @@ enum UITest {
                    landed && elapsed < NSEvent.doubleClickInterval * 0.6,
                    "\(Int(elapsed * 1000)) ms, interval \(Int(NSEvent.doubleClickInterval * 1000)) ms")
 
-        // Which leaves telling a double-click apart to the tap handler.
         model.selectedIDs = []
         let handedOver = URLRecorder()
         AppModel.opener = { handedOver.urls.append($0) }
@@ -185,8 +156,6 @@ enum UITest {
                    forwards.selection == Set(order[1...3]), "\(forwards.selection.count) selected")
         Check.that("and a ⇧ click leaves the anchor where it was", forwards.anchor == order[1])
 
-        // The point of holding the anchor still: the second ⇧ click reaches
-        // back to where the run started, not out from the cell last clicked.
         let backwards = GallerySelection.click(order[0], in: order, modifiers: .shift,
                                                selection: forwards.selection, anchor: forwards.anchor)
         Check.that("a following ⇧ click extends from that same anchor",
@@ -208,8 +177,6 @@ enum UITest {
         Check.that("and ⌘ on a selected cell takes it back out",
                    dropped.selection == [order[0]])
 
-        // Nothing clicked yet, and an anchor a refresh has dropped out of the
-        // pane: both have to land on the cell rather than select nothing.
         let unanchored = GallerySelection.click(order[2], in: order, modifiers: .shift,
                                                 selection: [], anchor: nil)
         Check.that("⇧ before anything has been clicked selects the one cell",
@@ -220,8 +187,26 @@ enum UITest {
                    stale == .init(selection: [order[2]], anchor: order[2]))
     }
 
-    /// Checked through `FolderPicker.relativePath`, since the panel in front
-    /// of it wants somebody to answer it.
+    private static func dragCountsTheSelection(_ model: AppModel) {
+        let rows = model.documents
+        guard rows.count >= 3 else {
+            Check.that("enough documents to drag a selection of", false, "\(rows.count) documents")
+            return
+        }
+        let saved = model.selectedIDs
+        defer { model.selectedIDs = saved }
+
+        model.selectedIDs = [rows[0].id, rows[1].id]
+        let promised = model.dragCount(from: rows[0])
+        let dropped = model.rows(forDropped: [DocumentDragItem(rows[0])]).count
+        Check.that("dragging a selected document counts the whole selection",
+                   promised == 2 && dropped == promised, "badge \(promised), drop \(dropped)")
+        let outside = model.dragCount(from: rows[2])
+        Check.that("dragging a document outside the selection counts just that one",
+                   outside == 1 && model.rows(forDropped: [DocumentDragItem(rows[2])]).count == 1,
+                   "badge \(outside)")
+    }
+
     private static func folderPickerResolvesPaths(_ model: AppModel) {
         guard let library = model.libraries.first else {
             Check.that("a library to resolve chosen folders against", false)
@@ -245,7 +230,6 @@ enum UITest {
 
         Check.that("a folder outside the library is refused",
                    relative(root.deletingLastPathComponent()) == nil)
-        // Prefix, not containment, is the classic way this goes wrong.
         Check.that("a sibling folder whose name merely starts with the root's is refused",
                    relative(URL(fileURLWithPath: root.path + "-elsewhere", isDirectory: true)) == nil)
 
@@ -254,8 +238,6 @@ enum UITest {
         Check.that("and so is a folder inside it",
                    relative(container.appendingPathComponent("thumbnails", isDirectory: true)) == nil)
 
-        // The temporary library lives under the `/var` symlink, so the path
-        // only matches the root once it is canonicalised.
         if root.path.hasPrefix("/private/var/") {
             let throughSymlink = URL(fileURLWithPath: String(root.path.dropFirst("/private".count)),
                                      isDirectory: true)
@@ -265,15 +247,12 @@ enum UITest {
         }
     }
 
-    /// Clicking a column header sorts by that column, and clicking it again
-    /// reverses the direction.
     private static func headerClickSorts(_ model: AppModel, snapshots: String?) async {
         let size = NSSize(width: 760, height: 420)
         let (window, host) = host(DocumentListView().environment(model), size: size)
         defer { window.orderOut(nil) }
         try? await Task.sleep(for: .seconds(2))
 
-        // The Size header, at the far right of the header row.
         let header = NSPoint(x: size.width - 40, y: size.height - 14)
         let sorted = await click(window, at: header, activating: true) { model.sort == .size }
         Check.that("clicking a column header sorts by it", sorted, "sort is \(model.sort.label)")
@@ -290,8 +269,6 @@ enum UITest {
         yieldFocus()
     }
 
-    /// Regression: list rows asked Quick Look for `.icon`, which always returns
-    /// the generic file-type badge instead of the page.
     private static func rowThumbnailIsAPage(_ model: AppModel) async {
         guard let row = model.documents.first(where: { $0.ext == "pdf" }) else {
             Check.that("row thumbnail renders the page", false, "no PDF in the library")
@@ -306,8 +283,6 @@ enum UITest {
                    rendered != nil && rendered?.tiffRepresentation != icon?.nsImage.tiffRepresentation)
     }
 
-    /// A smoke test that the inspector lays out and draws something: a blank
-    /// pane is the failure mode when a layout container rejects its content.
     private static func inspectorDraws(_ model: AppModel, snapshots: String?) async {
         guard let first = model.documents.first else { return }
         model.selectedIDs = [first.id]
@@ -323,8 +298,6 @@ enum UITest {
         Check.that("inspector draws its content", inkedRows(host) > 20, "\(inkedRows(host)) rows with ink")
     }
 
-    /// Everything about how the library is being looked at is meant to survive
-    /// a relaunch, so it all has to reach the settings table.
     private static func uiStatePersists(_ model: AppModel) async {
         model.collapsedFolders = ["/tmp/one", "/tmp/two"]
         model.listColumns[visibility: "size"] = .hidden
@@ -343,8 +316,6 @@ enum UITest {
         Check.that("sort order is persisted", sort?.field == "name" && sort?.ascending == true,
                    sort.map { "\($0.field) \($0.ascending ? "ascending" : "descending")" } ?? "nothing stored")
 
-        // How documents are looked at is about this Mac rather than about a
-        // folder, so it is written to preferences and not into any library.
         model.viewMode = .gallery
         model.settings.galleryThumbnailSize = 190
         _ = await settle {
@@ -355,8 +326,6 @@ enum UITest {
                    stored.viewMode == .gallery && stored.galleryThumbnailSize == 190,
                    "\(stored.viewMode.rawValue) at \(Int(stored.galleryThumbnailSize))")
 
-        // The app-wide keys never reach the blob, so an API key cannot travel
-        // inside a folder somebody shares.
         let blob = await settledRaw(model, AppSettings.storageKey)
         let appWideKeys = ["remoteAPIKey", "viewMode"].filter { blob?.contains($0) == true }
         Check.that("a library's own copy carries no app-wide settings",
@@ -368,8 +337,6 @@ enum UITest {
         Check.that("what the blob holds is the library's own half", inLibrary != nil,
                    inLibrary == nil ? "nothing stored" : "stored")
 
-        // Adding a setting must not reset the ones already stored, so a blob
-        // written before it existed fills the rest in from its defaults.
         let partial = AppWideSettings.decoded(
             from: Data(#"{"viewMode":"Gallery","galleryThumbnailSize":190}"#.utf8))
         Check.that("a blob missing app-wide keys keeps the ones it has",
@@ -387,8 +354,6 @@ enum UITest {
         model.setSort(.docDate, ascending: false)
     }
 
-    /// The Intelligence pane changes shape with the chosen backend, and a
-    /// branch that lays out to nothing is the failure mode worth catching.
     private static func intelligencePaneDraws(_ model: AppModel, snapshots: String?) async {
         let before = model.settings.llmBackend
         defer { model.settings.llmBackend = before }
@@ -404,8 +369,6 @@ enum UITest {
         }
     }
 
-    /// The rule editor is a sheet over a fixed-size Settings window, so a
-    /// layout that overflows it shows up as a blank or clipped pane.
     private static func ruleEditorDraws(_ model: AppModel, snapshots: String?) async {
         guard let library = model.libraries.first,
               let rule = (try? await library.store.rules())?.first else {
@@ -420,8 +383,6 @@ enum UITest {
         Check.that("the rule editor draws", inkedRows(host) > 20, "\(inkedRows(host)) rows with ink")
     }
 
-    /// Finishing something is a toast that goes away by itself; only a failure
-    /// is an alert that has to be clicked away.
     private static func finishedActionsAreToasts(_ model: AppModel, snapshots: String?) async {
         model.errorMessage = nil
         model.dismissNotice()
@@ -433,8 +394,6 @@ enum UITest {
         defer { window.orderOut(nil) }
         let blank = inkedRows(host)
 
-        // The demo fixtures are small, so Optimize has nothing to do — which is
-        // still a result, and should read as one.
         model.optimize(model.documents)
         let toasted = await settle({ model.notice != nil }, timeout: 20)
         try? await Task.sleep(for: .seconds(0.6))
@@ -445,7 +404,6 @@ enum UITest {
         let gone = await settle({ model.notice == nil }, timeout: 10)
         Check.that("the toast dismisses itself", gone)
 
-        // A run that cannot start is a problem, and stays an alert.
         let backend = model.settings.llmBackend
         model.settings.llmBackend = .off
         defer { model.settings.llmBackend = backend }
@@ -457,14 +415,9 @@ enum UITest {
         model.errorMessage = nil
     }
 
-    /// The approval view splits into the list and a review of the selected
-    /// document, from which it can be filed — moved to one folder, aliased
-    /// into others — approved, and have what was generated thrown away.
     private static func reviewPanelFiles(_ model: AppModel, snapshots: String?) async {
         guard let lib = model.libraries.first else { return }
         let fm = FileManager.default
-        // New documents from outside, with no folder chosen: the router files
-        // what is clear and leaves the rest waiting with suggestions.
         let staging = fm.temporaryDirectory.appendingPathComponent("doctopus-review-\(UUID().uuidString)")
         try? fm.createDirectory(at: staging, withIntermediateDirectories: true)
         defer { try? fm.removeItem(at: staging) }
@@ -493,7 +446,6 @@ enum UITest {
         Check.that("a new document waits in Needs Review with suggested folders",
                    detail?.pathSuggestions.isEmpty == false,
                    candidate.map { "\($0.filename): \(detail?.pathSuggestions.map { ($0.path as NSString).lastPathComponent } ?? [])" } ?? "none waiting")
-        // A suggestion other than where it is, so filing really moves it.
         guard let candidate, let detail,
               let primary = detail.pathSuggestions.first(where: { $0.path != candidate.directory })
         else {
@@ -509,7 +461,6 @@ enum UITest {
         Check.that("the approval view draws the review under the list", inkedRows(host) > 100,
                    "\(inkedRows(host)) rows with ink")
 
-        // File it: the first suggestion as its home, Work as an alias.
         let secondary = lib.root.appendingPathComponent("Work").path
         model.file(candidate, in: URL(fileURLWithPath: primary.path), alsoIn: [secondary],
                    approve: true, advance: true)
@@ -523,7 +474,6 @@ enum UITest {
         Check.that("filing leaves the aliased original findable",
                    filed.map { fm.fileExists(atPath: $0.row.path) } ?? false)
 
-        // Throwing away what was generated clears it from the index only.
         model.discardGeneratedInfo([filed?.row ?? candidate])
         let discarded = await poll(timeout: 10, { await model.loadDetail(candidate.id) }) {
             $0 != nil && $0?.row.title == nil && $0?.row.docType == nil && $0?.pathSuggestions.isEmpty == true
@@ -534,15 +484,11 @@ enum UITest {
         model.selection = .all
     }
 
-    /// Mirrors what `AppModel` writes for the sort, which is private to it.
     private struct StoredSort: Codable {
         var field: String
         var ascending: Bool
     }
 
-    /// Waits for a settings key to hold what is expected. `until` matters where
-    /// the key already carries a value from an earlier check: without it the
-    /// first read would return the old one and pass or fail on nothing.
     private static func settled<T: Decodable>(_ model: AppModel, _ key: String,
                                               until: (T) -> Bool = { _ in true }) async -> T? {
         var last: T?
@@ -554,14 +500,10 @@ enum UITest {
         return last
     }
 
-    /// The stored value for `key` as written, for checks about what reached the
-    /// store rather than about what it decodes to.
     private static func settledRaw(_ model: AppModel, _ key: String,
                                    until: (String) -> Bool = { _ in true }) async -> String? {
         var last: String?
         for _ in 0..<20 {
-            // Column/collapsed/sort state lives in UserDefaults now; the settings
-            // blob still lives in the library's database.
             var raw = Preferences.uiState(key)
             if raw == nil, let store = model.activeLibrary?.store {
                 raw = (try? await store.setting(key)) ?? nil
@@ -575,9 +517,6 @@ enum UITest {
         return last
     }
 
-    /// Doctopus's tags and the Finder's are separate sections, and a document
-    /// type can carry its own icon. Mutating state here touches the library's
-    /// files, so everything is put back afterwards.
     private static func sidebarShowsBothTagSystems(_ model: AppModel, snapshots: String?) async {
         guard let row = model.documents.first else { return }
         let originalFinderTags = FinderTags.entries(row.url)
@@ -601,7 +540,6 @@ enum UITest {
         if let dir = snapshots { snapshot(sidebar, to: dir + "/sidebar.png") }
         Check.that("sidebar draws its sections", inkedRows(sidebar) > 20)
 
-        // Both tag columns, which are off by default.
         model.listColumns[visibility: "tags"] = .visible
         model.listColumns[visibility: "finderTags"] = .visible
         let (listWindow, listHost) = host(DocumentListView().environment(model),
@@ -610,16 +548,9 @@ enum UITest {
         try? await Task.sleep(for: .seconds(2))
         if let dir = snapshots { snapshot(listHost, to: dir + "/list-tags.png") }
 
-        // The index is a throwaway, but the Finder tag was written to the
-        // user's own file and has to go back the way it was found.
         FinderTags.write(originalFinderTags, to: row.url)
     }
 
-    /// The history recorded only what the pipeline did, so a title somebody
-    /// typed over the model's was indistinguishable from the model's own.
-    /// Makes its own edits rather than reading the ones the check above made:
-    /// every edit refreshes the pane, which re-sorts it, so two checks asking
-    /// for the first row can get different documents.
     private static func handEditsReachTheHistory(_ model: AppModel) async {
         guard let row = model.documents.first else { return }
         model.selectedIDs = [row.id]
@@ -662,8 +593,6 @@ enum UITest {
                        && model.documents.first { $0.id == row.id }?.approved != false,
                    "\(model.queue.count) entries, was \(queueBefore)")
 
-        // All of this touched the library and the file itself, so it goes
-        // back the way it was found. The events stay.
         model.removeFinderTag(finderTag, from: [row])
         if let added = model.tags.first(where: { $0.name == tag }) {
             model.removeTag(added, from: [row])
@@ -671,14 +600,10 @@ enum UITest {
             Check.that("taking a tag off by hand is recorded too", untagged)
             model.deleteTag(added)
         }
-        // The checks below search by title, so that goes back too. The row
-        // moves when it changes, which is why everything here works by id.
         model.editMetadata(row.id, column: "title", value: row.title)
         _ = await settle { model.documents.first { $0.id == row.id }?.title == row.title }
     }
 
-    /// Two libraries open at once: the centre pane merges them, the sort still
-    /// holds across the join, and tags stay with the library they were made in.
     private static func secondLibraryMerges(_ model: AppModel, alongside fixture: URL,
                                             snapshots: String?) async {
         let alone = model.documents.count
@@ -700,10 +625,6 @@ enum UITest {
         Check.that("every row knows which library it came from",
                    Set(model.documents.map(\.library)).count == 2)
 
-        // Both libraries hold the same fixture, so one title names a document
-        // in each. A search result has to carry the library its document is
-        // in: a row id on its own opens whichever library is active, which is
-        // the wrong document as often as not.
         if let sample = model.documents.first {
             let hits = model.globalSearch(text: sample.displayTitle, limit: 50).compactMap(\.document)
             let named = Set(hits.map(\.library))
@@ -712,8 +633,6 @@ enum UITest {
                        "\(hits.count) hit(s) across \(named.count) of 2 libraries")
         }
 
-        // Rows arrive already sorted per library; the merge is what has to keep
-        // them in order once they are one list.
         func ascendingByName() -> Bool {
             let titles = model.documents.map(\.displayTitle)
             guard titles.count == alone * 2 else { return false }
@@ -726,8 +645,6 @@ enum UITest {
         Check.that("the merged list is still in sort order", ordered,
                    model.documents.map(\.displayTitle).prefix(3).joined(separator: " · "))
 
-        // A tag belongs to the library it was made in, even when the same name
-        // exists in both.
         let newer = model.libraries[1]
         guard let row = model.documents.first(where: { $0.library == newer.id }) else { return }
         model.addTag("OnlyHere", to: [row])
@@ -737,10 +654,6 @@ enum UITest {
                        && !model.libraries[0].tags.contains { $0.name == "OnlyHere" },
                    "first: \(model.libraries[0].tags.map(\.name)), second: \(newer.tags.map(\.name))")
 
-        // The sidebar groups folders and tags per library, and the list gains a
-        // Library column — both are new shapes that only exist with two open,
-        // and a duplicated ForEach id here is a runtime trap rather than a
-        // build error.
         let (sidebarWindow, sidebar) = host(SidebarView().environment(model),
                                             size: NSSize(width: 260, height: 700))
         defer { sidebarWindow.orderOut(nil) }
@@ -767,10 +680,6 @@ enum UITest {
         model.setSort(.docDate, ascending: false)
     }
 
-    /// Regression: a drop onto the document pane only took files of a type
-    /// Doctopus reads, so a folder dragged in from Finder bounced straight
-    /// back. It is driven through AppKit's own drag entry points, since what
-    /// broke was what the drop target accepts.
     private static func droppingAFolderImportsIt(_ model: AppModel) async {
         let fm = FileManager.default
         model.selection = .all
@@ -811,10 +720,6 @@ enum UITest {
         for row in model.documents where row.filename.contains(tag) { try? fm.removeItem(at: row.url) }
     }
 
-    /// Driven through AppKit's own drag entry points, in the order a drop
-    /// target sees them: what decides between the two is read while the drag
-    /// is still in the air, so a drop handed straight to the model would not
-    /// exercise it. The row is hosted alone to keep the targets unambiguous.
     private static func draggingOntoAFolderFilesOrMoves(_ model: AppModel) async {
         let fm = FileManager.default
         defer { FolderDropIntent.heldModifiers = { NSEvent.modifierFlags } }
@@ -849,8 +754,6 @@ enum UITest {
                 + "\(Set(targets.flatMap { $0.registeredDraggedTypes.map(\.rawValue) }).sorted())")
         }
 
-        // A drag carries the whole selection when it starts inside one, and
-        // these two rows are not in it.
         model.selectedIDs = []
         let candidates = model.documents.filter {
             $0.library == library.id && !$0.isAliasHere && !$0.missing
@@ -881,16 +784,11 @@ enum UITest {
                    "taken \(movedTaken), at \(name)/\(moving.filename) \(fm.fileExists(atPath: landed.path)), "
                        + "gone from where it was \(!fm.fileExists(atPath: moving.path))")
 
-        // Put the library back as it was found, alias and all.
         try? fm.createDirectory(at: cameFrom, withIntermediateDirectories: true)
         try? fm.moveItem(at: landed, to: cameFrom.appendingPathComponent(moving.filename))
         try? fm.removeItem(at: destination)
     }
 
-    // MARK: - Harness
-
-    /// Runs one document past a drop target the way AppKit would, and says
-    /// whether it was taken.
     private static func drop(_ item: DocumentDragItem, on target: NSView, in window: NSWindow) -> Bool {
         guard let payload = try? JSONEncoder().encode(item) else { return false }
         let pasteboard = NSPasteboard(name: .init("doctopus-uitest-\(UUID().uuidString)"))
@@ -900,11 +798,8 @@ enum UITest {
         _ = entry.setData(payload, forType: .init(UTType.doctopusDocument.identifier))
         _ = pasteboard.writeObjects([entry])
 
-        // Over the middle of the target itself, in window coordinates: SwiftUI
-        // routes a drop by where it landed, not by which view was handed it.
         let middle = target.convert(NSPoint(x: target.bounds.midX, y: target.bounds.midY), to: nil)
         let drag = SyntheticDrag(pasteboard: pasteboard, window: window, at: middle)
-        // A move is only ever offered if the source says it would allow one.
         drag.draggingSourceOperationMask = [.copy, .move]
         let taken = target.draggingEntered(drag) != [] && target.draggingUpdated(drag) != []
             && target.prepareForDragOperation(drag) && target.performDragOperation(drag)
@@ -912,8 +807,6 @@ enum UITest {
         return taken
     }
 
-    /// Copies a document with a trailing PDF comment, so an import sees new
-    /// bytes rather than skipping a duplicate of what is already in the library.
     @discardableResult
     private static func copyAsNew(_ source: URL, to target: URL) -> Bool {
         guard var data = try? Data(contentsOf: source) else { return false }
@@ -926,8 +819,6 @@ enum UITest {
         return view.subviews.lazy.compactMap { dropTarget(in: $0) }.first
     }
 
-    /// Every view in the tree that takes a drop, outermost first, for when
-    /// which one is wanted depends on what it registered.
     private static func dropTargets(in view: NSView) -> [NSView] {
         (view.registeredDraggedTypes.isEmpty ? [] : [view])
             + view.subviews.flatMap { dropTargets(in: $0) }
@@ -936,8 +827,6 @@ enum UITest {
     private static func host<V: View>(_ view: V, size: NSSize) -> (NSWindow, NSView) {
         let host = NSHostingView(rootView: view)
         host.frame = NSRect(origin: .zero, size: size)
-        // Off-screen: the checks drive the views directly, and nothing should
-        // flash up in front of whoever is running them.
         let window = NSWindow(contentRect: NSRect(x: -5000, y: -5000, width: size.width, height: size.height),
                               styleMask: [.titled], backing: .buffered, defer: false)
         // AppKit releases a programmatically created window when it closes,
@@ -948,9 +837,6 @@ enum UITest {
         return (window, host)
     }
 
-    /// Clicks until the expected effect shows up. A synthetic click is dropped
-    /// if the process is not active yet or the view is still settling, and
-    /// re-clicking is cheaper than guessing at a long enough delay.
     @discardableResult
     private static func click(_ window: NSWindow, at point: NSPoint,
                               attempts: Int = 4, settling: TimeInterval = 3,
@@ -982,10 +868,6 @@ enum UITest {
         }
     }
 
-    /// Waits for an asynchronous condition, since indexing and detail loading
-    /// both hop between actors.
-    /// Fetches until the value satisfies `until`, and returns the last fetch
-    /// either way — for state that is read asynchronously, like a detail.
     private static func poll<T>(timeout: TimeInterval, _ fetch: () async -> T,
                                 until: (T) -> Bool) async -> T {
         let deadline = Date().addingTimeInterval(timeout)
@@ -1015,7 +897,6 @@ enum UITest {
         return rep
     }
 
-    /// How many scanlines contain something other than the background colour.
     private static func inkedRows(_ view: NSView) -> Int {
         guard let rep = bitmap(view) else { return 0 }
         let background = rep.colorAt(x: rep.pixelsWide - 2, y: rep.pixelsHigh - 2)
@@ -1038,8 +919,6 @@ enum UITest {
     }
 }
 
-/// The least of a drag session AppKit hands a drop target: a pasteboard, a
-/// place and an operation. Everything about the drag image is inert.
 private final class SyntheticDrag: NSObject, NSDraggingInfo {
     let draggingPasteboard: NSPasteboard
     let draggingLocation: NSPoint

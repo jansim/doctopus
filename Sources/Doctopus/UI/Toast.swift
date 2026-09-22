@@ -1,17 +1,10 @@
 import SwiftUI
 import AppKit
 
-/// A short message about something that just finished — an analysis run, a
-/// batch rename, an import. Shown as a toast that goes away by itself, so a
-/// routine result never takes a click to get rid of. Things that went wrong
-/// still go through `AppModel.errorMessage`, which is an alert.
 struct Notice: Identifiable, Equatable {
     enum Kind: Equatable {
-        /// The thing asked for happened.
         case success
-        /// Nothing needed doing, or there is nothing to say beyond a fact.
         case info
-        /// It happened, but not entirely — some items failed or were skipped.
         case warning
 
         var icon: String {
@@ -30,7 +23,6 @@ struct Notice: Identifiable, Equatable {
             }
         }
 
-        /// A warning is worth a little longer to read.
         var duration: Duration { self == .warning ? .seconds(6) : .seconds(4) }
     }
 
@@ -39,8 +31,6 @@ struct Notice: Identifiable, Equatable {
     var kind: Kind = .success
 }
 
-/// The toast itself: an icon and a line or two of text on a material card.
-/// Clicking it dismisses it early.
 struct NoticeToast: View {
     let notice: Notice
     var onDismiss: () -> Void
@@ -93,9 +83,6 @@ private struct NoticeOverlay: ViewModifier {
 }
 
 extension View {
-    /// Floats the model's current notice over the bottom of this view. Applied
-    /// to the main window's centre pane and to the Settings window, since an
-    /// analysis started from Settings finishes while Settings is in front.
     func noticeOverlay(_ model: AppModel, bottomPadding: CGFloat = 16) -> some View {
         modifier(NoticeOverlay(model: model, bottomPadding: bottomPadding))
     }

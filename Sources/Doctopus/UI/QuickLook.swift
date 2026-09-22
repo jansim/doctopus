@@ -2,12 +2,8 @@ import AppKit
 import QuickLookUI
 import SwiftUI
 
-/// Quick Look over the current selection.
-///
-/// The SwiftUI `.quickLookPreview` modifier only takes a single URL and does not
-/// reliably follow selection changes, so this drives `QLPreviewPanel` directly:
-/// the whole selection becomes the panel's data source, arrow keys page through
-/// it, and pressing Space again closes it.
+/// Drives `QLPreviewPanel` directly: `.quickLookPreview` takes a single URL
+/// and does not reliably follow selection changes.
 @MainActor
 final class QuickLookController: NSObject, @preconcurrency QLPreviewPanelDataSource,
                                  @preconcurrency QLPreviewPanelDelegate {
@@ -18,8 +14,6 @@ final class QuickLookController: NSObject, @preconcurrency QLPreviewPanelDataSou
 
     var isOpen: Bool { QLPreviewPanel.sharedPreviewPanelExists() && QLPreviewPanel.shared().isVisible }
 
-    /// Opens (or retargets) the panel. Called again with the same content it
-    /// toggles closed, which is what Space is expected to do.
     func toggle(urls: [URL], startingAt url: URL? = nil) {
         guard !urls.isEmpty else { return }
         if isOpen, self.urls == urls {
@@ -47,8 +41,6 @@ final class QuickLookController: NSObject, @preconcurrency QLPreviewPanelDataSou
         }
     }
 
-    // MARK: - QLPreviewPanelDataSource
-
     func numberOfPreviewItems(in panel: QLPreviewPanel!) -> Int { urls.count }
 
     func previewPanel(_ panel: QLPreviewPanel!, previewItemAt index: Int) -> QLPreviewItem! {
@@ -56,9 +48,6 @@ final class QuickLookController: NSObject, @preconcurrency QLPreviewPanelDataSou
         return urls[index] as NSURL
     }
 
-    // MARK: - QLPreviewPanelDelegate
-
-    /// Let the panel keep receiving arrow keys, and close on a second Space.
     func previewPanel(_ panel: QLPreviewPanel!, handle event: NSEvent!) -> Bool {
         guard event.type == .keyDown else { return false }
         if event.charactersIgnoringModifiers == " " {

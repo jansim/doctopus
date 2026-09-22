@@ -1,46 +1,26 @@
 import Foundation
 
-/// Decides where a new document belongs on disk.
-///
-/// Two sources of truth, in order: explicit user rules, then a derived
-/// correspondent/year path built from what was understood. Every place that
-/// fits is kept as a candidate, best first, and the document is only moved to
-/// the best one when that is a clear call:
-///
-/// - below the confidence threshold it stays where it landed, and
-/// - when another candidate fits about as well (within `ambiguityMargin`) it
-///   stays too — two equally good homes is a question for a person, not a
-///   coin toss.
-///
-/// Either way it lands in the queue as "Needs Review" with the candidates kept,
-/// so choosing between them is one click. Destinations outside the library
-/// are never candidates: routing only ever moves a file within its library.
+/// Decides where a new document belongs: user rules first, then the derived
+/// path. It only moves when the best candidate is a clear call — above the
+/// threshold and not within `ambiguityMargin` of another. Destinations outside
+/// the library are never candidates.
 struct Router: Sendable {
 
-    /// One place a document could go, and why.
     struct Candidate: Sendable, Equatable {
         var destination: URL
         var confidence: Double
-        /// The rule's name, or "derived".
         var rule: String
         var explanation: String
     }
 
     struct Decision: Sendable {
-        /// Where to move the document; nil means it stays where it is.
         var destination: URL?
         var confidence: Double
         var rule: String
         var tags: [String]
-        /// True when `tags` came from an explicit user rule; false when there
-        /// was no matching rule and they fell back to the model's own
-        /// suggestions, which still deserve a human's sign-off.
         var tagsFromRule: Bool = false
         var explanation: String
-        /// Every place that fits, best first. Kept whether or not the
-        /// document moved, so the review can offer the alternatives.
         var candidates: [Candidate] = []
-        /// True when the best candidates were too close to call.
         var ambiguous = false
         var setCorrespondent: String?
         var setDocType: String?
@@ -48,13 +28,11 @@ struct Router: Sendable {
         var shouldMove: Bool { destination != nil }
     }
 
-    /// How close a runner-up has to be to the best candidate for the two to
-    /// count as equally good.
     static let ambiguityMargin = 0.05
 
     var rules: [Rule]
     var threshold: Double
-    var derivedTemplate: String   // e.g. "{correspondent}/{year}"
+    var derivedTemplate: String
     var root: URL
     var deriveWhenNoRule: Bool
 
@@ -64,7 +42,6 @@ struct Router: Sendable {
         let docType = insight?.docType ?? findings.docType
         let quality = qualityFactor(findings, insight)
 
-        // Every enabled rule that matches, in the order the user put them.
         var matched: [(rule: Rule, candidate: Candidate)] = []
         var outside: [String] = []
         for rule in rules where rule.enabled {
@@ -79,8 +56,6 @@ struct Router: Sendable {
                                             explanation: "Rule “\(rule.name)” matched \(Self.fieldLabel(rule.field))")))
         }
 
-        // The derived path is the fallback when no rule matches, and an extra
-        // suggestion when one does.
         var derived: Candidate?
         if deriveWhenNoRule, let correspondent, !correspondent.isEmpty {
             let dest = expand(derivedTemplate, correspondent: correspondent,
@@ -94,7 +69,6 @@ struct Router: Sendable {
 
         var candidates = Self.deduplicated(matched.map(\.candidate) + (derived.map { [$0] } ?? []))
 
-        // No rule: the derived path, if there is one, decides on its own.
         guard let first = matched.first else {
             guard let derived else {
                 let why = outside.isEmpty
@@ -120,15 +94,12 @@ struct Router: Sendable {
         let setCorr = matched.compactMap(\.rule.setCorrespondent).first { !$0.isEmpty }
         let setType = matched.compactMap(\.rule.setDocType).first { !$0.isEmpty }
 
-        // The first matching rule is the user's own choice of winner, unless a
-        // later one — pointing somewhere else — fits about as well.
         let rival = matched.dropFirst()
             .map(\.candidate)
             .filter { $0.destination.standardizedFileURL != first.candidate.destination.standardizedFileURL }
             .max { $0.confidence < $1.confidence }
         let ambiguous = rival.map { $0.confidence >= first.candidate.confidence - Self.ambiguityMargin } ?? false
         if ambiguous, let rival, rival.confidence > first.candidate.confidence {
-            // Offer the stronger of the two first.
             candidates = Self.deduplicated([rival] + candidates)
         }
         return decide(best: first.candidate, runnerUp: ambiguous ? rival : nil,
@@ -137,8 +108,6 @@ struct Router: Sendable {
                       candidates: candidates, currentDirectory: currentDirectory)
     }
 
-    /// Turns the best candidate into a move — or, when it is not a clear
-    /// enough call, into a document that stays put with its candidates.
     private func decide(best: Candidate, runnerUp: Candidate?, tags: [String], tagsFromRule: Bool,
                         setCorrespondent: String? = nil, setDocType: String? = nil,
                         candidates: [Candidate], currentDirectory: URL) -> Decision {
@@ -165,7 +134,6 @@ struct Router: Sendable {
         return decision
     }
 
-    /// One candidate per folder, keeping the first (best) occurrence.
     private static func deduplicated(_ candidates: [Candidate]) -> [Candidate] {
         var seen = Set<String>()
         return candidates.filter { seen.insert($0.destination.standardizedFileURL.path).inserted }
@@ -190,7 +158,6 @@ struct Router: Sendable {
         }
     }
 
-    /// The LLM agreeing with the heuristics is the strongest signal we have.
     private func qualityFactor(_ f: DocumentAnalyzer.Findings, _ i: DocumentInsight?) -> Double {
         guard let i else { return 0.85 }
         var factor = 0.9
@@ -205,10 +172,6 @@ struct Router: Sendable {
             .map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
     }
 
-    /// What a rule's `field` points it at, exactly as written. Case is the
-    /// matcher's business now that a rule can say it cares. The rule editor's
-    /// preview goes through here too, so it can never disagree with the router
-    /// about what a rule sees.
     static func subject(for field: String, text: String, filename: String,
                         correspondent: String?, docType: String?) -> String {
         switch field {
@@ -219,20 +182,13 @@ struct Router: Sendable {
         }
     }
 
-    /// Whether a rule matches. One entry point for the router and the editor's
-    /// preview, so the count the editor shows is what routing will really do.
-    ///
-    /// "Any word" keeps the behaviour worth keeping: matching at the *start* of
-    /// a word catches "Rechnungsnummer" for the term "rechnung" without firing
-    /// on "Gehaltsabrechnung", where the term is buried inside an unrelated
-    /// compound. A `\b…\b` word boundary, which is what Paperless uses, misses
-    /// German compounds entirely.
+    /// Shared by the router and the editor's preview so the two never disagree.
+    /// "Any word" matches at the start of a word: `\b…\b` misses German compounds.
     static func matches(_ rule: Rule, in subject: String) -> Bool {
         PatternMatcher.matches(rule.pattern, mode: rule.mode,
                                insensitive: rule.caseInsensitive, in: subject)
     }
 
-    /// What a pattern will do, for the editor to spell out.
     enum PatternKind: Equatable {
         case empty
         case words([String])
@@ -259,8 +215,6 @@ struct Router: Sendable {
         }
     }
 
-    /// Where `template` would file a document with these attributes. Public so
-    /// the rule editor can show a destination before any document takes it.
     func expand(_ template: String, correspondent: String?, docType: String?, date: Date?) -> URL {
         let ctx = Naming.Context(date: date, correspondent: correspondent, title: nil,
                                  docType: docType, language: nil, counter: nil,
@@ -291,7 +245,6 @@ struct Router: Sendable {
 }
 
 extension String {
-    /// True when `needle` occurs at the start of a word in the receiver.
     func startsWithWord(_ needle: String) -> Bool {
         var searchStart = startIndex
         while let found = range(of: needle, range: searchStart..<endIndex) {

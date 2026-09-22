@@ -1,11 +1,7 @@
 import Foundation
 import CoreServices
 
-/// FSEvents watcher over the indexed roots.
-///
-/// The disk is the source of truth, so anything that happens in Finder — a move,
-/// a rename, a delete, a file dropped in — arrives here and is reconciled
-/// silently. Events are coalesced by the stream latency and then debounced again
+/// FSEvents watcher over the indexed roots. Events are coalesced and debounced
 /// so a bulk copy triggers one pass, not a thousand.
 final class FileWatcher {
     private var stream: FSEventStreamRef?
