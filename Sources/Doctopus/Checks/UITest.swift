@@ -47,6 +47,7 @@ enum UITest {
             await clickSelectsARow(model, snapshots: snapshots)
             await clickSelectsAGalleryThumbnail(model, snapshots: snapshots)
             galleryModifierClicks(model)
+            dragCountsTheSelection(model)
             folderPickerResolvesPaths(model)
             await headerClickSorts(model, snapshots: snapshots)
             await rowThumbnailIsAPage(model)
@@ -218,6 +219,27 @@ enum UITest {
                                            anchor: DocumentRef(library: "gone", doc: -1))
         Check.that("⇧ with an anchor no longer in the pane selects the one cell",
                    stale == .init(selection: [order[2]], anchor: order[2]))
+    }
+
+    /// The badge on a drag preview has to promise what the drop will act on.
+    private static func dragCountsTheSelection(_ model: AppModel) {
+        let rows = model.documents
+        guard rows.count >= 3 else {
+            Check.that("enough documents to drag a selection of", false, "\(rows.count) documents")
+            return
+        }
+        let saved = model.selectedIDs
+        defer { model.selectedIDs = saved }
+
+        model.selectedIDs = [rows[0].id, rows[1].id]
+        let promised = model.dragCount(from: rows[0])
+        let dropped = model.rows(forDropped: [DocumentDragItem(rows[0])]).count
+        Check.that("dragging a selected document counts the whole selection",
+                   promised == 2 && dropped == promised, "badge \(promised), drop \(dropped)")
+        let outside = model.dragCount(from: rows[2])
+        Check.that("dragging a document outside the selection counts just that one",
+                   outside == 1 && model.rows(forDropped: [DocumentDragItem(rows[2])]).count == 1,
+                   "badge \(outside)")
     }
 
     /// Checked through `FolderPicker.relativePath`, since the panel in front
