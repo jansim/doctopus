@@ -54,4 +54,43 @@ extension Store {
                            source: $0.string(2), explanation: $0.stringOrNil(3))
         }
     }
+
+    struct RoutingInput: Sendable {
+        var docID: Int64
+        var directory: URL
+        var subject: Rule.Subject
+        var date: Date
+        var confidence: Double
+    }
+
+    /// What routing would look at for each document still in Needs Review, as
+    /// the index has it now — hand edits included. `ids` narrows it; a document
+    /// in the list that is no longer awaiting review is left out.
+    func routingInputsAwaitingReview(_ ids: [Int64]? = nil) throws -> [RoutingInput] {
+        var sql = """
+            SELECT d.id, d.directory, d.filename, d.created_at, m.doc_date, ec.name, et.name,
+                   (SELECT f.body FROM doc_fts f WHERE f.rowid = d.id), m.confidence
+            FROM documents d
+            LEFT JOIN metadata m ON m.doc_id = d.id
+            LEFT JOIN entities ec ON ec.id = m.correspondent_id
+            LEFT JOIN entities et ON et.id = m.doc_type_id
+            WHERE d.missing=0 AND d.deleted_at IS NULL
+              AND d.id IN (SELECT doc_id FROM processing WHERE status=0)
+            """
+        var params: [Database.Value] = []
+        if let ids {
+            guard !ids.isEmpty else { return [] }
+            sql += " AND d.id IN (\(ids.map { _ in "?" }.joined(separator: ",")))"
+            params = ids.map { .int($0) }
+        }
+        return try db.map(sql, params) {
+            RoutingInput(docID: $0.int(0),
+                         directory: URL(fileURLWithPath: absPath($0.string(1)), isDirectory: true),
+                         subject: Rule.Subject(text: $0.stringOrNil(7) ?? "", filename: $0.string(2),
+                                               correspondent: $0.stringOrNil(5),
+                                               docType: $0.stringOrNil(6)),
+                         date: $0.date(4) ?? Date(timeIntervalSince1970: $0.double(3)),
+                         confidence: $0.doubleOrNil(8) ?? 0)
+        }
+    }
 }

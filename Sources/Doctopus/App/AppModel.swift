@@ -64,10 +64,16 @@ final class AppModel {
             _ = await previous?.value
             guard let self, self.settingsLibrary === lib, self.settings != self.savedSettings else { return }
             let current = self.settings
+            let before = self.savedSettings
             self.savedSettings = current
             lib.settings = current
             await current.save(to: lib.store)
             await lib.indexer.update(settings: current)
+            // The derived template is the rule every document falls back on.
+            if before?.derivedTemplate != current.derivedTemplate
+                || before?.deriveWhenNoRule != current.deriveWhenNoRule {
+                self.rulesChanged(in: lib)
+            }
             for other in self.libraries where other !== lib {
                 other.settings.appWide = current.appWide
                 await other.indexer?.update(settings: other.settings)

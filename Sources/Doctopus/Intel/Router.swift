@@ -37,10 +37,21 @@ struct Router: Sendable {
 
     func evaluate(text: String, filename: String, findings: DocumentAnalyzer.Findings,
                   insight: DocumentInsight?, currentDirectory: URL) -> Decision {
-        let correspondent = insight?.correspondent ?? findings.correspondent
-        let docType = insight?.docType ?? findings.docType
         let subject = Rule.Subject(text: text, filename: filename,
-                                   correspondent: correspondent, docType: docType)
+                                   correspondent: insight?.correspondent ?? findings.correspondent,
+                                   docType: insight?.docType ?? findings.docType)
+        return evaluate(subject, date: findings.date, confidence: findings.confidence,
+                        derivedConfidence: findings.confidence * qualityFactor(findings, insight),
+                        suggestedTags: insight?.tags ?? [], currentDirectory: currentDirectory)
+    }
+
+    /// The same decision from what is already on record, for a document whose
+    /// fields or rules changed after it was read.
+    func evaluate(_ subject: Rule.Subject, date: Date?, confidence: Double,
+                  derivedConfidence: Double, suggestedTags: [String] = [],
+                  currentDirectory: URL) -> Decision {
+        let correspondent = subject.correspondent
+        let docType = subject.docType
 
         var matched: [Rule] = []
         var ruleCandidates: [Candidate] = []
@@ -48,8 +59,7 @@ struct Router: Sendable {
         for rule in rules where rule.enabled && rule.hasEffect && rule.matches(subject) {
             matched.append(rule)
             guard let template = rule.destination else { continue }
-            let dest = expand(template, correspondent: correspondent,
-                              docType: docType, date: findings.date)
+            let dest = expand(template, correspondent: correspondent, docType: docType, date: date)
             guard isInsideLibrary(dest) else { outside.append(rule.name); continue }
             ruleCandidates.append(Candidate(destination: dest, confidence: 1, rule: rule.name,
                                             explanation: Self.why(rule, subject)))
@@ -57,11 +67,10 @@ struct Router: Sendable {
 
         var derived: Candidate?
         if deriveWhenNoRule, let correspondent, !correspondent.isEmpty {
-            let dest = expand(derivedTemplate, correspondent: correspondent,
-                              docType: docType, date: findings.date)
+            let dest = expand(derivedTemplate, correspondent: correspondent, docType: docType, date: date)
             if isInsideLibrary(dest), dest.standardizedFileURL != root.standardizedFileURL {
                 derived = Candidate(destination: dest,
-                                    confidence: findings.confidence * qualityFactor(findings, insight),
+                                    confidence: derivedConfidence,
                                     rule: "derived",
                                     explanation: "Derived from correspondent “\(correspondent)”")
             }
@@ -75,9 +84,9 @@ struct Router: Sendable {
                 tags.append(tag)
             }
         }
-        var decision = Decision(destination: nil, confidence: findings.confidence,
+        var decision = Decision(destination: nil, confidence: confidence,
                                 rule: matched.first?.name ?? "none",
-                                tags: matched.isEmpty ? (insight?.tags ?? []) : tags,
+                                tags: matched.isEmpty ? suggestedTags : tags,
                                 tagsFromRule: !matched.isEmpty,
                                 explanation: "",
                                 candidates: Self.deduplicated(ruleCandidates + (derived.map { [$0] } ?? [])),

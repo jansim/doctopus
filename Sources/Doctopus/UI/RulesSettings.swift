@@ -102,9 +102,10 @@ struct RulesSettings: View {
     }
 
     private func save(_ rule: Rule) {
-        guard let store = model.settingsLibrary?.store else { return }
+        guard let library = model.settingsLibrary else { return }
         Task {
-            let id = (try? await store.upsertRule(rule)) ?? rule.id
+            let id = (try? await library.store.upsertRule(rule)) ?? rule.id
+            model.rulesChanged(in: library)
             await load()
             selected = id
         }
@@ -124,23 +125,25 @@ struct RulesSettings: View {
     }
 
     private func remove(_ id: Rule.ID) {
-        guard let store = model.settingsLibrary?.store else { return }
+        guard let library = model.settingsLibrary else { return }
         Task {
-            try? await store.deleteRule(id)
+            try? await library.store.deleteRule(id)
+            model.rulesChanged(in: library)
             if selected == id { selected = nil }
             await load()
         }
     }
 
     private func move(_ id: Rule.ID, by offset: Int) {
-        guard let store = model.settingsLibrary?.store,
+        guard let library = model.settingsLibrary,
               let index = rules.firstIndex(where: { $0.id == id }) else { return }
         let target = index + offset
         guard rules.indices.contains(target) else { return }
         var ordered = rules.map(\.id)
         ordered.swapAt(index, target)
         Task {
-            try? await store.reorderRules(ordered)
+            try? await library.store.reorderRules(ordered)
+            model.rulesChanged(in: library)
             await load()
             selected = id
         }

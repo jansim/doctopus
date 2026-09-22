@@ -232,6 +232,7 @@ extension AppModel {
                     try? await lib.store.logEdit(docID: row.doc,
                                                  detail: Self.editDetail(field.name, value))
                 }
+                await refreshSuggestions(in: lib, for: rows.map(\.doc))
             }
             reloadDetail()
             refreshAll()
@@ -244,6 +245,7 @@ extension AppModel {
         Task {
             try? await lib.store.setFieldValue(docID: ref.doc, field: owned, value: value)
             try? await lib.store.logEdit(docID: ref.doc, detail: Self.editDetail(field.name, value))
+            await refreshSuggestions(in: lib, for: [ref.doc])
             reloadDetail()
             refreshAll()
         }
@@ -254,6 +256,7 @@ extension AppModel {
             var n = 0
             for (lib, field) in librariesDefining(field) {
                 n += (try? await lib.store.renameFieldValue(field: field, from: old, to: new)) ?? 0
+                await refreshSuggestions(in: lib)
             }
             if case .field(let key, let value) = selection, key == field.key, value == old {
                 selection = .field(field.key, new)
@@ -282,6 +285,7 @@ extension AppModel {
         Task {
             for (lib, field) in librariesDefining(field) {
                 try? await lib.store.deleteFieldValue(field: field, value: value)
+                await refreshSuggestions(in: lib)
             }
             if selection == .field(field.key, value) { selection = .all }
             refreshAll()
@@ -327,6 +331,7 @@ extension AppModel {
             try? await lib.store.overwriteMetadataField(ref.doc, column: column, value: value?.nilIfBlank)
             try? await lib.store.logEdit(docID: ref.doc,
                                          detail: Self.editDetail(label, value))
+            await refreshSuggestions(in: lib, for: [ref.doc])
             reloadDetail()
             reloadDocuments()
         }
@@ -344,6 +349,7 @@ extension AppModel {
             try? await lib.store.logEdit(
                 docID: ref.doc,
                 detail: Self.editDetail("Date", date.map(DayDate.display)))
+            await refreshSuggestions(in: lib, for: [ref.doc])
             reloadDetail()
             reloadDocuments()
         }

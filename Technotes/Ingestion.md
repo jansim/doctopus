@@ -59,6 +59,10 @@ with every folder on offer until someone picks. When no rule has a folder, a
 path derived from the correspondent is used if it clears the confidence
 threshold. Routing never moves a file outside its library.
 
+While a document waits in Needs Review, its suggestions are worked out again
+whenever a rule, the derived template or one of its own fields changes. That
+only ever rewrites `path_suggestions`: the file stays where routing left it.
+
 ## Rules
 
 A rule is one or more conditions and one or more actions, in the spirit of a

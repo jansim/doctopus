@@ -326,6 +326,14 @@ struct FilingEditor: View {
             footer
                 .padding(.horizontal, 12).padding(.vertical, 8)
         }
+        // A corrected field or an edited rule can re-point the suggestion. The
+        // choice follows it only while it still sits on the old suggestion —
+        // somewhere the reviewer picked themselves stays picked.
+        .onChange(of: detail.pathSuggestions.first?.path) { old, new in
+            guard let old, let new, primary == old else { return }
+            primary = new
+            secondaries.remove(new)
+        }
     }
 
     @ViewBuilder

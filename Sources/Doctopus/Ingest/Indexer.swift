@@ -302,13 +302,33 @@ actor Indexer {
         return parts.joined(separator: " · ")
     }
 
+    private func makeRouter() async -> Router {
+        Router(rules: (try? await store.rules()) ?? [],
+               threshold: settings.routingThreshold,
+               derivedTemplate: settings.derivedTemplate,
+               root: store.root,
+               deriveWhenNoRule: settings.deriveWhenNoRule)
+    }
+
+    /// Re-asks the router where documents still in Needs Review belong, from
+    /// the rules and fields as they are now, so a rule edited or a misread year
+    /// corrected after import shows up in the suggestions. Only the suggestions
+    /// change: nothing is moved, renamed or retagged — filing stays the
+    /// reviewer's call. `ids` narrows it to those documents.
+    func refreshSuggestions(ids: [Int64]? = nil) async {
+        let router = await makeRouter()
+        for input in (try? await store.routingInputsAwaitingReview(ids)) ?? [] {
+            let decision = router.evaluate(input.subject, date: input.date,
+                                           confidence: input.confidence,
+                                           derivedConfidence: input.confidence,
+                                           currentDirectory: input.directory)
+            try? await store.setPathSuggestions(decision.candidates, for: input.docID)
+        }
+    }
+
     private func route(id: Int64, url: inout URL, text: String,
                        findings: DocumentAnalyzer.Findings, insight: DocumentInsight?) async {
-        let router = Router(rules: (try? await store.rules()) ?? [],
-                            threshold: settings.routingThreshold,
-                            derivedTemplate: settings.derivedTemplate,
-                            root: store.root,
-                            deriveWhenNoRule: settings.deriveWhenNoRule)
+        let router = await makeRouter()
 
         let decision = router.evaluate(text: text, filename: url.lastPathComponent,
                                        findings: findings, insight: insight,

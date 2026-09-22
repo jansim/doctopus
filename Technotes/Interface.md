@@ -51,6 +51,13 @@ other folder in the library, or a new one — has two controls: *Lives here* (on
 folder; the file is moved there) and *Also here* (any number; filed as Finder
 aliases). One button applies, approves and moves on to the next document (⌘↩).
 
+The suggestions follow the document while it waits. Correcting a field on the
+left — a misread year that a `{year}` folder is built from, say — or adding,
+editing, reordering or deleting a rule re-asks the router for every document
+still in Needs Review, from the fields and rules as they are now. If the choice
+was still on the old suggestion, it moves to the new one; a folder the reviewer
+picked stays picked. Nothing moves until the button is pressed.
+
 The same picker is available for any document as File In… in the context menu.
 
 ## Inspector

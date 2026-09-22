@@ -1594,6 +1594,7 @@ enum SelfTest {
                  conditions: [RuleCondition(field: .filename, pattern: "doctopus-rename")],
                  actions: [RuleAction(kind: .moveFile, value: "Filed/Renamed"),
                            RuleAction(kind: .renameFile, value: "renamed-{original}")]),
+            filingRule("Yearly", "doctopus-year", "Filed/Year/{year}", priority: 995),
         ]
         var ruleIDs: [Int64] = []
         for rule in testRules { if let id = try? await store.upsertRule(rule) { ruleIDs.append(id) } }
@@ -1686,6 +1687,44 @@ enum SelfTest {
                            && after?.directory == row?.directory,
                        after?.path ?? "nowhere")
         }
+        if let dated = stage("doctopus-year"), let yearly = ((try? await store.rules()) ?? [])
+            .first(where: { $0.name == "Yearly" }) {
+            await indexer.importFiles([dated], into: inbox, route: true)
+            func suggested(_ doc: Int64) async -> String? {
+                (try? await store.pathSuggestions(for: doc))?.first?.path
+                    .replacingOccurrences(of: root.path + "/", with: "")
+            }
+            func refile(_ rule: Rule, _ folder: String) async {
+                var edited = rule
+                edited.actions = [RuleAction(kind: .moveFile, value: folder)]
+                _ = try? await store.upsertRule(edited)
+                await indexer.refreshSuggestions()
+            }
+            if let row = await imported("doctopus-year") {
+                // 15 June 2031, UTC: a year no fixture could have been read as.
+                try? await store.setDocumentDate(row.doc, Date(timeIntervalSince1970: 1_939_248_000))
+                await indexer.refreshSuggestions(ids: [row.doc])
+                let corrected = await suggested(row.doc)
+                print("  corrected year     → suggests \(corrected ?? "nothing")")
+                Check.that("correcting the year a rule files by re-points the suggestion awaiting review",
+                           corrected == "Filed/Year/2031", corrected ?? "nothing")
+                Check.that("…without moving the file",
+                           (try? await store.documentPath(row.doc)) == row.path)
+
+                await refile(yearly, "Filed/Edited/{year}")
+                let edited = await suggested(row.doc)
+                Check.that("editing a rule re-points the suggestion of a document awaiting review",
+                           edited == "Filed/Edited/2031", edited ?? "nothing")
+
+                try? await store.setDocumentApproved(row.doc, true)
+                await refile(yearly, "Filed/Later/{year}")
+                let settled = await suggested(row.doc)
+                Check.that("…but leaves an approved document's alone",
+                           settled == "Filed/Edited/2031", settled ?? "nothing")
+            }
+            try? fm.removeItem(at: dated)
+        }
+
         if let doc = rows.first(where: { $0.directory.hasSuffix("Personal") }) {
             let folder = root.appendingPathComponent("Work", isDirectory: true)
             if let alias = try? AliasManager.createAlias(to: doc.url, in: folder) {

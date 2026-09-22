@@ -105,6 +105,21 @@ extension AppModel {
         }
     }
 
+    /// Where a document in review is suggested to go was worked out when it was
+    /// read. A rule edited since, or a field corrected by hand — the year a
+    /// template files by, say — has to reach those suggestions too, or the
+    /// review offers a folder built from what is no longer true.
+    func refreshSuggestions(in lib: Library, for ids: [Int64]? = nil) async {
+        await lib.indexer.refreshSuggestions(ids: ids)
+    }
+
+    func rulesChanged(in lib: Library) {
+        Task {
+            await refreshSuggestions(in: lib)
+            reloadDetail()
+        }
+    }
+
     private func rowAfter(_ row: DocumentRow) -> DocumentRef? {
         guard let index = documents.firstIndex(where: { $0.id == row.id }) else { return nil }
         if index + 1 < documents.count { return documents[index + 1].id }
