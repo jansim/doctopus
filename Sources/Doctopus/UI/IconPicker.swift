@@ -1,11 +1,5 @@
 import SwiftUI
 
-/// Picks the icon for one value of a field — the symbol beside “Invoice” in the
-/// sidebar, as distinct from the field's own icon.
-///
-/// The grid is a curated set rather than every SF Symbol: the useful ones for
-/// filing documents are a small, stable list, and the field below takes any
-/// symbol name for anything not in it.
 struct IconPicker: View {
     let title: String
     let current: String
@@ -78,7 +72,6 @@ struct IconPicker: View {
         dismiss()
     }
 
-    /// Symbols that come up when filing paper.
     static let catalog: [String] = [
         "doc", "doc.text", "doc.richtext", "doc.plaintext", "doc.on.doc", "doc.text.magnifyingglass",
         "newspaper", "book", "book.closed", "text.document", "list.bullet.rectangle",

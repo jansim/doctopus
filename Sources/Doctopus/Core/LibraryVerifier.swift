@@ -1,6 +1,5 @@
 import Foundation
 
-/// Report of a library sanity check.
 struct VerificationReport: Sendable {
     struct Issue: Sendable, Identifiable {
         enum Severity: String, Sendable { case error, warning, info }
@@ -27,7 +26,6 @@ enum LibraryVerifier {
         var report = VerificationReport()
         let fm = FileManager.default
 
-        // 1. Missing files on disk & hash mismatches & empty OCR text
         let allDocs = try await store.verificationDocumentInfos()
         for doc in allDocs {
             if !fm.fileExists(atPath: doc.path) {
@@ -37,7 +35,6 @@ enum LibraryVerifier {
                     detail: "\(doc.filename) (id #\(doc.id)) is in the database but missing on disk at \(doc.path)."
                 ))
             } else {
-                // Checksum / hash mismatch
                 if let storedHash = doc.hash,
                    let currentHash = FileScanner.hash(URL(fileURLWithPath: doc.path)),
                    storedHash != currentHash {
@@ -49,7 +46,6 @@ enum LibraryVerifier {
                 }
             }
 
-            // OCR done but empty text
             if doc.ocrState == .done {
                 let text = (try? await store.ocrText(doc.id)) ?? ""
                 if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -62,7 +58,6 @@ enum LibraryVerifier {
             }
         }
 
-        // 2. Files on disk not in DB
         let scanned = FileScanner.scan(root: store.root)
         let indexedPaths = Set(allDocs.map { Store.canonical($0.path) })
         for file in scanned {
@@ -76,7 +71,6 @@ enum LibraryVerifier {
             }
         }
 
-        // 3. Broken or dangling aliases
         let aliases = try await store.allAliasRecords()
         for alias in aliases {
             if !fm.fileExists(atPath: alias.path) {
@@ -88,7 +82,6 @@ enum LibraryVerifier {
             }
         }
 
-        // 4. Orphaned suggestions
         let orphanedSuggestions = try await store.orphanedSuggestionsCount()
         if orphanedSuggestions > 0 {
             report.issues.append(VerificationReport.Issue(
@@ -98,7 +91,6 @@ enum LibraryVerifier {
             ))
         }
 
-        // 5. Orphaned value icons
         let orphanedIcons = try await store.orphanedIconsCount()
         if orphanedIcons > 0 {
             report.issues.append(VerificationReport.Issue(
@@ -108,7 +100,6 @@ enum LibraryVerifier {
             ))
         }
 
-        // 6. Orphaned FTS index rows
         let orphanedFTS = try await store.orphanedFTSCount()
         if orphanedFTS > 0 {
             report.issues.append(VerificationReport.Issue(

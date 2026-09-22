@@ -2,8 +2,6 @@ import Foundation
 
 extension AppModel {
 
-    // MARK: - Queue
-
     func approveAll() {
         Task {
             for lib in libraries { try? await lib.store.approveAllPending() }
@@ -12,8 +10,6 @@ extension AppModel {
         }
     }
 
-    /// Approval is per document: approving settles every queue entry it has,
-    /// so it leaves Needs Review for good rather than until the next entry.
     func setApproved(_ rows: [DocumentRow], _ approved: Bool) {
         Task {
             for (lib, rows) in grouped(rows) {
@@ -24,17 +20,11 @@ extension AppModel {
         }
     }
 
-    // MARK: - Review
-
-    /// Throws away what the pipeline worked out for these documents — see
-    /// `Store.discardGeneratedInfo`. The files are not touched; Analyze brings
-    /// the model's half back.
     func discardGeneratedInfo(_ rows: [DocumentRow]) {
         Task {
             for (lib, rows) in grouped(rows) {
                 for row in rows {
                     try? await lib.store.discardGeneratedInfo(row.doc)
-                    // A rule's tag may have been mirrored as an alias.
                     await lib.indexer.syncAliases(docID: row.doc, target: row.url)
                 }
             }
@@ -45,18 +35,6 @@ extension AppModel {
         }
     }
 
-    /// Files one document by hand: `primary` is the folder its file lives in
-    /// — it is moved there if it is not there already — and `secondaries` are
-    /// the folders it also appears in, as Finder aliases. Aliases filed by hand
-    /// that are no longer wanted are removed; tag aliases are left to the tags.
-    ///
-    /// This is the review's one button, so it can also approve the document
-    /// and step on to the next one.
-    ///
-    /// `keepOriginal` only matters when `approve` is true: left false, the
-    /// pre-optimization file kept for `Revert to Original` — if this document
-    /// has one — is freed once the document is accepted, since a review that
-    /// went well is the moment it stops being needed.
     func file(_ row: DocumentRow, in primary: URL, alsoIn secondaries: Set<String>,
               approve: Bool, keepOriginal: Bool = true, advance: Bool = false) {
         guard let lib = library(of: row) else { return }
@@ -127,8 +105,6 @@ extension AppModel {
         }
     }
 
-    /// The row after this one in the list, or the one before it at the end —
-    /// where review goes next.
     private func rowAfter(_ row: DocumentRow) -> DocumentRef? {
         guard let index = documents.firstIndex(where: { $0.id == row.id }) else { return nil }
         if index + 1 < documents.count { return documents[index + 1].id }

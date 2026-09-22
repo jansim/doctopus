@@ -3,19 +3,12 @@ import AppKit
 
 extension AppModel {
 
-    // MARK: - Model enrichment
-
-    /// Manual trigger for the model pass over documents that are already
-    /// indexed. Deliberately separate from Reprocess: this asks the model
-    /// again and touches nothing else.
     func analyze(_ rows: [DocumentRow]) {
         analyze(grouped(rows).map { ($0.library, $0.rows.map(\.doc)) },
                 subject: rows.count == 1
                 ? rows[0].url.lastPathComponent : "\(rows.count) documents")
     }
 
-    /// Runs the model over every open library. The expensive one, so the caller
-    /// is expected to have asked first.
     func analyzeLibrary() {
         Task {
             var work: [(Library, [Int64])] = []
@@ -50,16 +43,11 @@ extension AppModel {
                 combined.failed += summary.failed
                 combined.blocked = combined.blocked ?? summary.blocked
             }
-            // Re-probing costs a round trip, but a run that just failed is
-            // exactly when the status shown in Settings is worth correcting.
             modelStatus = await intelligence.status()
             report(combined, subject: subject)
         }
     }
 
-    /// A run that never started, or one where the model answered nothing at
-    /// all, is a problem to acknowledge. Anything else is a result, however
-    /// partial, and goes by as a toast.
     private func report(_ s: Indexer.AnalyzeSummary, subject: String) {
         if let blocked = s.blocked {
             errorMessage = "Could not analyze \(subject): \(blocked)"
@@ -79,8 +67,6 @@ extension AppModel {
         notify(parts.joined(separator: ", ") + ".", s.failed > 0 ? .warning : .success)
     }
 
-    /// Re-asks the configured backend whether it is reachable. The Test button
-    /// in Settings, and anything else that wants a fresh answer.
     func refreshModelStatus() {
         Task {
             await intelligence.update(settings: settings)
@@ -113,9 +99,6 @@ extension AppModel {
         }
     }
 
-    /// Frees the pre-optimization copy kept for `Revert to Original`. The
-    /// optimized file already in place, and the savings shown for it, are
-    /// untouched — only the fallback to go back goes away, for good.
     func deleteOriginal(_ row: DocumentRow) {
         guard let lib = library(of: row) else { return }
         Task {
@@ -157,23 +140,10 @@ extension AppModel {
         move(rows, to: url)
     }
 
-    /// Moves the master files to the Trash — never deletes them outright — and
-    /// forgets them only once the Trash has actually taken them.
-    ///
-    /// Two kinds of row never reach the Trash at all:
-    ///
-    /// A row that is in the folder being viewed only as an alias *is* the
-    /// alias, and deleting it deletes exactly that — the same thing Remove
-    /// Alias does, and the same thing Finder does with an alias. The document
-    /// it points at is somewhere else and is not what was deleted.
-    ///
-    /// A document that was filed in another folder by hand moves to the
-    /// nearest of those folders, taking the place of the alias standing there,
-    /// so it leaves the folder it was deleted from without the placements it
-    /// had being left pointing at nothing. See `Indexer.promoteClosestAlias`.
+    /// Moves files to the Trash, never deletes them outright. A row shown here only
+    /// as an alias deletes just the alias; a document also filed elsewhere by hand
+    /// moves into its nearest alias instead (see `Indexer.promoteClosestAlias`).
     func moveToTrash(_ rows: [DocumentRow]) {
-        // `isAliasHere` is only ever set while a folder is being viewed, and
-        // that folder is the one the alias is in.
         let viewedFolder: String?
         if case .folder(let path) = selection { viewedFolder = path } else { viewedFolder = nil }
         Task {
@@ -183,13 +153,10 @@ extension AppModel {
             var failed: [String] = []
             for (lib, rows) in grouped(rows) {
                 for row in rows {
-                    // The alias is the thing on screen, so it is the thing
-                    // deleted. Nothing else about the document changes.
                     if row.isAliasHere, let folder = viewedFolder {
                         unfiled += await removeAliasPlacements(of: row, in: folder, from: lib)
                         continue
                     }
-                    // Somewhere else to be beats the Trash.
                     if let newHome = await lib.indexer.promoteClosestAlias(docID: row.doc) {
                         rehomed.append((row.displayTitle,
                                         newHome.deletingLastPathComponent().lastPathComponent))
@@ -215,8 +182,6 @@ extension AppModel {
             if !failed.isEmpty {
                 errorMessage = "Could not move \(failed.count == 1 ? "“\(failed[0])”" : "\(failed.count) files") to the Trash. \(failed.count == 1 ? "It was" : "They were") left where \(failed.count == 1 ? "it is" : "they are")."
             }
-            // A delete can end three ways at once, and one toast replaces the
-            // last, so they are said in one line rather than hiding each other.
             var said: [String] = []
             if trashed > 0 {
                 said.append(trashed == 1 && rows.count == 1
@@ -238,9 +203,6 @@ extension AppModel {
         }
     }
 
-    /// Puts deleted documents back: the file comes out of the Trash and the row
-    /// it always had is revived, rather than the file being re-indexed as
-    /// something new.
     func restore(_ rows: [DocumentRow]) {
         Task {
             var restored = 0
@@ -282,8 +244,6 @@ extension AppModel {
         }
     }
 
-    /// Forgets a deleted document for good. The file stays in the Trash —
-    /// emptying that is the Finder's business, not Doctopus's.
     func forget(_ rows: [DocumentRow]) {
         Task {
             for (lib, rows) in grouped(rows) {
@@ -295,8 +255,6 @@ extension AppModel {
         }
     }
 
-    /// Files documents into a second folder as Finder aliases, leaving the
-    /// master where it is. This is what a plain drag onto a folder does.
     func createAliases(_ rows: [DocumentRow], in folder: URL) {
         Task {
             var made = 0
@@ -320,13 +278,6 @@ extension AppModel {
         }
     }
 
-    /// Takes a document's aliases inside `folder` away, leaving the master file
-    /// where it is, and says how many went. The registry lets go of the
-    /// placement either way: an entry whose file is no longer the alias we
-    /// wrote is a record of something that is not ours to remove.
-    ///
-    /// Each one is recorded as an `unfiled` event carrying where the alias was,
-    /// which is what lets Undo write it again.
     private func removeAliasPlacements(of row: DocumentRow, in folder: String,
                                        from lib: Library) async -> Int {
         var removed = 0

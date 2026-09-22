@@ -1,8 +1,5 @@
 import Foundation
 
-/// Assertion bookkeeping for the headless checks. Every check prints its own
-/// line so a passing run still reads as a report, and any failure makes the
-/// process exit non-zero, which is all CI looks at.
 enum Check {
     nonisolated(unsafe) private static var passed = 0
     nonisolated(unsafe) private static var failures: [String] = []

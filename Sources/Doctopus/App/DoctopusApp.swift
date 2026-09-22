@@ -2,8 +2,6 @@ import SwiftUI
 import AppKit
 import QuickLookUI
 
-/// Entry point. A hidden `--selftest` mode drives the whole ingest pipeline
-/// headlessly, which is how the indexing path is verified without a UI session.
 @main
 enum Main {
     static func main() {
@@ -76,11 +74,9 @@ struct DoctopusApp: App {
                 .environment(model)
                 .task {
                     delegate.model = model
-                    ScanCoordinator.shared.onScan = { items, destination in
-                        model.importScanned(items, into: destination)
-                        // A continuous run counts what arrived and asks for
-                        // the next document; a one-off scan ends here.
-                        model.scanDelivered(items.count)
+                    ScanCoordinator.shared.onScan = { delivery, destination in
+                        model.importScanned(delivery, into: destination)
+                        model.scanDelivered(delivery)
                     }
                     ScanCoordinator.shared.onScanFailed = { model.scanFailed($0) }
                     await model.bootstrap()
@@ -97,16 +93,10 @@ struct DoctopusApp: App {
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     var model: AppModel? { didSet { openPending() } }
-    /// Libraries opened before there was a model to open them in. A library
-    /// double-clicked in Finder while Doctopus is not running is handed over
-    /// as it launches, before the window — and so the model — exists.
     private var pendingOpens: [URL] = []
 
-    // Continuity Camera. The system looks for an import item in the main menu
-    // exactly once, while the app is still launching: installed any later —
-    // applicationDidFinishLaunching included — the item stays a dead, disabled
-    // leaf. SwiftUI has already built its menus by now, so File is there to
-    // amend. See ScanCoordinator and `--scantest`.
+    // Continuity Camera: the import item must be in the main menu before launch
+    // finishes, or it stays a dead, disabled leaf. See ScanCoordinator.
     func applicationWillFinishLaunching(_ notification: Notification) {
         ScanCoordinator.shared.install()
     }
@@ -117,7 +107,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         OptionReveal.install { [weak self] held in self?.model?.revealingFolders = held }
     }
 
-    /// Opening a `library.doctopus` (or a folder holding one) from Finder.
     func application(_ application: NSApplication, open urls: [URL]) {
         pendingOpens += urls
         openPending()
@@ -135,9 +124,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
-
-    // Captures themselves are delivered through SwiftUI, not a services
-    // requestor here — see ScanCoordinator.accept.
 
     // Quick Look asks the responder chain who owns the panel. SwiftUI views are
     // not in that chain, so the app delegate — which always is — claims it.
@@ -176,10 +162,6 @@ struct DoctopusCommands: Commands {
                 .keyboardShortcut("o", modifiers: [.command, .shift])
             Button("Import Files…") { importPanel() }
                 .keyboardShortcut("i", modifiers: [.command])
-            // Continuous scanning is started from the Import menu, where the
-            // device and what to capture are picked. This is for getting back
-            // to a run that paused — which happens when Doctopus is not the
-            // app in front, so the toolbar button may not be what is in view.
             if let session = model.scanSession {
                 if session.isRunning {
                     Button("Stop Continuous Scanning") { model.stopContinuousScan() }

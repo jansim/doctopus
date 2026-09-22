@@ -24,22 +24,64 @@ device left the room — and keeps its count and its destination, so Resume
 (⌥⌘S) picks it up exactly where it was. A capture already in flight when the
 run stops is still filed.
 
+**What a capture is taken as.** A device offers the same capture in several
+forms and lists them in its own order, so the form is chosen by this app's
+preference — PDF first — rather than by whichever the device happened to name
+first. Every raster form of a multi-page document scan is one page, so taking
+the wrong one silently throws the rest away. A capture that arrives as a
+multi-image container (a multi-page TIFF, a HEIC sequence) becomes a PDF with
+one page per image, never its first image alone. A capture handed over as a
+file rather than as bytes is read from that file while it still exists, since
+it goes when the pasteboard does.
+
+**Nothing arrives silently short.** A capture that cannot be read is gone — the
+pasteboard it came on is discarded moments later, and nothing asks the device
+again — so every capture a delivery offered is accounted for against the
+documents that reach the library. A shortfall is an alert on a one-off scan,
+and pauses a continuous run with `Incomplete` in the toolbar rather than
+carrying on into a gap. Each delivery also leaves a record of what was offered,
+what was taken and how many pages it held:
+
+```bash
+log show --last 1h --predicate 'subsystem == "io.doctopus"'
+```
+
 Continuity Camera cannot be checked without a real device in the room; see
-[Testing](Testing.md) for `--scantest`.
+[Testing](Testing.md) for `--scantest`. The decoding either side of it —
+which form is taken, and how many pages it yields — is checked in `--selftest`.
 
 ## Routing
 
-Unspecified imports and inbox scans are evaluated against a confidence
-threshold. Every place that fits is kept as a suggestion; the file is only
-moved when the best one clears the threshold *and* no other place fits about as
-well — two equally good homes leave it in the Inbox, in Needs Review, until
-someone picks. Routing never moves a file outside its library.
+Unspecified imports and inbox scans are routed by the rules first. A rule that
+matches is certain, so the file moves to its folder — unless matching rules
+name different folders, in which case it stays in the Inbox, in Needs Review,
+with every folder on offer until someone picks. When no rule has a folder, a
+path derived from the correspondent is used if it clears the confidence
+threshold. Routing never moves a file outside its library.
 
-Rules are edited in Settings › Routing: what a rule looks at (text, filename,
-correspondent or type), its pattern, destination template, tags and confidence,
-and where it sits in the evaluation order. The editor shows how the pattern
-will be read, how many documents already in the library it matches, and where a
-document would land.
+## Rules
+
+A rule is one or more conditions and one or more actions, in the spirit of a
+mail filter. A condition points at the text, the filename, the correspondent or
+the document type, says how its pattern is read — any of these words, all of
+them, an exact phrase, a regular expression, or roughly this for OCR noise —
+and can be inverted, so "an invoice, but not a credit note" is one rule rather
+than two. The conditions are joined by *any* or *all*.
+
+Words match whole. A `*` widens one: `rechnung*` also catches
+"Rechnungsnummer", `*rechnung` catches "Gehaltsabrechnung", `*rechnung*` both.
+Correspondents and types that carry their own pattern are read the same way.
+
+The actions are moving the file, renaming it from a naming template, adding
+tags, and setting the correspondent or document type; each kind appears at
+most once per rule. Every matching rule applies: tags are combined, and for
+the single-valued actions the rule highest in the list wins. Moving and
+renaming only ever happen to a file Doctopus has just brought in, or when
+Apply to Existing is pressed in the editor.
+
+Rules live in Settings › Rules, per library. The editor shows how many
+documents already in the library a rule catches, and where a document would
+land and what it would be called.
 
 ## OCR
 

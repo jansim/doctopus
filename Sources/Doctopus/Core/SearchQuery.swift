@@ -1,9 +1,5 @@
 import Foundation
 
-/// Parses the center-pane search field into FTS5 terms plus structured token
-/// filters (`tag:`, `-tag:`, `finder:`, `in:`, `ext:`, `is:`, `date:`, `created:`,
-/// `added:`, `before:`, `after:`, and one token per field — `type:`, `from:`,
-/// `lang:` and custom fields).
 struct SearchQuery: Sendable, Equatable {
     var terms: [String] = []
     var negatedTerms: [String] = []
@@ -27,13 +23,12 @@ struct SearchQuery: Sendable, Equatable {
     }
 
     struct DateFilter: Sendable, Equatable, Hashable {
-        var column: String   // "m.doc_date" or "d.created_at"
+        var column: String
         var start: Date?
         var end: Date?
         var negated: Bool = false
     }
 
-    /// Shorthands kept stable regardless of how a field is renamed.
     static let aliases: [String: String] = [
         "type": "doc_type", "from": "correspondent", "lang": "language",
         "language": "language", "correspondent": "correspondent", "amount": "amount",
@@ -52,9 +47,6 @@ struct SearchQuery: Sendable, Equatable {
     }
     var hasText: Bool { !terms.isEmpty }
 
-    /// `fieldKeys` are the currently configured field keys; a `word:` token is
-    /// only treated as a filter when it resolves to one, so a stray colon in a
-    /// search term still behaves like text.
     init(_ raw: String, fieldKeys: Set<String> = []) {
         for token in SearchQuery.split(raw) {
             let unquoted = token.trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
@@ -113,7 +105,6 @@ struct SearchQuery: Sendable, Equatable {
         }
     }
 
-    /// Splits on whitespace while honouring double quotes and brackets.
     private static func split(_ raw: String) -> [String] {
         var out: [String] = []
         var cur = ""
@@ -168,16 +159,11 @@ struct SearchQuery: Sendable, Equatable {
 
     private static func isFTSOperator(_ t: String) -> Bool { t == "AND" || t == "OR" || t == "NOT" }
 
-    /// An expression is read while it is still being typed, so it passes
-    /// through states like `foo and` or `(foo or`. FTS5 rejects those outright,
-    /// and the resulting throw blanks the whole document list — so an operator
-    /// with nothing to operate on, and a bracket with no partner, are dropped
-    /// here rather than handed to SQLite.
+    /// Drops dangling operators and unmatched brackets from a query still being
+    /// typed: FTS5 rejects them, and the throw would blank the whole list.
     private static func balance(_ parts: [String]) -> [String] {
         var out: [String] = []
         var depth = 0
-        // Whether the next token has to be an operand: true at the start, after
-        // an operator, and just inside an opening bracket.
         var expectsOperand = true
         for token in parts {
             if isFTSOperator(token) {
@@ -189,7 +175,6 @@ struct SearchQuery: Sendable, Equatable {
                 depth += 1
                 expectsOperand = true
             } else if token == ")" {
-                // Nothing open, or nothing in it yet.
                 guard depth > 0, !expectsOperand else { continue }
                 out.append(token)
                 depth -= 1
@@ -199,8 +184,6 @@ struct SearchQuery: Sendable, Equatable {
                 expectsOperand = false
             }
         }
-        // Whatever the cursor left dangling: a trailing operator, or a bracket
-        // opened with nothing after it.
         while let last = out.last, isFTSOperator(last) || last == "(" {
             if last == "(" { depth -= 1 }
             out.removeLast()
@@ -216,10 +199,8 @@ enum SearchDateParser {
         let lower = trimmed.lowercased()
         let cal = DayDate.calendar
 
-        // Relative keywords: "today", "yesterday", and "this"/"last" plus a unit.
         if let range = relative(lower, now: now) { return range }
 
-        // Range syntax: "A to B" or "A..B"
         let parts: [String]
         if trimmed.contains(" to ") {
             parts = trimmed.components(separatedBy: " to ")
@@ -234,7 +215,6 @@ enum SearchDateParser {
             return (s, e)
         }
 
-        // Specific Year: "2026"
         if let year = Int(trimmed), year >= 1900 && year <= 2100 {
             var comps = DateComponents()
             comps.year = year
@@ -245,7 +225,6 @@ enum SearchDateParser {
             return (start, end)
         }
 
-        // Year-Month: "2026-03"
         let ymParts = trimmed.split(separator: "-")
         if ymParts.count == 2, let y = Int(ymParts[0]), let m = Int(ymParts[1]), m >= 1 && m <= 12 {
             var comps = DateComponents()
@@ -257,7 +236,6 @@ enum SearchDateParser {
             return (start, end)
         }
 
-        // ISO Day: "2026-03-04"
         if let dayDate = DayDate.parse(trimmed) {
             let start = DayDate.startOfDay(dayDate)
             let end = cal.date(byAdding: .day, value: 1, to: start)?.addingTimeInterval(-1)

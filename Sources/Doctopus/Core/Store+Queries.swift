@@ -2,12 +2,8 @@ import Foundation
 
 extension Store {
 
-    // MARK: - Reading document rows
-    //
-    // Three queries hand back `DocumentRow`s — the list, one document's detail
-    // and the more-like-this lookup. They share these columns, in this order,
-    // so one decoder reads all three; anything a query needs on top goes after
-    // them, where it cannot shift an index out from under the others.
+    // The list, detail and more-like-this queries share these columns in this
+    // order, so one decoder reads all three. Extra columns go after them.
 
     static let rowColumns = """
         d.id, d.path, d.directory, d.filename, d.ext, d.size, d.original_size,
@@ -35,7 +31,6 @@ extension Store {
             language: r.stringOrNil(16), docDate: r.date(17), summary: r.stringOrNil(18))
     }
 
-    /// Built-in field values for one row, keyed by field key.
     static func builtinValues(fields: [Field], row: DocumentRow,
                               amount: String?, intent: String?) -> [String: String] {
         var values: [String: String] = [:]
@@ -54,21 +49,15 @@ extension Store {
         return values
     }
 
-    /// The center pane's single query. Search, token filters, sidebar selection
-    /// and sort all collapse into one statement so paging stays O(limit).
     func listDocuments(selection: Selection, query: SearchQuery, sort: SortField,
                        ascending: Bool, limit: Int = 500, offset: Int = 0) throws -> [DocumentRow] {
         let allFields = try cachedFields()
         var args: [Database.Value] = []
-        // Deleted documents are out of every listing but their own, which is
-        // the only place the row is allowed to show through at all.
         var wheres: [String] = selection == .deleted
             ? ["d.deleted_at IS NOT NULL"]
             : ["d.missing=0", "d.deleted_at IS NULL"]
 
         switch selection {
-        // A smart folder carries no filter of its own: its query arrives in
-        // `query`, the same way a typed search does.
         case .all, .deleted, .savedView: break
         case .inbox:
             wheres.append("(d.directory = ? OR d.directory LIKE ?)")
@@ -76,10 +65,8 @@ extension Store {
         case .queue:
             wheres.append("d.id IN (SELECT doc_id FROM processing)")
         case .folder(let path):
-            // `path` is absolute; the database stores directories relative to root.
             let rel = relPath(path)
             if !rel.isEmpty {
-                // Subtree, plus anything present here only as a Finder alias.
                 wheres.append("""
                     (d.directory = ? OR d.directory LIKE ?
                      OR EXISTS (SELECT 1 FROM aliases a WHERE a.doc_id = d.id AND a.path LIKE ?))
@@ -87,7 +74,6 @@ extension Store {
                 args.append(.text(rel)); args.append(.text(rel + "/%"))
                 args.append(.text(rel + "/%"))
             }
-            // rel == "" means the library root itself: no directory filter.
         case .tag(let ref):
             wheres.append("d.id IN (SELECT doc_id FROM document_tags WHERE tag_id=?)")
             args.append(.int(ref.tag))
@@ -197,10 +183,6 @@ extension Store {
             args.append(.text(unquoted.contains(" ") ? "\"\(unquoted)\"" : "\"\(unquoted)\"*"))
         }
 
-        // Text search. Every human-facing surface is a column of `doc_fts`, so
-        // one MATCH covers title, correspondent, type, tags, field values,
-        // filename and body — no `LIKE '%…%'` fallback, and no unranked
-        // results mixed into a ranked list.
         var joinFTS = ""
         var snippetCol = "NULL"
         if let expr = query.ftsExpression {
@@ -215,8 +197,6 @@ extension Store {
             args.insert(.text(expr), at: 0)  // the MATCH bind comes before the WHERE binds
         }
 
-        // Queue mode carries the latest pipeline event alongside each row, so
-        // review happens in the same browser as everything else.
         var joinQueue = ""
         var queueColumns = "NULL, NULL, NULL, NULL, NULL, NULL, NULL"
         if selection.isQueueMode {
@@ -237,15 +217,10 @@ extension Store {
             // bm25() is more negative the better the match.
             order = "h.r ASC, d.created_at DESC"
         } else if case .field(let key) = sort, let f = allFields.first(where: { $0.key == key }) {
-            // A typed field sorts by its number, day or flag; only text sorts
-            // by how it is spelled. That is the difference between €90 coming
-            // before €1,200 and coming after it.
             let expr: String
             let collate: String
             if let column = f.builtinColumn {
                 if column == "amount" {
-                    // The amount keeps its currency in the text and its value
-                    // in a column of its own.
                     expr = "m.amount_value"
                     collate = ""
                 } else if let idColumn = Store.entityColumns[column] {
@@ -262,8 +237,6 @@ extension Store {
                 expr = "(SELECT value FROM field_values WHERE doc_id = d.id AND field_id = \(f.fieldID))"
                 collate = " COLLATE NOCASE"
             }
-            // Blank values sort last whichever way the column points, so an
-            // unfilled field never heads the list.
             let blank = collate.isEmpty ? "\(expr) IS NULL" : "\(expr) IS NULL OR \(expr) = ''"
             order = "(\(blank)), \(expr)\(collate) \(ascending ? "ASC" : "DESC")"
         } else {
@@ -295,23 +268,18 @@ extension Store {
             return row
         }
 
-        // A document shown inside a folder it does not physically live in is
-        // there through an alias; flag it so the UI can say so.
         if case .folder(let path) = selection {
             for i in rows.indices where rows[i].directory != path && !rows[i].directory.hasPrefix(path + "/") {
                 rows[i].isAliasHere = true
             }
         }
 
-        // Both tag systems, so either can be shown as a column.
         let tagged = try tags(forDocuments: rows.map(\.doc))
         for i in rows.indices {
             rows[i].tags = tagged.own[rows[i].doc] ?? []
             rows[i].finderTags = tagged.finder[rows[i].doc] ?? []
         }
 
-        // Fold every field's value into one uniform dictionary so the views
-        // never need to know whether a field is built in or user-defined.
         let custom = try customValues(for: rows.map(\.doc), fields: allFields)
         for i in rows.indices {
             let extra = extras[rows[i].doc]
@@ -323,15 +291,11 @@ extension Store {
         return rows
     }
 
-    /// Adds the WHERE clause for one field, wherever its values are stored.
     private func appendFieldFilter(_ field: Field, _ value: String, exact: Bool, negated: Bool = false,
                                    to wheres: inout [String], args: inout [Database.Value]) {
         if let column = field.builtinColumn {
             guard Store.fieldColumns.contains(column) else { return }
-            // A taxonomy value is a row, so the filter is on its id — which is
-            // also why two spellings can no longer be two different filters.
             if let idColumn = Store.entityColumns[column] {
-                // Qualified, because `fields` has a `name` column of its own.
                 let comparison = exact ? "e.name = ?" : "e.name LIKE ?"
                 let subquery = """
                     (SELECT e.id FROM entities e
@@ -415,25 +379,13 @@ extension Store {
         return d
     }
 
-    // MARK: - Sidebar
-
-    /// Builds the physical folder tree from the indexed directory column. Cheap
-    /// enough to rebuild on every change — one grouped scan, no filesystem I/O.
-    /// Directories are stored relative to the root (`""` is the root itself);
-    /// the nodes it returns carry absolute paths.
     func folderTree() throws -> [FolderNode] {
         var counts: [String: Int] = [:]
         try db.query("SELECT directory, COUNT(*) FROM documents WHERE missing=0 AND deleted_at IS NULL GROUP BY directory") {
             counts[$0.string(0)] = Int($0.int(1))
         }
 
-        // A folder with nothing in it yet has no row above, but it is still a
-        // real folder — walk the disk too, so it shows up before anything is
-        // filed into it rather than only after.
         var allDirs = Set(counts.keys)
-        // Tag mirrors under the default `Tags/` hold aliases, not documents,
-        // and are a view of the library rather than a home for anything — so
-        // unlike a folder the user made, they never earn a place of their own.
         let tagsMirrorRoot = root.appendingPathComponent("Tags", isDirectory: true).path
         for url in FileScanner.directories(root: root) {
             let path = url.path
@@ -469,8 +421,6 @@ extension Store {
 
     func facets(column: String) throws -> [Facet] {
         guard ["correspondent", "doc_type", "language"].contains(column) else { return [] }
-        // A taxonomy field's values are rows, so its facets come from there —
-        // icon included, which is how an icon now survives a rename.
         if Store.entityColumns[column] != nil {
             return try entities(builtin: column)
                 .filter { $0.count > 0 }
@@ -489,14 +439,10 @@ extension Store {
         var pending = 0
         var failed = 0
         var needsReview = 0
-        /// What the indexed documents occupy on disk.
         var bytes: Int64 = 0
         var saved: Int64 = 0
-        /// Documents in the Trash whose rows are still here, waiting to be
-        /// restored or to age out.
         var deleted = 0
 
-        /// Summed across the open libraries for the app-wide footer.
         static func + (a: Stats, b: Stats) -> Stats {
             Stats(total: a.total + b.total, pending: a.pending + b.pending,
                   failed: a.failed + b.failed, needsReview: a.needsReview + b.needsReview,

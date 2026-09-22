@@ -3,13 +3,10 @@ import AppKit
 
 extension AppModel {
 
-    /// How an edit reads in the history: "Amount → €49,90", or "Amount cleared".
     static func editDetail(_ label: String, _ value: String?) -> String {
         guard let value = value?.nilIfBlank else { return "\(label) cleared" }
         return "\(label) → \(value)"
     }
-
-    // MARK: - Where the selection lives
 
     /// Fills `revealedFolders` for the current selection, or empties it once ⌥
     /// is let go. Aliases count: a document filed in a second folder is in
@@ -36,9 +33,6 @@ extension AppModel {
         }
     }
 
-    // MARK: - Document actions
-
-    /// Space and the Document menu land here.
     func quickLook(startingAt row: DocumentRow? = nil) {
         let rows = selectedRows.isEmpty ? documents : selectedRows
         guard !rows.isEmpty else { return }
@@ -71,11 +65,6 @@ extension AppModel {
         }
     }
 
-    // MARK: - Tags
-
-    /// Tagging a mixed selection tags each row in its own library, creating the
-    /// tag there if it is missing. Two libraries can carry the same tag name
-    /// without it being one tag.
     func addTag(_ name: String, to rows: [DocumentRow]) {
         Task {
             for (lib, rows) in grouped(rows) {
@@ -91,7 +80,6 @@ extension AppModel {
         }
     }
 
-    /// A tag belongs to one library, so this only touches the rows from it.
     func removeTag(_ tag: Tag, from rows: [DocumentRow]) {
         guard let lib = library(tag.library) else { return }
         Task {
@@ -105,7 +93,6 @@ extension AppModel {
         }
     }
 
-    /// Turns a tag the model proposed into a real assignment.
     func acceptTagSuggestion(_ suggestion: TagSuggestion, for row: DocumentRow) {
         guard let lib = library(of: row) else { return }
         Task {
@@ -118,7 +105,6 @@ extension AppModel {
         }
     }
 
-    /// Dismisses a proposed tag without ever making it a real one.
     func discardTagSuggestion(_ suggestion: TagSuggestion, for row: DocumentRow) {
         guard let lib = library(of: row) else { return }
         Task {
@@ -131,7 +117,6 @@ extension AppModel {
         guard let lib = library(tag.library) else { return }
         Task {
             try? await lib.store.setTagMirroring(tag.tagID, enabled, folder: tag.folder)
-            // Re-sync every document carrying the tag so disk matches immediately.
             let rows = (try? await lib.store.listDocuments(selection: .tag(tag.id), query: SearchQuery(""),
                                                            sort: .added, ascending: false, limit: 5000)) ?? []
             for row in rows { await lib.indexer.syncAliases(docID: row.doc, target: row.url) }
@@ -139,9 +124,6 @@ extension AppModel {
         }
     }
 
-    /// Moves a tag under another, or back to the top level. Refused when it
-    /// would make a loop or push the tree past its depth cap — the store is the
-    /// one that knows, so the answer comes back from there.
     func setTagParent(_ tag: Tag, to parent: Tag?) {
         guard let lib = library(tag.library) else { return }
         if let parent, parent.library != tag.library {
@@ -158,7 +140,6 @@ extension AppModel {
         }
     }
 
-    /// New tags go to the library the sidebar selection belongs to.
     func createTag(named name: String, in lib: Library? = nil) {
         guard let lib = lib ?? activeLibrary else { return }
         Task { _ = try? await lib.store.tagID(named: name); refreshAll() }
@@ -189,8 +170,6 @@ extension AppModel {
             refreshAll()
         }
     }
-
-    // MARK: - Finder tags
 
     /// Writing one changes the file's extended attributes, so it only ever
     /// happens on an explicit action, and the index is refreshed from whatever
@@ -226,10 +205,6 @@ extension AppModel {
         }
     }
 
-    // MARK: - Value icons
-
-    /// Field values are matched across libraries, so an icon chosen for one is
-    /// set everywhere the field exists.
     func setValueIcon(_ field: Field, value: String, icon: String?) {
         Task {
             for (lib, field) in librariesDefining(field) {
@@ -239,20 +214,12 @@ extension AppModel {
         }
     }
 
-    // MARK: - Fields
-
-    /// Each library's own copy of a field key, for the actions the merged field
-    /// list has to apply everywhere at once.
     func librariesDefining(_ field: Field) -> [(Library, Field)] {
         libraries.compactMap { lib in
             lib.fields.first { $0.key == field.key }.map { (lib, $0) }
         }
     }
 
-    // MARK: - Notes
-
-    /// A note is the escape hatch for what no field models — and it is indexed
-    /// with the document's text, so it is findable afterwards.
     func addNote(_ body: String, to ref: DocumentRef) {
         guard let lib = library(ref.library), body.nilIfBlank != nil else { return }
         Task {
@@ -266,7 +233,6 @@ extension AppModel {
         guard let lib = library(ref.library) else { return }
         Task {
             try? await lib.store.updateNote(id, body: body)
-            // Editing a note to nothing deletes it.
             try? await lib.store.logEdit(docID: ref.doc,
                                          detail: body.nilIfBlank == nil ? "Note deleted" : "Note edited")
             reloadDetail()
@@ -308,7 +274,6 @@ extension AppModel {
         }
     }
 
-    /// Renaming a value onto an existing one merges every matching document.
     func renameFieldValue(_ field: Field, from old: String, to new: String) {
         Task {
             var n = 0
@@ -323,9 +288,6 @@ extension AppModel {
         }
     }
 
-    /// Gives a correspondent or document type a pattern that identifies it, so
-    /// every document mentioning it is filed as it from now on — no model, no
-    /// network, and right every time the pattern is. An empty pattern stops it.
     func setEntityMatch(_ field: Field, value: String, pattern: String) {
         Task {
             for (lib, owned) in librariesDefining(field) {
@@ -352,11 +314,8 @@ extension AppModel {
     }
 
     func updateField(_ field: Field) {
-        // An explicit choice in Settings supersedes one made in the list header.
         listColumns[visibility: "field.\(field.key)"] = .automatic
         Task {
-            // The list shows one column per key, so a change to it has to reach
-            // every library that has that key or the next refresh would undo it.
             for (lib, owned) in librariesDefining(field) {
                 var updated = field
                 updated.fieldID = owned.fieldID
@@ -367,9 +326,6 @@ extension AppModel {
         }
     }
 
-    /// Fields are a vocabulary the open libraries share — the centre pane shows
-    /// one column per key however many libraries fill it — so a new one is
-    /// added to every library rather than to a chosen one.
     func addCustomField(named name: String, type: FieldType = .string) {
         Task {
             for lib in libraries {
@@ -389,8 +345,6 @@ extension AppModel {
         }
     }
 
-    // MARK: - Metadata editing
-
     func editMetadata(_ ref: DocumentRef, column: String, value: String?) {
         guard let lib = library(ref.library) else { return }
         let label = columnLabel(column)
@@ -403,8 +357,6 @@ extension AppModel {
         }
     }
 
-    /// `title` and `summary` are edited straight; every other column is
-    /// reached through a `Field`, which carries the name the user gave it.
     private func columnLabel(_ column: String) -> String {
         if let field = fields.first(where: { $0.builtinColumn == column }) { return field.name }
         return column == "summary" ? "Summary" : "Title"

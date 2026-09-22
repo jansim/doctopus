@@ -1,14 +1,5 @@
 import SwiftUI
 
-/// How the two tag systems are drawn, everywhere they appear.
-///
-/// Doctopus's own tags carry the outline tag symbol in the tag's colour. The
-/// Finder's carry the Finder's own coloured dot, because that is what they look
-/// like everywhere else in macOS. Keeping the two shapes apart is what makes it
-/// obvious at a glance which system a tag belongs to.
-
-/// A Finder tag's colour, drawn the way the Finder draws it: a filled dot, or
-/// an empty ring for a tag macOS gave no colour label.
 struct FinderTagDot: View {
     let name: String
     var size: CGFloat = 9
@@ -25,8 +16,6 @@ struct FinderTagDot: View {
     }
 }
 
-/// Doctopus's own tags, small enough to sit in a table cell. Tags are a set, so
-/// the column is not sortable — there is no sensible order to put them in.
 struct TagChips: View {
     let tags: [Tag]
 
@@ -53,8 +42,6 @@ struct TagChips: View {
     }
 }
 
-/// The Finder's tags in the same space: a dot and a name, no capsule, since the
-/// dot already carries the colour.
 struct FinderTagChips: View {
     let names: [String]
 
@@ -74,12 +61,8 @@ struct FinderTagChips: View {
     }
 }
 
-/// One of Doctopus's tags as an editable token.
 struct TagChip: View {
     let tag: Tag
-    /// The full nested name to show ("Tax/2025"), when it differs from
-    /// `tag.name`. Defaults to the tag's own name for a caller with no
-    /// sibling list to resolve ancestors against.
     var displayName: String?
     var compact = false
     let onRemove: () -> Void
@@ -99,7 +82,6 @@ struct TagChip: View {
     }
 }
 
-/// A tag the model proposed, displayed with a dashed border until accepted.
 struct TagSuggestionChip: View {
     let suggestion: TagSuggestion
     var color: Color = .secondary

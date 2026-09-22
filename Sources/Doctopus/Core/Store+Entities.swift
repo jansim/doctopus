@@ -1,40 +1,24 @@
 import Foundation
 
-/// Correspondents and document types, as rows.
-///
-/// The two built-in fields whose values are a taxonomy rather than free text
-/// point at `entities` instead of repeating a string on every document. See
-/// `Schema.v16` for why. Everything else — language, amount, intent, and every
-/// custom field — is still a value in place, because none of those is a thing
-/// you rename, merge, give an icon to, or write a matching rule for.
 extension Store {
 
-    /// The built-in columns whose values are entities, and the `metadata`
-    /// column that holds the id.
     static let entityColumns: [String: String] = [
         "correspondent": "correspondent_id",
         "doc_type": "doc_type_id",
     ]
 
-    /// The `metadata` columns a built-in field can be backed by.
     static let fieldColumns: Set<String> = ["correspondent", "doc_type", "language", "amount", "intent"]
 
-    /// Those, plus the `metadata` columns that are edited directly rather than through a field.
     static let editableColumns: Set<String> = fieldColumns.union(["title", "summary"])
 
     nonisolated static func entityColumn(for builtin: String?) -> String? {
         builtin.flatMap { entityColumns[$0] }
     }
 
-    /// The `fields` row id for a built-in column, which is what an entity
-    /// belongs to.
     func fieldID(forBuiltin column: String) throws -> Int64? {
         try db.first("SELECT id FROM fields WHERE builtin_column=?", [.text(column)]) { $0.int(0) }
     }
 
-    /// Finds the entity with this name, or makes one. Names are compared
-    /// case-insensitively, so a second spelling of the same capitalisation
-    /// never becomes a second correspondent.
     @discardableResult
     func entityID(named name: String?, builtin column: String) throws -> Int64? {
         guard let clean = name?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfBlank,
@@ -52,8 +36,6 @@ extension Store {
         return try db.first("SELECT name FROM entities WHERE id=?", [.int(id)]) { $0.string(0) }
     }
 
-    /// Every value of one taxonomy field, with how many live documents carry
-    /// it. Busiest first, like the facets it feeds.
     func entities(builtin column: String) throws -> [Entity] {
         guard let idColumn = Store.entityColumns[column],
               let fieldID = try fieldID(forBuiltin: column) else { return [] }
@@ -72,9 +54,6 @@ extension Store {
         }
     }
 
-    /// Every entity that carries a matching rule, for the analyzer. A value
-    /// that can identify itself is how Paperless gets most of its
-    /// classification right without a model.
     func matchingEntities() throws -> [Entity] {
         try db.map("""
             SELECT e.id, f.builtin_column, e.name, e.icon, e.color, e.match,
@@ -90,9 +69,6 @@ extension Store {
         }
     }
 
-    /// Renames one value. Renaming onto a name that already exists merges the
-    /// two: the documents are repointed and the loser is deleted. Returns how
-    /// many documents changed hands.
     @discardableResult
     func renameEntity(_ id: Int64, to name: String) throws -> Int {
         let clean = name.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -106,8 +82,6 @@ extension Store {
         let existing = try db.first("SELECT id FROM entities WHERE field_id=? AND name=? AND id<>?",
                                     [.int(fieldID), .text(clean), .int(id)], { $0.int(0) })
         guard let target = existing else {
-            // One row, one name. This is the whole point of the change: the
-            // documents are not touched at all, they already point here.
             let affected = try documentIDs(withEntity: id, column: idColumn)
             try db.run("UPDATE entities SET name=? WHERE id=?", [.text(clean), .int(id)])
             try refreshSearchIndex(affected)
@@ -118,7 +92,6 @@ extension Store {
         try db.transaction {
             try db.run("UPDATE metadata SET \(idColumn)=? WHERE \(idColumn)=?",
                        [.int(target), .int(id)])
-            // The surviving row keeps its own icon; the merged one's goes with it.
             try db.run("DELETE FROM entities WHERE id=?", [.int(id)])
         }
         try refreshSearchIndex(affected)
@@ -136,9 +109,6 @@ extension Store {
         try db.run("UPDATE entities SET icon=? WHERE id=?", [.text(icon?.nilIfBlank), .int(id)])
     }
 
-    /// Gives a value a pattern that identifies it. This is the cheapest
-    /// classification there is: no model, no network, and it is right every
-    /// time the pattern is.
     func setEntityMatch(_ id: Int64, pattern: String?, mode: MatchMode = .anyWord,
                         insensitive: Bool = true) throws {
         try db.run("UPDATE entities SET match=?, match_mode=?, match_insensitive=? WHERE id=?",

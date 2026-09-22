@@ -1,17 +1,12 @@
 import SwiftUI
 import AppKit
 
-/// One token `Naming.render` understands, described for the UI: what to type,
-/// and what it means.
 struct TemplateToken: Identifiable {
     var symbol: String
     var help: String
     var id: String { symbol }
 }
 
-/// The token vocabulary every `Naming` template shares — a rename filename, a
-/// derived folder path, or whatever comes next. Described once here, so a
-/// token means the same thing everywhere it can be typed.
 enum TemplateTokens {
     static let all: [TemplateToken] = [
         TemplateToken(symbol: "{date}", help: "Document date, yyyy-MM-dd. Add a format like {date:yyyy-MM} for a custom one."),
@@ -27,17 +22,8 @@ enum TemplateTokens {
     ]
 }
 
-/// Turns a folder chosen from an open panel into a path template can use:
-/// relative to a library's root, since that is what every path template is
-/// rendered against. Shared by the derived path template here and by a
-/// routing rule's own destination field, which is not a `TemplateField`.
 @MainActor
 enum FolderPicker {
-    /// Prompts for a folder inside `library` and hands back its path relative
-    /// to the library root — empty for the root itself. `nil` when the panel
-    /// was cancelled, or the folder picked is not inside the library at all
-    /// (its own `.doctopus` container included), which a path template could
-    /// never route into anyway.
     static func chooseRelativePath(in library: Library, message: String) -> String? {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
@@ -50,8 +36,6 @@ enum FolderPicker {
         return relativePath(for: url, in: library)
     }
 
-    /// Apart from the panel so a check can put a URL through it without a
-    /// modal to answer.
     static func relativePath(for url: URL, in library: Library) -> String? {
         let path = Store.canonical(url.standardizedFileURL.path)
         guard library.owns(path: path), !FileScanner.isInsideLibraryContainer(url) else { return nil }
@@ -59,10 +43,6 @@ enum FolderPicker {
     }
 }
 
-/// What a `TemplateField` is for: a filename or a folder path. The two differ
-/// in the separator a tapped token is joined with, in whether a `/` may be
-/// typed at all, and in how the live example below the field is built —
-/// everything else about editing one is the same.
 enum TemplateFieldKind: Equatable {
     case filename
     case path
@@ -74,12 +54,8 @@ enum TemplateFieldKind: Equatable {
         }
     }
 
-    /// A filename can't contain a path separator; a folder path is made of
-    /// them, so it's the one character never forbidden there.
     var forbidsSlash: Bool { self == .filename }
 
-    /// Sample values standing in for a real document's own, so every token in
-    /// a template shows something in the live example.
     private static func sample(ext: String, originalStem: String) -> Naming.Context {
         Naming.Context(
             date: DayDate.calendar.date(from: DateComponents(year: 2026, month: 3, day: 14)),
@@ -87,8 +63,6 @@ enum TemplateFieldKind: Equatable {
             language: "en", counter: 2, originalStem: originalStem, ext: ext)
     }
 
-    /// What this kind of template renders to. A path always ends in `/`, so
-    /// the preview reads as a directory rather than a file at a glance.
     func preview(_ template: String) -> String {
         guard template.nilIfBlank != nil else { return "—" }
         switch self {
@@ -101,21 +75,13 @@ enum TemplateFieldKind: Equatable {
     }
 }
 
-/// A text field for a `Naming` template: a row of insertable tokens above it,
-/// each explained on hover, and a live example of what the template renders
-/// to below it. Used for the rename template and the derived path template
-/// alike — and for whatever template field comes next.
 struct TemplateField: View {
     var title: String
     @Binding var template: String
     var kind: TemplateFieldKind
     var tokens: [TemplateToken] = TemplateTokens.all
-    /// Where a folder path's picker button is rooted. `nil` leaves the button
-    /// off — there is no library to choose inside for a bare filename template.
     var library: Library? = nil
 
-    /// The field's own caret/selection, so a tapped token lands where the
-    /// user was typing instead of always at the end.
     @State private var selection: TextSelection?
 
     var body: some View {
@@ -162,10 +128,6 @@ struct TemplateField: View {
         }
     }
 
-    /// Inserts at the caret, or replaces the current selection, joined by the
-    /// kind's separator on whichever side already has adjoining text — so a
-    /// token dropped between two others doesn't run into them. Falls back to
-    /// appending at the end when the field has never been focused.
     private func insert(_ token: TemplateToken) {
         let sep = kind.separator
         guard let selection, case .selection(let range) = selection.indices,

@@ -20,14 +20,10 @@ struct RootView: View {
                 if model.libraries.isEmpty {
                     WelcomeView()
                 } else {
-                    // Queue mode is the same browser with review affordances
-                    // turned on, so view switching and drag-and-drop work there
-                    // exactly as they do everywhere else.
                     DocumentListView()
                 }
             }
             .acceptsScans()
-            // Over the centre pane, clear of the results bar at its foot.
             .noticeOverlay(model, bottomPadding: 40)
             .inspector(isPresented: $showInspector) {
                 InspectorView()
@@ -51,17 +47,12 @@ struct RootView: View {
         .onReceive(NotificationCenter.default.publisher(for: .showQuickSwitcher)) { _ in
             showQuickSwitcher = true
         }
-        // A continuous scan run cannot outlive the app being in front: the
-        // capture is handed to the key window's first responder. Pausing here
-        // keeps the count and makes coming back one click, rather than waking
-        // the device for a capture that would be refused.
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in
             model.appResignedActive()
         }
         .onOpenURL { url in
             model.handleURL(url)
         }
-        // Alerts are for things that went wrong; a routine result is a toast.
         .alert("Doctopus", isPresented: Binding(
             get: { model.errorMessage != nil },
             set: { if !$0 { model.errorMessage = nil } })
@@ -166,8 +157,6 @@ private struct SortMenu: View {
         Menu {
             Picker("Sort by", selection: $model.sort) {
                 ForEach(SortField.standard, id: \.self) { Text($0.label).tag($0) }
-                // The configured columns sort too, so the menu and the list
-                // header offer the same choices.
                 ForEach(model.fields) { field in
                     Text(field.name).tag(SortField.field(field.key))
                 }
@@ -197,16 +186,11 @@ private struct SearchSuggestions: View {
 
     var body: some View {
         if model.searchText.isEmpty {
-            // A multi-word value has to arrive quoted or the tokenizer splits
-            // it into a filter and a stray search term.
             ForEach(["is:review", "is:untagged", "is:duplicate", "is:stale-analysis", "ext:pdf",
                      "date:\"this month\"", "date:2026"], id: \.self) { token in
                 Text(token).searchCompletion(token)
             }
         } else {
-            // The token being completed is whatever follows the last space, so
-            // a trailing space starts a fresh one rather than re-offering the
-            // token before it — and `base` stays exactly the text kept intact.
             let text = model.searchText
             let start = text.lastIndex(of: " ").map { text.index(after: $0) } ?? text.startIndex
             let last = String(text[start...])

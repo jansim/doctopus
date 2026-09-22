@@ -11,7 +11,6 @@ enum ByteFormat {
 }
 
 extension DateFormatter {
-    /// Timestamp formatted safely for filenames (e.g. `2026-01-14 10.22.03`).
     static let filenameSafe: DateFormatter = {
         let f = DateFormatter()
         f.locale = Locale(identifier: "en_US_POSIX")
@@ -21,7 +20,6 @@ extension DateFormatter {
 }
 
 extension JSONEncoder {
-    /// Small helper for the bits of UI state that live in the settings table.
     static func string<T: Encodable>(_ value: T) -> String? {
         guard let data = try? JSONEncoder().encode(value) else { return nil }
         return String(data: data, encoding: .utf8)

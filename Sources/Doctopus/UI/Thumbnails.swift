@@ -2,20 +2,14 @@ import SwiftUI
 import AppKit
 import QuickLookThumbnailing
 
-/// Shared thumbnail cache.
-///
-/// `QLThumbnailGenerator` is not cheap, and a scrolling table or a gallery of a
-/// few hundred documents would otherwise ask for the same page repeatedly.
-/// Entries are keyed by path, size class and modification time, so an edited
-/// document re-renders while an untouched one never does.
 @MainActor
 final class ThumbnailCache {
     static let shared = ThumbnailCache()
 
     enum SizeClass: Int, Sendable {
-        case row      // list view
+        case row
         case gallery
-        case large    // inspector
+        case large
 
         var points: CGSize {
             switch self {
@@ -70,15 +64,12 @@ final class ThumbnailCache {
     private func store(_ key: Key, _ image: NSImage) {
         if cache[key] == nil { order.append(key) }
         cache[key] = image
-        // Plain FIFO eviction: recency tracking is not worth the bookkeeping
-        // for a cache this small.
         while order.count > limit {
             cache.removeValue(forKey: order.removeFirst())
         }
     }
 }
 
-/// Async thumbnail with a document-shaped placeholder, used at every size.
 struct Thumbnail: View {
     let url: URL
     let mtime: Date
