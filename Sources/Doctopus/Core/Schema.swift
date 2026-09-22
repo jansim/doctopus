@@ -38,7 +38,6 @@ enum Schema {
         try db.exec("ALTER TABLE \(table) ADD COLUMN \(column) \(declaration)")
     }
 
-    /// Rule metadata assignment and saved views.
     private static func v17(_ db: Database) throws {
         try addColumn(db, table: "rules", column: "set_correspondent", declaration: "TEXT")
         try addColumn(db, table: "rules", column: "set_doc_type", declaration: "TEXT")
@@ -59,28 +58,6 @@ enum Schema {
         """)
     }
 
-    /// Correspondents and document types become rows.
-    ///
-    /// They were free text in two `metadata` columns, which cost more than it
-    /// looks. Renaming "Stadtwerke München GmbH" to "Stadtwerke München" was a
-    /// string rewrite across every row that could not merge two spellings and
-    /// could not be undone. `value_icons` keyed an icon by a *string*, so
-    /// renaming the value orphaned its icon. A correspondent could not carry a
-    /// matching rule of its own ("anything mentioning DE12 3456 is from this
-    /// bank"), which is how Paperless gets most of its classification right
-    /// with no model at all. And the router's `{correspondent}` token expanded
-    /// whatever string the analyzer produced that day, so two spellings quietly
-    /// made two folders.
-    ///
-    /// Now there is one row per value, documents point at it, and the name
-    /// lives in exactly one place. Renaming is an `UPDATE` of that row; merging
-    /// is repointing the documents and deleting the loser. `value_icons` folds
-    /// into `entities.icon` for these two fields and stays as it was for the
-    /// rest.
-    ///
-    /// Storage paths deliberately do *not* become entities the way Paperless's
-    /// do: Doctopus's folders are real folders, derived from
-    /// `documents.directory`, which is both correct and cheaper.
     private static func v16(_ db: Database) throws {
         let already = try db.first(
             "SELECT COUNT(*) FROM pragma_table_info('metadata') WHERE name='correspondent_id'") { $0.int(0) } ?? 0
@@ -102,7 +79,6 @@ enum Schema {
         CREATE INDEX IF NOT EXISTS idx_entities_field ON entities(field_id, name);
         """)
 
-        // One row per spelling that is already in use.
         for column in ["correspondent", "doc_type"] {
             try db.exec("""
             INSERT OR IGNORE INTO entities(field_id, name)
@@ -126,8 +102,6 @@ enum Schema {
             """)
         }
 
-        // An icon belonged to a string; now it belongs to the row, where a
-        // rename can no longer orphan it.
         try db.exec("""
         UPDATE entities SET icon = (
             SELECT vi.icon FROM value_icons vi
@@ -138,8 +112,6 @@ enum Schema {
         );
         """)
 
-        // The old columns go, along with the indexes on them — keeping them
-        // would only let the two spellings drift apart again.
         try db.exec("""
         DROP INDEX IF EXISTS idx_metadata_corr;
         DROP INDEX IF EXISTS idx_metadata_type;
@@ -150,16 +122,6 @@ enum Schema {
         """)
     }
 
-    /// How a rule reads its pattern, said out loud.
-    ///
-    /// The router used to guess from the punctuation: anything containing
-    /// `^$*+?[]()|\` became a regular expression. So `Acme (UK) Ltd` was
-    /// silently compiled as a regex, and `Betrag: 100€ +` was a regex that
-    /// failed to compile and fell back to word matching without saying so.
-    ///
-    /// Existing rules are migrated by running that inference one last time,
-    /// which is the only place it belongs: whatever a rule meant yesterday is
-    /// what it keeps meaning, and from now on it says so in a column.
     private static func v15(_ db: Database) throws {
         let already = try db.first(
             "SELECT COUNT(*) FROM pragma_table_info('rules') WHERE name='match_mode'") { $0.int(0) } ?? 0
@@ -169,8 +131,6 @@ enum Schema {
         try addColumn(db, table: "rules", column: "match_insensitive",
                       declaration: "INTEGER NOT NULL DEFAULT 1")
 
-        // A pattern with regex punctuation in it was being read as a regex, so
-        // that is what it stays.
         let existing = try db.map("SELECT id, pattern FROM rules") { ($0.int(0), $0.string(1)) }
         for (id, pattern) in existing {
             let mode = MatchMode.inferred(from: pattern)
@@ -178,37 +138,12 @@ enum Schema {
         }
     }
 
-    /// Nested tags.
-    ///
-    /// One of the most-requested things in Paperless's history, and cheap here:
-    /// a parent, a depth cap, and every ancestor attached automatically when a
-    /// child is assigned — so filtering by "Finances" finds the invoices filed
-    /// under "Finances / Invoices" without anyone having to tag both.
-    ///
-    /// It composes with alias mirroring for free: a mirrored parent gives you a
-    /// `Finances/` folder with `Invoices/` and `Statements/` inside it.
-    ///
-    /// A deleted parent leaves its children as roots rather than taking them
-    /// with it — deleting "Finances" should not silently delete every invoice's
-    /// tag as well.
     private static func v14(_ db: Database) throws {
         try addColumn(db, table: "tags", column: "parent_id",
                       declaration: "INTEGER REFERENCES tags(id) ON DELETE SET NULL")
         try db.exec("CREATE INDEX IF NOT EXISTS idx_tags_parent ON tags(parent_id)")
     }
 
-    /// Days, and the dates that were not chosen.
-    ///
-    /// `doc_date` was a timestamp holding whatever instant the extractor
-    /// happened to produce, so the same document read as two different days in
-    /// two timezones. It is normalised here to the UTC start of its day, and
-    /// every reading of it goes through `DayDate` from now on — a document is
-    /// issued on a day, not at an instant.
-    ///
-    /// `date_candidates` keeps the dates that were found and not picked.
-    /// Extraction gets `03/04/2026` wrong often enough that offering the
-    /// runner-up as a chip in the review is the cheapest accuracy win there is,
-    /// and throwing the alternatives away was the only reason it could not.
     private static func v13(_ db: Database) throws {
         try db.exec("""
         CREATE TABLE IF NOT EXISTS date_candidates (
@@ -223,26 +158,12 @@ enum Schema {
         CREATE INDEX IF NOT EXISTS idx_date_candidates_doc ON date_candidates(doc_id, rank);
         """)
 
-        // Round every stored date down to the start of its UTC day. SQLite's
-        // own arithmetic does this without needing to load the library.
         try db.exec("""
         UPDATE metadata SET doc_date = CAST(FLOOR(doc_date / 86400.0) AS INTEGER) * 86400
         WHERE doc_date IS NOT NULL;
         """)
     }
 
-    /// Typed fields.
-    ///
-    /// Every field value was `TEXT`, including amounts and dates. So amounts
-    /// sorted lexicographically ("€90" after "€1,200"), a date field could not
-    /// be compared at all, and a "paid?" field was a string that said "yes" or
-    /// "Yes" depending on who typed it.
-    ///
-    /// The fix is Paperless's, and it is unglamorous: a declared type on the
-    /// field, and a typed column per shape alongside the text. The text stays —
-    /// it is what gets displayed, and for `monetary` it is the only place the
-    /// currency lives — while the typed column is what sorting and comparison
-    /// actually use.
     private static func v12(_ db: Database) throws {
         try addColumn(db, table: "fields", column: "data_type",
                       declaration: "TEXT NOT NULL DEFAULT 'string'")
@@ -255,22 +176,14 @@ enum Schema {
         CREATE INDEX IF NOT EXISTS idx_field_values_date ON field_values(field_id, value_date);
         """)
 
-        // The built-in amount is the same problem in a dedicated column: the
-        // string keeps the currency, the number is what sorts and sums.
         try addColumn(db, table: "metadata", column: "amount_value", declaration: "REAL")
         try db.exec("CREATE INDEX IF NOT EXISTS idx_metadata_amount ON metadata(amount_value)")
 
-        // The built-in fields declare what they have always held.
         try db.exec("""
         UPDATE fields SET data_type='monetary' WHERE builtin_column='amount';
         """)
     }
 
-    /// Notes: the escape hatch for everything the schema does not model.
-    ///
-    /// "Cancelled by phone on the 4th", "the original is in the red folder" —
-    /// there was nowhere to put any of it. Indexed into `doc_fts` alongside the
-    /// document's own text, so a note is findable by searching for it.
     private static func v11(_ db: Database) throws {
         try db.exec("""
         CREATE TABLE IF NOT EXISTS notes (
@@ -284,32 +197,12 @@ enum Schema {
         """)
     }
 
-    /// Soft delete.
-    ///
-    /// Move to Trash did the file half well — it used the real Trash and never
-    /// unlinked anything — and then hard-deleted the row. So a file rescued
-    /// from the Trash a week later came back as a brand-new document with no
-    /// title, no tags and no history. `deleted_at` keeps the row instead, out
-    /// of every ordinary query but ready to be revived, and `deleted_path`
-    /// records where in the Trash the file went so Restore can put it back.
     private static func v10(_ db: Database) throws {
         try addColumn(db, table: "documents", column: "deleted_at", declaration: "REAL")
         try addColumn(db, table: "documents", column: "deleted_path", declaration: "TEXT")
         try db.exec("CREATE INDEX IF NOT EXISTS idx_documents_deleted ON documents(deleted_at)")
     }
 
-    /// History, split from the review queue.
-    ///
-    /// `processing` was doing two jobs and doing the second one badly: it was
-    /// the recency view the review reads, *and* the only record of what
-    /// happened to a document — while being trimmed to 500 rows on every
-    /// insert. So the 501st import silently erased the first, and there was no
-    /// answer to "why is this file here", let alone an undo.
-    ///
-    /// `events` is that record: append-only, never trimmed, ~100 bytes a row.
-    /// `processing` keeps only what is actually its own — which event is on
-    /// show and whether it has been signed off — and reads the rest back
-    /// through `event_id`.
     private static func v9(_ db: Database) throws {
         let alreadyThere = try db.first(
             "SELECT COUNT(*) FROM pragma_table_info('processing') WHERE name='event_id'") { $0.int(0) } ?? 0
@@ -331,8 +224,6 @@ enum Schema {
         CREATE INDEX IF NOT EXISTS idx_events_at  ON events(at DESC);
         """)
 
-        // The existing queue is the history we have; carry it over keeping the
-        // row ids, so the rebuilt `processing` can point straight at it.
         let hadQueue = try db.first(
             "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='processing'") { $0.int(0) } ?? 0
         if hadQueue > 0 {
@@ -365,18 +256,6 @@ enum Schema {
         """)
     }
 
-    /// The search index, rebuilt as a real one.
-    ///
-    /// `ocr_content` had three problems: its `doc_id` was `UNINDEXED`, so
-    /// fetching one document's text scanned the whole corpus; it held only the
-    /// OCR text, leaving title, correspondent, tags and filename to an
-    /// unindexable `LIKE '%…%'`; and its rows had no key a delete could find
-    /// cheaply. `doc_fts` fixes all three by keying on `rowid = documents.id`
-    /// and giving every searchable surface its own column, which also makes
-    /// `bm25()` weights — a title hit outranking a body hit — possible.
-    ///
-    /// `notes` is written blank for now; the notes themselves are a separate
-    /// change, and adding the column here saves rebuilding the index twice.
     private static func v8(_ db: Database) throws {
         let alreadyThere = try db.first(
             "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='doc_fts'") { $0.int(0) } ?? 0
@@ -410,19 +289,11 @@ enum Schema {
         if hasOld > 0 { try db.exec("DROP TABLE ocr_content") }
     }
 
-    /// The hash of the bytes as they arrived, before any optimization rewrote
-    /// them. `documents.hash` tracks what is on disk now, so re-importing the
-    /// same original matches nothing once Doctopus has re-encoded it; the
-    /// pre-optimization hash is what a duplicate check has to compare against.
     private static func v7(_ db: Database) throws {
         try addColumn(db, table: "documents", column: "original_hash", declaration: "TEXT")
         try db.exec("CREATE INDEX IF NOT EXISTS idx_documents_original_hash ON documents(original_hash)")
     }
 
-    /// Folders the router thought a new document could go in, kept whether or
-    /// not it moved it. They are what the review offers as a choice — and all
-    /// there is to go on when two were equally good and it moved nothing.
-    /// `path` is relative to the library root, like every other path.
     private static func v6(_ db: Database) throws {
         try db.exec("""
         CREATE TABLE IF NOT EXISTS path_suggestions (
@@ -438,10 +309,6 @@ enum Schema {
         """)
     }
 
-    /// Tags the model proposed but nobody has accepted yet. Kept apart from
-    /// `document_tags` so a suggestion never counts toward a tag's sidebar
-    /// total, or shows up anywhere a real assignment would, until someone
-    /// accepts it.
     private static func v5(_ db: Database) throws {
         try db.exec("""
         CREATE TABLE IF NOT EXISTS tag_suggestions (
@@ -453,8 +320,6 @@ enum Schema {
         """)
     }
 
-    /// The colour label macOS gives each Finder tag, so the sidebar can draw a
-    /// tag in its own colour without re-reading every file at launch.
     private static func v4(_ db: Database) throws {
         let present = try db.first(
             "SELECT COUNT(*) FROM pragma_table_info('finder_tags') WHERE name='label'") { $0.int(0) } ?? 0
@@ -462,10 +327,6 @@ enum Schema {
         try db.exec("ALTER TABLE finder_tags ADD COLUMN label INTEGER NOT NULL DEFAULT 0")
     }
 
-    /// Per-value icons, and the mirror of the Finder's own tags. Finder tags
-    /// live on the file itself, in extended attributes; this table is only an
-    /// index of them so they can be counted and filtered without touching the
-    /// disk for every query.
     private static func v3(_ db: Database) throws {
         try db.exec("""
         CREATE TABLE IF NOT EXISTS value_icons (
@@ -483,9 +344,6 @@ enum Schema {
         """)
     }
 
-    /// Configurable fields. Built-ins keep their dedicated `metadata` column so
-    /// the list query stays one statement; user-defined fields live in
-    /// `field_values`. The UI treats both through a single `Field` model.
     private static func v2(_ db: Database) throws {
         try db.exec("""
         CREATE TABLE IF NOT EXISTS fields (
@@ -508,8 +366,6 @@ enum Schema {
         CREATE INDEX IF NOT EXISTS idx_field_values ON field_values(field_id, value);
         """)
 
-        // Correspondent ships demoted: still extracted and shown in the
-        // inspector, but no longer taking up a sidebar section and a column.
         let seed: [(String, String, String, String, Int, Int, Int)] = [
             ("doc_type",      "Document Type", "doc_type",      "doc.on.doc",        1, 1, 10),
             ("correspondent", "Correspondent", "correspondent", "building.2",        0, 0, 20),

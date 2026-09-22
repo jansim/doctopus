@@ -3,38 +3,20 @@ import CoreGraphics
 import ImageIO
 import UniformTypeIdentifiers
 
-/// The first page of a document, rendered small enough to travel inside a chat
-/// completion request.
-///
-/// A vision model is shown the page rather than only the text that came off it.
-/// Everything OCR drops on the way — the letterhead, a logo, a stamp, the shape
-/// of a table, a handwritten amount — is back on the table, and a scan whose
-/// text layer is noise still classifies. Only the first page goes: it carries
-/// the sender, the date and the kind of document, and every further page costs
-/// tokens in proportion to its area.
 enum PageImage {
 
-    /// A rendered page, ready to be attached to a request.
     struct Rendered: Sendable, Equatable {
         var jpeg: Data
         var width: Int
         var height: Int
-        /// Pages in the source document, counted while it was open.
         var pageCount: Int?
 
-        /// What an OpenAI-compatible endpoint expects inside an `image_url`
-        /// part. Inline rather than a link: there is no server to host the page
-        /// on, and a local endpoint could not fetch one anyway.
         var dataURL: String { "data:image/jpeg;base64," + jpeg.base64EncodedString() }
         var kilobytes: Int { (jpeg.count + 512) / 1024 }
     }
 
-    /// High enough that small print survives, low enough that a page stays a
-    /// couple of hundred kilobytes — most of which becomes tokens.
     static let jpegQuality: CGFloat = 0.72
 
-    /// A page smaller than the target is enlarged, but only so far: past this
-    /// there is no more detail to recover, only bytes.
     private static let maxUpscale: CGFloat = 3
 
     static func firstPage(of url: URL, maxDimension: Int) -> Rendered? {
@@ -48,8 +30,6 @@ enum PageImage {
             return nil
         }
     }
-
-    // MARK: - PDF
 
     private static func pdfFirstPage(_ url: URL, maxDimension: Int) -> Rendered? {
         guard let doc = CGPDFDocument(url as CFURL), doc.numberOfPages > 0,
@@ -68,17 +48,12 @@ enum PageImage {
         let w = Int((shownWidth * scale).rounded()), h = Int((shownHeight * scale).rounded())
         guard w > 0, h > 0 else { return nil }
 
-        // Colour, unlike the grayscale bitmaps OCR gets: a logo, a coloured
-        // stamp or a highlighted line is exactly the sort of thing a vision
-        // model reads a page from.
         guard let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8,
                                   bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
                                   bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else { return nil }
         ctx.setFillColor(gray: 1, alpha: 1)
         ctx.fill(CGRect(x: 0, y: 0, width: w, height: h))
         ctx.interpolationQuality = .high
-        // Core Graphics works out the fit, the flip and the page's own rotation
-        // in one transform, which hand-rolled scaling does not.
         ctx.concatenate(page.getDrawingTransform(.cropBox,
                                                  rect: CGRect(x: 0, y: 0, width: w, height: h),
                                                  rotate: 0, preserveAspectRatio: true))
@@ -87,8 +62,6 @@ enum PageImage {
         guard let image = ctx.makeImage(), let data = encode(image) else { return nil }
         return Rendered(jpeg: data, width: w, height: h, pageCount: doc.numberOfPages)
     }
-
-    // MARK: - Images
 
     private static func imageFile(_ url: URL, maxDimension: Int) -> Rendered? {
         guard let src = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
@@ -105,8 +78,6 @@ enum PageImage {
               let data = encode(image) else { return nil }
         return Rendered(jpeg: data, width: image.width, height: image.height, pageCount: 1)
     }
-
-    // MARK: - JPEG
 
     private static func encode(_ image: CGImage) -> Data? {
         let data = NSMutableData()

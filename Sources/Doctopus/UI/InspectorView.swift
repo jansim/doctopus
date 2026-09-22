@@ -54,9 +54,6 @@ private struct DetailInspector: View {
         .id(row.id)
     }
 
-    /// The model's own output. Documents indexed before a model was configured
-    /// land here with nothing to show, which is exactly when someone wants to
-    /// run it by hand — and the only time the button earns its line.
     @ViewBuilder
     private var summarySection: some View {
         let analyzing = model.progress.phase == "Analyzing"
@@ -83,8 +80,6 @@ private struct DetailInspector: View {
             }
         }
     }
-
-    // MARK: - Header
 
     private var header: some View {
         HStack(alignment: .top, spacing: 10) {
@@ -114,16 +109,12 @@ private struct DetailInspector: View {
         }
     }
 
-    // MARK: - Metadata
-
     private var metadataSection: some View {
         Section2("Metadata") {
             InfoGrid {
                 EditableRow("Title", value: row.title ?? "") {
                     model.editMetadata(row.id, column: "title", value: $0)
                 }
-                // Every configured field, in the order Settings puts them,
-                // edited the way its type deserves.
                 ForEach(model.fields) { field in
                     FieldValueRow(field: field, value: row.values[field.key] ?? "",
                                   document: row.id)
@@ -146,8 +137,6 @@ private struct DetailInspector: View {
                     }
                 }
                 if let source = detail.metadataSource {
-                    // Rarely what anyone opened the inspector for, so it
-                    // waits under the pointer.
                     let hint = detail.metadataConfidence
                         .map { "\(ConfidenceBadge.percent($0)) confident" }
                         ?? "How this document's metadata was worked out"
@@ -174,8 +163,6 @@ private struct DetailInspector: View {
         }
     }
 
-    // MARK: - Tags
-
     private var tagsSection: some View {
         Section2("Tags") {
             let visible = Tag.visible(in: detail.tags)
@@ -201,9 +188,6 @@ private struct DetailInspector: View {
         }
     }
 
-    /// Tags the model proposed. These are not real tags yet — they carry no
-    /// count and never appear in the sidebar — until someone clicks them to
-    /// accept, or dismisses them with the ×.
     private var tagSuggestionsSection: some View {
         Section2("Suggested Tags") {
             FlowLayout(spacing: 5) {
@@ -217,8 +201,6 @@ private struct DetailInspector: View {
         }
     }
 
-    /// A suggestion already in use elsewhere borrows that tag's colour, so it
-    /// previews exactly how it will look once accepted.
     private func suggestionColor(_ name: String) -> Color {
         if let existing = model.tags.first(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame }) {
             return TagColor.color(existing.color)
@@ -226,8 +208,6 @@ private struct DetailInspector: View {
         return .secondary
     }
 
-    /// The Finder's tags live on the file and are shared with every other app,
-    /// so they get their own section rather than being mixed in above.
     private var finderTagsSection: some View {
         Section2("Finder Tags") {
             if row.finderTags.isEmpty {
@@ -246,8 +226,6 @@ private struct DetailInspector: View {
                             .buttonStyle(.plain)
                         }
                         .padding(.horizontal, 7).padding(.vertical, 3)
-                        // The dot carries the colour, so the token stays
-                        // neutral — the way a Finder tag token does.
                         .background(.quaternary, in: Capsule())
                     }
                 }
@@ -275,12 +253,9 @@ private struct DetailInspector: View {
         tagInput = ""
     }
 
-    // MARK: - File
-
     private var fileSection: some View {
         Section2("File") {
             InfoGrid {
-                // Only worth naming when there is more than one to be in.
                 if model.libraries.count > 1,
                    let library = model.library(row.library) {
                     InfoRow("Library", library.displayName)
@@ -322,8 +297,6 @@ private struct DetailInspector: View {
                     InfoRow("Text") {
                         HStack(spacing: 5) {
                             Text("\(words) words · \(ocrSourceLabel(src))")
-                            // A low number here is a blurry scan, not a
-                            // wrong answer.
                             if let c = detail.ocrConfidence, src != "pdf-layer" {
                                 ConfidenceBadge(value: c, muted: true)
                             }
@@ -401,11 +374,6 @@ private struct DetailInspector: View {
         }
     }
 
-    // MARK: - Notes
-
-    /// Everything the schema has nowhere to put: "cancelled by phone on the
-    /// 4th", "the original is in the red folder". Indexed with the document's
-    /// own text, so a note can be searched for like anything else.
     private var notesSection: some View {
         Section2("Notes") {
             ForEach(detail.notes) { note in
@@ -433,12 +401,6 @@ private struct DetailInspector: View {
         model.addNote(body, to: row.id)
     }
 
-    // MARK: - History
-
-    /// Everything that has happened to this document, newest first. The queue
-    /// only keeps the most recent few hundred events library-wide; this comes
-    /// from `events`, which is never trimmed, so the answer to "why is this
-    /// file here" survives however many documents arrive after it.
     private var historySection: some View {
         Section2("History") {
             ForEach(detail.history.prefix(showAllHistory ? detail.history.count : 6)) { event in
@@ -473,8 +435,6 @@ private struct DetailInspector: View {
         }
     }
 
-    // MARK: - Raw text
-
     private var textSection: some View {
         Section2("Extracted Text") {
             if detail.text.isEmpty {
@@ -500,8 +460,6 @@ private struct DetailInspector: View {
     }
 }
 
-/// One note, editable in place. Clearing the text deletes it, which is the
-/// least surprising way to get rid of something that is only a sentence.
 private struct NoteRow: View {
     @Environment(AppModel.self) private var model
     let note: Note
@@ -580,8 +538,6 @@ private struct MultiSelectionInspector: View {
     }
 }
 
-// MARK: - Small pieces
-
 struct Section2<Content: View>: View {
     let title: String
     @ViewBuilder let content: Content
@@ -616,8 +572,6 @@ struct Badge: View {
 
 struct ConfidenceBadge: View {
     let value: Double
-    /// A number that is context rather than a verdict, shown in the row's
-    /// own grey so it does not read as a warning.
     var muted: Bool = false
 
     static func percent(_ value: Double) -> String {
@@ -638,9 +592,6 @@ struct ConfidenceBadge: View {
     }
 }
 
-/// Finder-style property list: right-aligned labels in their own gutter, all
-/// values starting at one shared edge. `LabeledContent` pushed the two apart to
-/// opposite sides of the inspector, which made a row hard to read as a pair.
 struct InfoGrid<Content: View>: View {
     @ViewBuilder let content: Content
 
@@ -683,9 +634,6 @@ extension InfoRow where Value == Text {
     }
 }
 
-/// One field, edited as what it holds. A Yes / No field is a checkbox, a date
-/// is a date picker, one-of is a menu — everything else is a text field, which
-/// is what every field used to be.
 private struct FieldValueRow: View {
     @Environment(AppModel.self) private var model
     let field: Field
@@ -762,8 +710,6 @@ private struct FieldValueRow: View {
     }
 }
 
-/// Click-to-edit value that only writes back on commit. Empty reads as an
-/// em dash so a blank row still looks like a row.
 struct EditableRow: View {
     let label: String
     let value: String
@@ -797,7 +743,6 @@ extension View {
     }
 }
 
-/// Minimal wrapping layout for tag chips.
 struct FlowLayout: Layout {
     var spacing: CGFloat = 6
 

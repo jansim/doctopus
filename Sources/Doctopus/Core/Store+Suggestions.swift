@@ -1,16 +1,7 @@
 import Foundation
 
-/// What the pipeline proposed and nobody has decided on yet: tags the model
-/// put forward, and the folders the router considered. Both are kept apart from
-/// the real assignments so a suggestion never counts as a fact.
 extension Store {
 
-    // MARK: - Tag suggestions
-
-    /// Stages a tag the model proposed. When `autoAcceptMatching` is on and the
-    /// name exactly matches a tag that already exists, it is assigned directly
-    /// instead — there is nothing to review when the suggestion is one the
-    /// library already uses.
     func suggestTag(_ name: String, for docID: Int64, autoAcceptMatching: Bool) throws {
         let clean = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !clean.isEmpty else { return }
@@ -27,8 +18,6 @@ extension Store {
                    [.int(docID)]) { TagSuggestion(name: $0.string(0)) }
     }
 
-    /// Turns a proposed tag into a real assignment, creating the tag itself
-    /// if this is the first time anyone has accepted it.
     func acceptTagSuggestion(_ name: String, for docID: Int64) throws {
         let id = try tagID(named: name)
         try assign(tag: id, to: docID)
@@ -43,10 +32,6 @@ extension Store {
         try db.first("SELECT id FROM tags WHERE name=? COLLATE NOCASE", [.text(name)]) { $0.int(0) }
     }
 
-    // MARK: - Path suggestions
-
-    /// Replaces what the router suggested for a document. `candidates` are
-    /// best first, with absolute destinations.
     func setPathSuggestions(_ candidates: [Router.Candidate], for docID: Int64) throws {
         try db.transaction {
             try db.run("DELETE FROM path_suggestions WHERE doc_id=?", [.int(docID)])

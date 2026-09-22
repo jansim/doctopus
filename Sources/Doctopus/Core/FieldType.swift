@@ -1,11 +1,5 @@
 import Foundation
 
-/// What a field holds. The value is always kept as text — that is what gets
-/// shown, and for `monetary` it is the only place the currency lives — but a
-/// declared type gives it a second, typed column that sorting and comparison
-/// can actually use. Without one, "€90" sorts after "€1,200", a date cannot be
-/// put in order, and a "paid?" field is a string that says "yes" or "Yes"
-/// depending on who filled it in.
 enum FieldType: String, CaseIterable, Sendable, Codable {
     case string, longtext, url, date, boolean, integer, float, monetary, select
 
@@ -36,7 +30,6 @@ enum FieldType: String, CaseIterable, Sendable, Codable {
         }
     }
 
-    /// Which column of `field_values` carries the comparable form.
     var storageColumn: String? {
         switch self {
         case .integer, .float, .monetary: return "value_num"
@@ -46,14 +39,9 @@ enum FieldType: String, CaseIterable, Sendable, Codable {
         }
     }
 
-    /// True when a value of this type sorts by its number or date rather than
-    /// by how it is spelled.
     var sortsTyped: Bool { storageColumn != nil }
 }
 
-/// One field value, in both the form a person reads and the form the database
-/// can order. `Parsed.text` is nil only when the input was blank, which means
-/// "clear this value".
 struct FieldValue: Sendable, Equatable {
     var text: String?
     var number: Double?
@@ -79,8 +67,6 @@ extension FieldType {
 
         case .boolean:
             guard let flag = FieldType.boolean(from: clean) else { return FieldValue(text: clean) }
-            // Stored in one spelling, so "yes", "Yes" and "true" stop being
-            // three different values of the same field.
             return FieldValue(text: flag ? "Yes" : "No", boolean: flag)
 
         case .integer:
@@ -94,8 +80,6 @@ extension FieldType {
 
         case .monetary:
             guard let n = FieldType.number(from: clean) else { return FieldValue(text: clean) }
-            // The text keeps the currency exactly as it was written; the number
-            // is what sorts and sums.
             return FieldValue(text: clean, number: n)
 
         case .date:
@@ -112,10 +96,6 @@ extension FieldType {
         }
     }
 
-    /// Pulls a number out of text that may carry a currency symbol, a code, and
-    /// either convention for grouping and decimals. "€1.234,56" and "$1,234.56"
-    /// both come back as 1234.56 — which is the whole point of storing the
-    /// number separately from what was typed.
     static func number(from raw: String) -> Double? {
         var digits = raw.filter { $0.isNumber || $0 == "." || $0 == "," || $0 == "-" }
         guard digits.contains(where: \.isNumber) else { return nil }
@@ -140,15 +120,12 @@ extension FieldType {
             digits = digits.replacingOccurrences(of: ".", with: "")
                 .replacingOccurrences(of: ",", with: "")
         }
-        // A stray minus anywhere but the front is punctuation, not a sign.
         let negative = digits.hasPrefix("-")
         digits = digits.replacingOccurrences(of: "-", with: "")
         guard let value = Double(digits) else { return nil }
         return negative ? -value : value
     }
 
-    /// A day, from an ISO date or anything `NSDataDetector` recognises. Times
-    /// are dropped: a field holding a date holds a day.
     static func day(from raw: String) -> Date? {
         if let iso = dayFormatter.date(from: raw) { return iso }
         // A field's date may well be in the future — a due date usually is —
@@ -167,14 +144,8 @@ extension FieldType {
     }()
 }
 
-/// Days, handled as days.
-///
-/// A document is issued on a day, not at an instant, and half the off-by-one
-/// bugs in an archive come from round-tripping that through a timestamp in a
-/// timezone nobody recorded. `doc_date` is stored as the UTC start of its day
-/// and every reading of it — formatting, the year a routing template expands
-/// to, sorting — goes through here, so the same library reads the same on two
-/// Macs in two timezones.
+/// `doc_date` is stored as the UTC start of its day, and every reading of it
+/// goes through here, so the same library reads the same in every timezone.
 enum DayDate {
     static let calendar: Calendar = {
         var c = Calendar(identifier: .gregorian)
@@ -190,7 +161,6 @@ enum DayDate {
         calendar.dateComponents([.year, .month, .day], from: date)
     }
 
-    /// `2026-03-04`. The one spelling everything stores and compares.
     static func text(_ date: Date) -> String {
         FieldType.dayFormatter.string(from: date)
     }
@@ -199,8 +169,6 @@ enum DayDate {
         FieldType.dayFormatter.date(from: text)
     }
 
-    /// How a day is shown to a person: their format, but the stored day, not
-    /// whatever day that instant falls on where they are.
     static let display: DateFormatter = {
         let f = DateFormatter()
         f.timeZone = TimeZone(secondsFromGMT: 0)
@@ -212,12 +180,6 @@ enum DayDate {
     static func display(_ date: Date) -> String { display.string(from: date) }
 }
 
-/// How to read `03/04/2026`.
-///
-/// `NSDataDetector` reads it by the *system* locale, which is recorded nowhere
-/// and differs between machines — so the same library gives two answers on two
-/// Macs. This is the setting that stops that, defaulting from the library's own
-/// dominant language rather than from the Mac.
 enum DateOrder: String, CaseIterable, Sendable, Codable {
     case automatic, dmy, mdy, ymd
 
@@ -230,9 +192,6 @@ enum DateOrder: String, CaseIterable, Sendable, Codable {
         }
     }
 
-    /// Languages that write the month first, and those that write the year
-    /// first. Everywhere else puts the day first, which is why it is the
-    /// fallback rather than a listed case.
     private static let monthFirst: Set<String> = ["en-us", "en_us"]
     private static let yearFirst: Set<String> = ["ja", "zh", "ko", "hu", "lt"]
 
@@ -241,21 +200,14 @@ enum DateOrder: String, CaseIterable, Sendable, Codable {
         guard let code = language?.lowercased().nilIfBlank else { return .dmy }
         if DateOrder.yearFirst.contains(String(code.prefix(2))) { return .ymd }
         if DateOrder.monthFirst.contains(code) { return .mdy }
-        // Bare "en" is ambiguous by design — most English-speaking countries
-        // write the day first, and the one that does not is spelled "en-US".
         return .dmy
     }
 }
 
-/// One date found in a document, and how much to believe it.
 struct DateCandidate: Identifiable, Hashable, Sendable {
-    /// The UTC start of the day.
     var date: Date
-    /// Where it was found: `ocr`, `pdf`, `exif`, `filename`.
     var source: String
-    /// True when an explicit label ("Rechnungsdatum:", "Issued") sat next to it.
     var labelled: Bool
-    /// The label itself, when there was one.
     var cue: String?
 
     var id: String { "\(DayDate.text(date))#\(source)" }

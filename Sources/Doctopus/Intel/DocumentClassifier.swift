@@ -1,11 +1,5 @@
 import Foundation
 
-/// Fast on-device Multinomial Naive Bayes classifier trained on the library's
-/// approved documents.
-///
-/// Runs entirely in memory, needs no external model or network, and predicts
-/// correspondent, document type, and tags with a confidence threshold below
-/// which it abstains.
 actor DocumentClassifier {
     struct Prediction: Sendable {
         var label: String
@@ -42,11 +36,8 @@ actor DocumentClassifier {
         var tags: [String]
     }
 
-    /// Whether `fingerprint` differs from the one the models were trained on,
-    /// so a caller can skip assembling a corpus that would change nothing.
     func needsTraining(fingerprint: String) -> Bool { fingerprint != lastFingerprint }
 
-    /// Retrains models on approved library documents if the training set has changed.
     func trainIfNeeded(docs: [TrainingDoc], fingerprint: String) {
         guard needsTraining(fingerprint: fingerprint) else { return }
         train(docs: docs)
@@ -61,9 +52,6 @@ actor DocumentClassifier {
             return
         }
 
-        // Tokenizing is by far the expensive part and all three models below
-        // want the same tokens, so each document is tokenized once here rather
-        // than twice plus once more for every tag in the library.
         let corpus: [(doc: TrainingDoc, tokens: [String])] = docs.compactMap {
             let tokens = tokenize($0.text)
             return tokens.isEmpty ? nil : (doc: $0, tokens: tokens)
@@ -87,7 +75,6 @@ actor DocumentClassifier {
         (model?.classes.count ?? 0) >= 2 ? model : nil
     }
 
-    /// Counts one model's classes over the corpus.
     private static func fit(_ corpus: [(doc: TrainingDoc, tokens: [String])],
                             label: (TrainingDoc) -> String?) -> Model? {
         var model = Model()
@@ -117,7 +104,6 @@ actor DocumentClassifier {
         docTypeModel.flatMap { predict(tokenize(text), $0) }
     }
 
-    /// Every tag whose own model says yes.
     func predictTags(text: String) -> [Prediction] {
         guard let tagModels else { return [] }
         let tokens = tokenize(text)
@@ -129,9 +115,6 @@ actor DocumentClassifier {
             .sorted { $0.confidence > $1.confidence }
     }
 
-    // MARK: - Probability scoring
-
-    /// The likeliest class, when it clears the confidence threshold.
     private func predict(_ tokens: [String], _ model: Model) -> Prediction? {
         guard !tokens.isEmpty, model.totalDocuments > 0 else { return nil }
         let totalDocs = Double(model.totalDocuments)
