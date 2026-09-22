@@ -8,12 +8,13 @@ struct RulesSettings: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if model.libraries.count > 1 {
-                Form { LibraryPicker() }
-                    .formStyle(.grouped)
-                    .frame(height: 64)
-                Divider()
+            HStack(spacing: 12) {
+                LibraryPicker().fixedSize()
+                Spacer()
+                ScopeBadge(scope: .library)
             }
+            .padding(.horizontal, 12).padding(.vertical, 8)
+            Divider()
 
             Table(rules, selection: $selected) {
                 TableColumn("Rule") { r in
