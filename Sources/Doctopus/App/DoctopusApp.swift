@@ -104,6 +104,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
         SpacePreview.install { [weak self] in self?.model?.quickLook() }
+        OptionReveal.install { [weak self] held in self?.model?.revealingFolders = held }
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {

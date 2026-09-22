@@ -8,6 +8,31 @@ extension AppModel {
         return "\(label) → \(value)"
     }
 
+    /// Fills `revealedFolders` for the current selection, or empties it once ⌥
+    /// is let go. Aliases count: a document filed in a second folder is in
+    /// that folder too, and that is the one a glance at the list cannot show.
+    func refreshRevealedFolders() {
+        revealTask?.cancel()
+        guard revealingFolders, !selectedRows.isEmpty else {
+            if !revealedFolders.isEmpty { revealedFolders = [] }
+            return
+        }
+        let groups = grouped(selectedRows)
+        revealTask = Task { [weak self] in
+            var folders: Set<String> = []
+            for (lib, rows) in groups {
+                for row in rows {
+                    folders.insert(row.directory)
+                    for alias in ((try? await lib.store.aliases(for: row.doc)) ?? []) {
+                        folders.insert((alias.path as NSString).deletingLastPathComponent)
+                    }
+                }
+            }
+            guard !Task.isCancelled, let self, self.revealingFolders else { return }
+            if folders != self.revealedFolders { self.revealedFolders = folders }
+        }
+    }
+
     func quickLook(startingAt row: DocumentRow? = nil) {
         let rows = selectedRows.isEmpty ? documents : selectedRows
         guard !rows.isEmpty else { return }

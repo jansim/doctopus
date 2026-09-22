@@ -63,3 +63,7 @@ optimization savings, alias mappings, raw text, all metadata.
 Full keyboard navigation with native Quick Look — Space on any file gives an
 instant preview with text selection and pagination. Double-click, or ⌘↓, hands
 the document to whichever app owns it, the way Finder does.
+
+Holding ⌥ on its own lights up, in the sidebar, every folder the selected
+documents are in — where each master file lives and every folder it is filed
+in as an alias. A collapsed folder lights up for whatever it is hiding.
