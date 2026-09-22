@@ -2,10 +2,6 @@ import Foundation
 
 extension Store {
 
-    // MARK: - Field registry
-
-    /// Fields are read on every list query, so keep them in memory. Every
-    /// mutation below drops the cache.
     func cachedFields() throws -> [Field] {
         if let cached = fieldCache { return cached }
         let loaded = try fields()
@@ -33,8 +29,6 @@ extension Store {
 
     func updateField(_ f: Field) throws {
         defer { invalidateFields() }
-        // A built-in field's type is decided by the column behind it and is not
-        // the user's to change; everything else about it is.
         let existing = try db.first("SELECT builtin_column, data_type FROM fields WHERE id=?",
                                     [.int(f.fieldID)], { ($0.stringOrNil(0), $0.string(1)) })
         let type = (existing?.0 != nil) ? (existing?.1 ?? f.type.rawValue) : f.type.rawValue
@@ -46,9 +40,6 @@ extension Store {
             """, [.text(f.name), .text(f.icon), .bool(f.showInSidebar), .bool(f.showInList),
                   .int(f.position), .bool(f.enabled), .text(type), .text(f.extraData),
                   .int(f.fieldID)])
-        // Changing the type re-reads every value it already holds, so a field
-        // switched to Amount starts sorting numerically straight away rather
-        // than only for whatever is typed next.
         if retype { try reparseValues(fieldID: f.fieldID) }
     }
 
@@ -66,8 +57,6 @@ extension Store {
             """, [.text(key), .text(clean), .text(icon), .int(next), .text(type.rawValue)])
     }
 
-    /// Re-reads every stored value of a field through its (new) type. The text
-    /// is left exactly as it was typed — only the comparable columns change.
     private func reparseValues(fieldID: Int64) throws {
         guard let raw = try db.first("SELECT data_type FROM fields WHERE id=?", [.int(fieldID)],
                                      { $0.string(0) }),
@@ -115,8 +104,6 @@ extension Store {
         return String(mapped).split(separator: "_").joined(separator: "_")
     }
 
-    // MARK: - Values
-
     func setFieldValue(docID: Int64, field: Field, value: String?) throws {
         let parsed = field.type.parse(value)
         if let column = field.builtinColumn {
@@ -128,8 +115,6 @@ extension Store {
             try refreshSearchIndex(docID)
             return
         }
-        // The text is what gets shown — and for an amount it is the only place
-        // the currency lives. The typed columns are what sorting compares.
         try db.run("""
             INSERT INTO field_values(doc_id, field_id, value, value_num, value_date, value_bool)
             VALUES(?,?,?,?,?,?)
@@ -141,7 +126,6 @@ extension Store {
         try refreshSearchIndex(docID)
     }
 
-    /// Custom-field values for a batch of rows, in one query.
     func customValues(for docIDs: [Int64], fields: [Field]) throws -> [Int64: [String: String]] {
         let custom = fields.filter { !$0.isBuiltin }
         guard !custom.isEmpty, !docIDs.isEmpty else { return [:] }
@@ -155,8 +139,6 @@ extension Store {
         }
         return out
     }
-
-    // MARK: - Facets
 
     func facets(field: Field) throws -> [Facet] {
         var values: [Facet]
@@ -176,18 +158,10 @@ extension Store {
         return values
     }
 
-    /// Renames one value of a field across the whole library. Renaming two
-    /// values to the same name merges them, because they simply become the
-    /// same string — for custom fields the primary key collision is resolved
-    /// the same way, by folding the duplicates into one row per document.
     @discardableResult
     func renameFieldValue(field: Field, from old: String, to new: String) throws -> Int {
         let clean = new.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !clean.isEmpty, clean != old else { return 0 }
-        // An icon belongs to the value, so it travels with a rename — and a
-        // merge keeps whichever icon the target already had. For a taxonomy
-        // field the icon is already on the row and needs no help; this is for
-        // the fields whose values are still strings.
         if Store.entityColumn(for: field.builtinColumn) == nil {
             try db.run("""
                 UPDATE OR IGNORE value_icons SET value=? WHERE field_id=? AND value=?
@@ -197,9 +171,6 @@ extension Store {
         }
         if let column = field.builtinColumn {
             guard Store.fieldColumns.contains(column) else { return 0 }
-            // A taxonomy value is one row, so renaming it is one UPDATE — and
-            // renaming it onto another is a merge rather than two spellings
-            // that happen to have become the same string.
             if Store.entityColumns[column] != nil {
                 guard let id = try existingEntityID(named: old, builtin: column) else { return 0 }
                 return try renameEntity(id, to: clean)
@@ -226,8 +197,6 @@ extension Store {
                        [.text(clean), .int(field.fieldID), .text(old)])
             return Int(db.changes)
         }
-        // The renamed text has to be read through the field's type again, or a
-        // typed field would keep sorting by what the value used to say.
         if field.type.sortsTyped { try reparseValues(fieldID: field.fieldID) }
         try refreshSearchIndex(affected)
         return renamed
@@ -256,10 +225,6 @@ extension Store {
         }
     }
 
-    // MARK: - Tags
-
-    /// Renaming onto an existing tag merges the two: assignments and aliases
-    /// move across, then the now-empty source tag is dropped.
     @discardableResult
     func renameTag(_ id: Int64, to name: String, mergeIntoExisting: Bool = true) throws -> Int64 {
         let clean = name.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -288,13 +253,7 @@ extension Store {
         try db.run("UPDATE tags SET color=? WHERE id=?", [.int(color), .int(id)])
     }
 
-    // MARK: - Per-value icons
-
-    /// Icons chosen for individual values of a field — one for “Invoice”,
-    /// another for “Tax”. Unset values fall back to the field's own icon.
     func setValueIcon(field: Field, value: String, icon: String?) throws {
-        // A taxonomy value carries its own icon, so renaming it can no longer
-        // orphan one — which is exactly what keying an icon by a string did.
         if let column = field.builtinColumn, Store.entityColumns[column] != nil {
             guard let id = try existingEntityID(named: value, builtin: column) else { return }
             try setEntityIcon(id, icon: icon)

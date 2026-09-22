@@ -1,7 +1,5 @@
 import Foundation
 
-/// `{date}_{correspondent}_{title}.{ext}` style templates with deterministic
-/// fallback chains, used by on-demand rename and by scan import.
 enum Naming {
     static let defaultTemplate = "{date}_{correspondent}_{title}"
 
@@ -84,7 +82,6 @@ enum Naming {
         }
     }
 
-    /// Filesystem-safe, collapses the gaps left by empty tokens.
     private static func sanitize(_ s: String) -> String {
         let illegal = CharacterSet(charactersIn: "/\\:*?\"<>|\n\r\t")
         var out = s.components(separatedBy: illegal).joined(separator: " ")
@@ -98,7 +95,6 @@ enum Naming {
 
     private static func tidy(_ s: String, ext: String, fallback: String) -> String {
         var out = s
-        // Collapse separators orphaned by missing values: "2026-01-14__Title".
         while out.contains("__") { out = out.replacingOccurrences(of: "__", with: "_") }
         while out.contains("--") { out = out.replacingOccurrences(of: "--", with: "-") }
         out = out.trimmingCharacters(in: CharacterSet(charactersIn: " _-."))
@@ -112,26 +108,18 @@ enum Naming {
         if out.isEmpty || out == "." || out == ".." {
             out = "Document"
         }
-        // Cap filename stem length to prevent path length overflow (>1024 bytes)
         if out.count > 180 {
             out = String(out.prefix(180)).trimmingCharacters(in: CharacterSet(charactersIn: " _-."))
         }
         return ext.isEmpty ? out : "\(out).\(ext)"
     }
 
-    /// Renders a `/`-separated folder template one component at a time, so an
-    /// empty token collapses just its own path segment — `{correspondent}/{year}`
-    /// with no year drops straight to the correspondent's folder rather than
-    /// leaving a trailing slash. `ctx.originalStem` is the fallback a component
-    /// renders to when every token in it is empty, so it doubles as the
-    /// sentinel filtered back out here.
     static func renderPath(_ template: String, _ ctx: Context) -> [String] {
         template.split(separator: "/")
             .map { render(String($0), ctx) }
             .filter { !$0.isEmpty && $0 != ctx.originalStem }
     }
 
-    /// Appends ` 2`, ` 3`… the way Finder does, so a rename never clobbers.
     static func uniqueURL(in directory: URL, filename: String) -> URL {
         let fm = FileManager.default
         var candidate = directory.appendingPathComponent(filename)

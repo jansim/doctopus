@@ -1,30 +1,9 @@
 import AppKit
 
-/// `--scantest [menu|fire|loop]` — a headless probe for the Continuity Camera
-/// wiring, which cannot be exercised from the UI without a device in the room.
-///
-/// `menu` reports which devices the system offers and whether the responder
-/// chain terminates somewhere that can take a capture. `fire` additionally
-/// starts a document scan and reports what comes back, which is the only way
-/// to check the delivery half end to end. `loop` keeps going — it asks for the
-/// next capture as soon as one lands — and times each round, which is what
-/// continuous scanning is built on: whether a device honours a fire that
-/// arrives moments after it finished the last one, and how long to wait first
-/// (`AppModel.scanRearm`).
-///
-/// This is also the harness that established the two rules ScanCoordinator is
-/// built on: the import item must be in the main menu before launch finishes,
-/// and only that one item is ever expanded.
-///
-/// Delivery here goes to a plain AppKit requestor, which is *not* how the app
-/// receives it: SwiftUI's hosting views answer the responder chain first, so
-/// the real app takes captures through `acceptsScans()`. A clean `fire` run
-/// says nothing about that half — scan into the app itself to check it.
 @MainActor
 enum ScanTest {
     final class Delegate: NSObject, NSApplicationDelegate, NSServicesMenuRequestor {
         var magic: NSMenuItem?
-        /// Rounds still to run after this delivery. Zero outside `loop`.
         var remaining = 0
         var round = 0
         var firedAt = Date()
@@ -126,8 +105,6 @@ enum ScanTest {
         app.run()
     }
 
-    /// Fires the document-scan entry, found afresh each time: the system
-    /// rebuilds that submenu between rounds.
     @discardableResult
     static func fire(_ title: String = "Scan Documents") -> Bool {
         guard let live = delegate.magic?.submenu else { return false }
@@ -140,10 +117,6 @@ enum ScanTest {
         delegate.round += 1
         let round = delegate.round
         live.performActionForItem(at: index)
-        // One watchdog per round, rather than one for the run: a capture that
-        // never lands is the interesting failure, and which round gave up is
-        // the whole answer — the second one failing where the first worked is
-        // exactly what this mode is looking for.
         DispatchQueue.main.asyncAfter(deadline: .now() + 300) {
             guard delegate.round == round, delegate.remaining > 0 else { return }
             log("round \(round) timed out with no delivery")

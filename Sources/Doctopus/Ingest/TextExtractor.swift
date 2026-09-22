@@ -5,28 +5,21 @@ import PDFKit
 import Vision
 import NaturalLanguage
 
-/// Extracted text plus the provenance the inspector shows.
 struct ExtractedText: Sendable {
     var text: String = ""
     var confidence: Double = 0
     var words: Int = 0
-    var source: String = "vision"   // pdf-layer | vision | mixed
+    var source: String = "vision"
     var pageCount: Int?
     var language: String?
     var elapsedMS: Int = 0
 }
 
-/// Pulls text out of PDFs and images.
-///
-/// PDFs are tried through their embedded text layer first — that is close to
-/// free and lossless — and only pages that come back empty are rasterized and
-/// sent through Vision. Most real-world archives are mostly digital-origin PDFs,
-/// so this avoids OCR entirely for the majority of a library.
+/// PDFs use their embedded text layer first; only pages that come back empty
+/// are rasterized and sent through Vision.
 enum TextExtractor {
 
-    /// Pages whose text layer yields fewer characters than this are treated as scans.
     private static let textLayerThreshold = 24
-    /// Rasterization target. 200 DPI is the sweet spot for Vision accuracy vs. speed.
     private static let ocrDPI: CGFloat = 200
     private static let maxPixelDimension: CGFloat = 4000
 
@@ -46,8 +39,6 @@ enum TextExtractor {
         result.language = detectLanguage(result.text)
         return result
     }
-
-    // MARK: - PDF
 
     private static func extractPDF(_ url: URL) throws -> ExtractedText {
         guard let doc = PDFDocument(url: url) else {
@@ -96,7 +87,6 @@ enum TextExtractor {
         return ExtractedText(text: text, confidence: confidence, source: source, pageCount: count)
     }
 
-    /// Rasterizes one PDF page into a bitmap sized for OCR.
     private static func render(page: CGPDFPage?) -> CGImage? {
         guard let page else { return nil }
         let box = page.getBoxRect(.cropBox)
@@ -110,7 +100,6 @@ enum TextExtractor {
         let h = Int((box.height * scale).rounded())
         guard w > 0, h > 0 else { return nil }
 
-        // Grayscale: Vision does not need colour and this cuts memory 4x.
         guard let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8,
                                   bytesPerRow: 0, space: CGColorSpaceCreateDeviceGray(),
                                   bitmapInfo: CGImageAlphaInfo.none.rawValue) else { return nil }
@@ -123,8 +112,6 @@ enum TextExtractor {
         return ctx.makeImage()
     }
 
-    // MARK: - Images
-
     private static func extractImage(_ url: URL) throws -> ExtractedText {
         guard let src = CGImageSourceCreateWithURL(url as CFURL, nil),
               let image = CGImageSourceCreateImageAtIndex(src, 0, [kCGImageSourceShouldCache: false] as CFDictionary)
@@ -132,8 +119,6 @@ enum TextExtractor {
         let ocr = recognize(image)
         return ExtractedText(text: ocr.text, confidence: ocr.confidence, source: "vision", pageCount: 1)
     }
-
-    // MARK: - Vision
 
     private static func recognize(_ image: CGImage) -> (text: String, confidence: Double) {
         let request = VNRecognizeTextRequest()
@@ -167,14 +152,11 @@ enum TextExtractor {
         return (lines.joined(separator: "\n"), n == 0 ? 0 : total / Double(n))
     }
 
-    // MARK: - Language
-
     private static func detectLanguage(_ text: String) -> String? {
         guard text.count > 40 else { return nil }
         let recognizer = NLLanguageRecognizer()
         recognizer.processString(String(text.prefix(2000)))
         guard let lang = recognizer.dominantLanguage, lang != .undetermined else { return nil }
-        // Only trust a confident call; short OCR noise loves to look like Romanian.
         let hypotheses = recognizer.languageHypotheses(withMaximum: 1)
         guard (hypotheses[lang] ?? 0) > 0.55 else { return nil }
         return lang.rawValue

@@ -3,23 +3,15 @@ import AppKit
 
 extension AppModel {
 
-    // MARK: - Libraries
-
-    /// A `*.doctopus` directory sitting directly inside `folder`, if any.
     func existingContainer(in folder: URL) -> URL? {
         (try? FileManager.default.contentsOfDirectory(
             at: folder, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles]))?
             .first { $0.lastPathComponent.hasSuffix(".doctopus") }
     }
 
-    /// Opens — creating it if needed — the library whose container is at
-    /// `container`, alongside any already open. Opening one that is already
-    /// open is a no-op rather than a second copy.
     func openLibrary(container: URL, rootBookmark: Data? = nil,
                              persist: Bool = true, index: Bool = true) async {
         let root = container.deletingLastPathComponent()
-        // The app is not sandboxed, so a plain bookmark is enough to survive the
-        // folder being moved between launches.
         let bookmark = rootBookmark ?? (try? root.bookmarkData(
             includingResourceValuesForKeys: nil, relativeTo: nil))
 
@@ -27,8 +19,6 @@ extension AppModel {
         do {
             store = try Store(directory: container)
         } catch let error as Store.OpenError {
-            // A library written by a newer Doctopus says so, rather than
-            // looking like a broken folder.
             errorMessage = error.description
             return
         } catch {
@@ -48,7 +38,6 @@ extension AppModel {
 
         let lib = Library(store: store, bookmark: bookmark)
         lib.settings = await AppSettings.load(from: store)
-        // The callbacks hop back to the main actor; the actors themselves stay off it.
         lib.attachIndexer(
             intelligence: intelligence,
             onProgress: { [weak self] p in Task { @MainActor in self?.progress = p } },
@@ -61,8 +50,6 @@ extension AppModel {
         libraries.append(lib)
         startWatching(lib)
 
-        // The first library decides what the settings pane and the view mode
-        // show; later ones join without disturbing either.
         if libraries.count == 1 {
             adoptSettings(of: lib)
             viewMode = settings.viewMode
@@ -74,15 +61,12 @@ extension AppModel {
         if persist { persistOpenLibraries() }
         guard index else { return }
         let indexed = await lib.indexer.indexAll()
-        // Only a library the user just added or opened reports back; the ones
-        // restored at launch catch up quietly.
         if persist, let indexed {
             notify(indexed == 0 ? "Opened \(lib.displayName)."
                                 : "Indexed \(indexed) document\(indexed == 1 ? "" : "s") in \(lib.displayName).")
         }
     }
 
-    /// Choose a folder to index; its index lives in a `library.doctopus` inside.
     func addLibrary() {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
@@ -97,7 +81,6 @@ extension AppModel {
     func openLibraryPicker() {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
-        // A library is a package, which the panel counts as a file.
         panel.canChooseFiles = true
         panel.allowedContentTypes = [.doctopusLibrary]
         panel.allowsMultipleSelection = false
@@ -107,8 +90,6 @@ extension AppModel {
         openLibrary(at: url)
     }
 
-    /// Open an existing library, given either its `library.doctopus` directory
-    /// or the folder that contains one.
     func openLibrary(at url: URL) {
         let container: URL
         if url.lastPathComponent.hasSuffix(".doctopus") {
@@ -121,8 +102,6 @@ extension AppModel {
         Task { await openLibrary(container: container) }
     }
 
-    /// Stops watching and forgets a library. The `library.doctopus` directory is
-    /// left on disk untouched.
     func closeLibrary(_ lib: Library) {
         lib.watcher?.stop()
         libraries.removeAll { $0 === lib }
@@ -147,10 +126,6 @@ extension AppModel {
         Preferences.libraryBookmarks = libraries.compactMap(\.bookmark)
     }
 
-    // MARK: - Watching
-
-    /// One watcher per library, over that library's root, feeding that
-    /// library's pipeline. Libraries never see each other's changes.
     private func startWatching(_ lib: Library) {
         lib.watcher?.stop()
         guard let indexer = lib.indexer else { return }
@@ -161,7 +136,6 @@ extension AppModel {
         lib.watcher = watcher
     }
 
-    /// Rescans one library, or every open one when none is named.
     func reindex(_ lib: Library? = nil) {
         let targets = lib.map { [$0] } ?? libraries
         Task {
@@ -172,8 +146,6 @@ extension AppModel {
                 changed += n
                 ran = true
             }
-            // A rescan already under way picks this request up; saying
-            // "up to date" before it finishes would be wrong.
             guard ran else { return }
             let scope = targets.count == 1 ? targets[0].displayName : "\(targets.count) libraries"
             if changed == 0 { notify("\(scope) is up to date.", .info) }

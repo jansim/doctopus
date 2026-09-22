@@ -1,23 +1,14 @@
 import Foundation
 
-/// Connection details for an OpenAI-compatible chat completions server.
 struct RemoteLLMConfig: Sendable, Equatable {
     var endpoint = "http://localhost:1234/v1"
     var model = ""
     var apiKey = ""
     var timeout: Double = 120
     var parallelRequests = 2
-    /// Send the first page of each document as an image alongside its text.
-    /// Off unless asked for: it only works where the model behind the endpoint
-    /// can see, and it costs image tokens on a paid one.
     var vision = false
-    /// Longest edge, in pixels, of that page image.
     var visionImageSize = 1024
 
-    /// Tolerates the endpoint people actually paste. LM Studio shows
-    /// `http://localhost:1234`, Ollama `http://localhost:11434`, hosted APIs a
-    /// full `https://…/v1`, and copying from a curl example brings the
-    /// `/chat/completions` along with it — all four end up in the same place.
     var baseURL: URL? {
         var text = endpoint.trimmingCharacters(in: .whitespaces)
         guard !text.isEmpty else { return nil }
@@ -34,25 +25,13 @@ struct RemoteLLMConfig: Sendable, Equatable {
     var isConfigured: Bool { baseURL != nil && !trimmedModel.isEmpty }
 }
 
-/// Any OpenAI-compatible chat completions server: LM Studio, Ollama, llama.cpp,
-/// vLLM, or a hosted API.
-///
-/// One request shape covers all of them, so there is no per-vendor code here —
-/// only the endpoint and the model name change. Unlike the on-device backend
-/// this one sends document text off the machine, which is why it is never the
-/// default and the settings pane says so plainly.
+/// Any OpenAI-compatible chat completions server. Unlike the on-device backend
+/// this sends document text off the machine, so it is never the default.
 actor RemoteLLMService {
     private var cached: (config: RemoteLLMConfig, status: LLMStatus)?
 
-    /// How each endpoint likes to be asked, once we have found out. A rejection
-    /// is refused before any inference happens, so walking the ladder costs
-    /// milliseconds — but only once per endpoint per session.
     private var formats: [String: ResponseFormat] = [:]
 
-    /// Endpoint-and-model pairs that turned an image away. A text model refuses
-    /// every request carrying one, so the answer is learned once and the rest of
-    /// the batch goes as text — and keyed by the model too, since pointing the
-    /// same endpoint at one that can see is the obvious next thing to try.
     private var textOnly: Set<String> = []
 
     /// Most to least constrained. `json_schema` is worth insisting on: it is
@@ -90,21 +69,16 @@ actor RemoteLLMService {
         return URLSession(configuration: c)
     }()
 
-    /// Forgets the cached verdict, so the next question hits the server. The
-    /// image verdict goes with it: the Test button is also how someone says
-    /// they have swapped the model behind the endpoint for one that can see.
     func forget() {
         cached = nil
         textOnly.removeAll()
     }
 
-    /// The last known verdict, checking only if there is not one already.
     func status(_ config: RemoteLLMConfig) async -> LLMStatus {
         if let cached, cached.config == config { return cached.status }
         return await check(config)
     }
 
-    /// Asks the server whether it is there and whether it has the model.
     @discardableResult
     func check(_ config: RemoteLLMConfig) async -> LLMStatus {
         let status = await probe(config)
@@ -121,9 +95,6 @@ actor RemoteLLMService {
         }
         do {
             let names = try await fetchModels(config)
-            // An empty list is not a failure: some servers load a model lazily
-            // and list nothing until they have, and plenty of gateways do not
-            // implement /models at all.
             if !names.isEmpty, !names.contains(config.trimmedModel) {
                 return .unavailable("\(base.host ?? "The server") has no model named “\(config.trimmedModel)”")
             }
@@ -133,7 +104,6 @@ actor RemoteLLMService {
         }
     }
 
-    /// The models the server is offering, for the picker in Settings.
     func models(_ config: RemoteLLMConfig) async -> [String] {
         (try? await fetchModels(config)) ?? []
     }
@@ -141,8 +111,6 @@ actor RemoteLLMService {
     private func fetchModels(_ config: RemoteLLMConfig) async throws -> [String] {
         guard let base = config.baseURL else { throw RemoteError.notConfigured }
         var request = URLRequest(url: base.appendingPathComponent("models"))
-        // A model list should answer immediately even when the chat timeout is
-        // generous, otherwise the Test button sits there for two minutes.
         request.timeoutInterval = min(config.timeout, 15)
         authorize(&request, config)
 
@@ -153,15 +121,12 @@ actor RemoteLLMService {
         return list.compactMap { $0["id"] as? String }.sorted()
     }
 
-    // MARK: - Enrichment
-
     func enrich(text: String, filename: String, pageImage: PageImage.Rendered? = nil,
                 pageCount: Int? = nil, config: RemoteLLMConfig, limit: Int,
                 candidateTags: [String] = []) async -> DocumentInsight? {
         guard let base = config.baseURL, config.isConfigured else { return nil }
         let key = base.absoluteString
         let imageKey = "\(key)|\(config.trimmedModel)"
-        // Dropped for the rest of the session once this model has said no.
         var image = textOnly.contains(imageKey) ? nil : pageImage
         var format = formats[key] ?? .schema
 
@@ -191,9 +156,6 @@ actor RemoteLLMService {
                 image = nil
             } catch RemoteError.rejectedFormat {
                 guard let fallback = format.next else {
-                    // Every format refused, with an image attached: the image is
-                    // the likelier objection, so try the ladder again without it
-                    // before giving up on the document.
                     guard image != nil else { return nil }
                     textOnly.insert(imageKey)
                     Self.log("\(base.host ?? key) refused every format with a page image attached; asking again with text alone")
@@ -213,17 +175,12 @@ actor RemoteLLMService {
         }
     }
 
-    /// What came back, beyond the text itself: a reply the server cut off is
-    /// worth naming, because truncated JSON is indistinguishable from a model
-    /// that simply answered badly.
     private struct Reply {
         var content: String
         var truncated: Bool
         var tokens: Int?
     }
 
-    /// Set `DOCTOPUS_LLM_DEBUG=1` to see why an endpoint is not producing
-    /// results. Off by default: this runs once per document.
     private static let debug = ProcessInfo.processInfo.environment["DOCTOPUS_LLM_DEBUG"] == "1"
 
     private static func log(_ message: @autoclosure () -> String) {
@@ -231,18 +188,10 @@ actor RemoteLLMService {
         FileHandle.standardError.write(Data(("doctopus/llm: " + message() + "\n").utf8))
     }
 
-    /// The user turn of the request.
-    ///
-    /// A page image rides along as a second content part, which is the shape
-    /// every OpenAI-compatible server that takes images agrees on. Without one
-    /// the content stays a plain string: servers that do not take images are
-    /// happier with it, and it is what this has always sent.
     static func userMessage(prompt: String, image: PageImage.Rendered?) -> [String: Any] {
         guard let image else { return ["role": "user", "content": prompt] }
         let parts: [[String: Any]] = [
             ["type": "text", "text": prompt],
-            // Inline data rather than a link: there is nowhere to host the page,
-            // and a server on localhost could not fetch it if there were.
             ["type": "image_url", "image_url": ["url": image.dataURL]],
         ]
         return ["role": "user", "content": parts]
@@ -283,9 +232,6 @@ actor RemoteLLMService {
               let message = choice["message"] as? [String: Any]
         else { throw RemoteError.malformedResponse }
 
-        // A reasoning model puts its trace either in a field of its own or
-        // inline in the content. When the field is separate the content is
-        // sometimes empty and the answer is in the trace, so fall back to it.
         var content = (message["content"] as? String) ?? ""
         if Self.jsonObject(in: content) == nil,
            let reasoning = message["reasoning_content"] as? String ?? message["reasoning"] as? String {
@@ -303,8 +249,6 @@ actor RemoteLLMService {
         request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
     }
 
-    // MARK: - Errors
-
     private enum RemoteError: Error {
         case notConfigured
         case malformedResponse
@@ -318,17 +262,10 @@ actor RemoteLLMService {
         guard let http = response as? HTTPURLResponse else { return }
         guard !(200..<300).contains(http.statusCode) else { return }
         let detail = message(in: data)
-        // A server whose model cannot see refuses the request with any of half
-        // a dozen status codes, so the image is recognized as the objection by
-        // what the server says rather than by the code. Only consulted when an
-        // image was actually sent, where a mention of one is unambiguous.
         if hasImage, mentionsImage(detail) {
             log("\(http.statusCode) for a request with a page image: \(detail ?? "no detail")")
             throw RemoteError.rejectedImage
         }
-        // A server refuses a response format it does not implement with a plain
-        // 400 and no machine-readable marker, so the decision to step down the
-        // ladder is made from what we asked for rather than from the wording.
         if format != .plain, http.statusCode == 400 {
             log("400 for \(format.rawValue): \(detail ?? "no detail")")
             throw RemoteError.rejectedFormat
@@ -341,8 +278,6 @@ actor RemoteLLMService {
         return ["image", "vision", "multimodal", "multi-modal"].contains { detail.contains($0) }
     }
 
-    /// OpenAI-shaped errors carry `{"error": {"message": …}}`; llama.cpp and
-    /// friends sometimes send a bare string. Take whichever is there.
     private static func message(in data: Data) -> String? {
         guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             return String(data: data.prefix(200), encoding: .utf8)?.nilIfBlank
@@ -388,11 +323,6 @@ actor RemoteLLMService {
         return (error as NSError).localizedDescription
     }
 
-    // MARK: - Parsing
-
-    /// Models are asked for bare JSON and usually oblige, but a code fence or a
-    /// sentence of preamble is common enough that it is cheaper to tolerate
-    /// than to re-prompt.
     static func parse(_ content: String, model: String? = nil, vision: Bool = false) -> DocumentInsight? {
         guard let data = jsonObject(in: content),
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
@@ -415,8 +345,6 @@ actor RemoteLLMService {
         insight.tags = tags(object["tags"])
         let modelPart = model.flatMap { $0.nilIfBlank }.map { ":\($0)" } ?? ""
         insight.source = "\(vision ? "vlm" : "remote")\(modelPart):v\(LLMPrompt.promptVersion)"
-        // The same weight the on-device backend claims: a model that answered
-        // at all should not outrank or underrank the other one by provenance.
         insight.confidence = 0.9
 
         // A response where every field came back empty is a failure dressed up
@@ -439,10 +367,6 @@ actor RemoteLLMService {
             .filter { !$0.isEmpty && $0.count < 32 }
     }
 
-    /// Asked for a two-letter code, a model will sometimes answer "German" —
-    /// and storing "germa" would put a nonsense value in the sidebar next to
-    /// the real ones. Take the code, resolve a name to its code, or take
-    /// nothing at all.
     private static func languageCode(_ value: String) -> String? {
         let clean = value.trimmingCharacters(in: .whitespaces).lowercased()
         guard !clean.isEmpty, clean.allSatisfy({ $0.isLetter }) else { return nil }
@@ -450,7 +374,6 @@ actor RemoteLLMService {
         if clean.count == 3, let two = Locale.LanguageCode(clean).identifier(.alpha2)?.nilIfBlank {
             return two
         }
-        // The name, in English or in the language itself.
         let english = Locale(identifier: "en_US_POSIX")
         for code in Locale.LanguageCode.isoLanguageCodes {
             guard let id = code.identifier(.alpha2) else { continue }
@@ -462,11 +385,8 @@ actor RemoteLLMService {
         return nil
     }
 
-    /// The first balanced object, so a fenced block, a chatty preamble or a
-    /// thinking trace that reasons its way through braces of its own still
-    /// leaves something parseable. Scanning for balance rather than taking the
-    /// outermost braces matters once a trace is in the content: the last `}` in
-    /// the reply is often not the one that closes the first `{`.
+    /// The first balanced object, not the outermost braces: in a thinking trace the
+    /// last `}` is often not the one that closes the first `{`.
     static func jsonObject(in content: String) -> Data? {
         let chars = Array(content)
         let wanted = Set(LLMPrompt.fields.map(\.key) + ["tags"])

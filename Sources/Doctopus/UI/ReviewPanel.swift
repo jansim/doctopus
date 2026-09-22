@@ -1,13 +1,8 @@
 import SwiftUI
 import AppKit
 
-/// The lower half of the approval view: the document selected above, what the
-/// pipeline worked out about it, and where it should live.
-///
-/// Everything generated is editable in place, or can be thrown away in one go.
-/// Filing is two decisions, laid out side by side for every candidate folder:
-/// the one folder the file itself lives in (moved there on apply), and any
-/// others it should also appear in as a Finder alias.
+/// Filing is two decisions per candidate folder: the one folder the file lives
+/// in (moved there on apply), and any others it appears in as a Finder alias.
 struct ReviewPanel: View {
     @Environment(AppModel.self) private var model
 
@@ -32,13 +27,9 @@ struct ReviewPanel: View {
     }
 }
 
-// MARK: - One document
-
 private struct DocumentReview: View {
     @Environment(AppModel.self) private var model
     let detail: DocumentDetail
-    // Reset for every document by the `.id(detail.row.id)` ReviewPanel
-    // applies below, so each one starts out asking to drop its original.
     @State private var keepOriginal = false
     private var row: DocumentRow { detail.row }
 
@@ -85,10 +76,6 @@ private struct DocumentReview: View {
     }
 }
 
-// MARK: - Generated information
-
-/// What the pipeline worked out, every value editable where it stands, and
-/// one button to throw the lot away.
 private struct GeneratedInfoEditor: View {
     @Environment(AppModel.self) private var model
     let detail: DocumentDetail
@@ -161,10 +148,6 @@ private struct GeneratedInfoEditor: View {
         }
     }
 
-    /// The file as it arrived, before optimization rasterized it — one tap
-    /// away in case the compressed version lost something worth checking.
-    /// Kept around until the document is approved, and gone after unless
-    /// asked to stay.
     private func originalSection(_ url: URL) -> some View {
         HStack(spacing: 10) {
             Thumbnail(url: url, mtime: row.mtime, size: .row,
@@ -188,9 +171,6 @@ private struct GeneratedInfoEditor: View {
             || row.title != nil || row.correspondent != nil || row.docType != nil
     }
 
-    /// The other dates the extractor found. `03/04/2026` is read wrong often
-    /// enough that the second-best guess sitting right there, one click away,
-    /// is the cheapest correction on this screen.
     private var dateChoices: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text("ALSO FOUND")
@@ -227,8 +207,6 @@ private struct GeneratedInfoEditor: View {
                         model.removeTag(entry.tag, from: [row])
                     }
                 }
-                // Suggestions sit alongside, dashed, so accepting one is a
-                // click away rather than a trip to the inspector.
                 ForEach(detail.tagSuggestions) { suggestion in
                     TagSuggestionChip(
                         suggestion: suggestion, compact: true,
@@ -252,9 +230,6 @@ private struct GeneratedInfoEditor: View {
     }
 }
 
-// MARK: - Filing
-
-/// One folder a document could be filed in, and why it is on the list.
 struct FilingOption: Identifiable, Hashable {
     enum Kind { case current, suggested, alias, similar, chosen }
     var id: String { path }
@@ -264,24 +239,15 @@ struct FilingOption: Identifiable, Hashable {
     var confidence: Double?
 }
 
-/// Picks where a document lives. Each candidate folder is one row with two
-/// controls: a radio button for the single folder the file itself is in, and
-/// a checkbox for each other folder it should also appear in as an alias.
-/// Nothing happens on disk until the button at the bottom is pressed.
 struct FilingEditor: View {
     enum Mode {
-        /// In the approval view: applying also approves and moves on.
         case review
-        /// In a sheet from the context menu: apply, or cancel.
         case sheet(dismiss: () -> Void)
     }
 
     @Environment(AppModel.self) private var model
     let detail: DocumentDetail
     let mode: Mode
-    /// Whether to spare this document's pre-optimization original, if it has
-    /// one, when the Approve button here also approves it. Only `.review`
-    /// passes this in; `.sheet` never approves, so it never matters there.
     var keepOriginal: Bool
 
     @State private var primary: String
@@ -304,12 +270,7 @@ struct FilingEditor: View {
     }
     private var changed: Bool { primary != row.directory || secondaries != existingSecondaries }
 
-    /// The current folder first, then what the router suggested, where the
-    /// document already has aliases, where documents like it live, and
-    /// anything picked by hand — each folder once.
     private var options: [FilingOption] {
-        // A document the router filed is usually sitting in its own best
-        // suggestion, so the current folder carries that suggestion's reason.
         let here = detail.pathSuggestions.first { $0.path == row.directory }
         var out: [FilingOption] = [FilingOption(
             path: row.directory, kind: .current,
@@ -367,8 +328,6 @@ struct FilingEditor: View {
         }
     }
 
-    // MARK: Adding a folder
-
     @ViewBuilder
     private var otherFolderMenu: some View {
         if let library {
@@ -390,9 +349,6 @@ struct FilingEditor: View {
         }
     }
 
-    /// A folder picked by hand becomes the primary: picking a folder from a
-    /// menu is almost always "put it here". The checkbox is still there for
-    /// "also here".
     private func choose(_ path: String) {
         if !options.contains(where: { $0.path == path }) {
             chosen.append(FilingOption(path: path, kind: .chosen, reason: "Chosen by you"))
@@ -431,8 +387,6 @@ struct FilingEditor: View {
         }
         choose(path)
     }
-
-    // MARK: Footer
 
     private var footer: some View {
         HStack(spacing: 8) {
@@ -522,17 +476,13 @@ private struct FilingRow: View {
                 }
             }
             Spacer(minLength: 6)
-            // A similar folder's number is a share of documents, not a
-            // confidence, so it is not dressed up as one.
             if let c = option.confidence, option.kind != .similar {
                 ConfidenceBadge(value: c)
             }
-            // The radio: the folder the file itself is in.
             Image(systemName: isPrimary ? "largecircle.fill.circle" : "circle")
                 .foregroundStyle(isPrimary ? Color.accentColor : .secondary)
                 .frame(width: 66)
                 .accessibilityLabel(isPrimary ? "Lives here" : "Make this where it lives")
-            // The checkbox: an alias here as well.
             Toggle("", isOn: $isSecondary)
                 .toggleStyle(.checkbox)
                 .labelsHidden()
@@ -563,8 +513,6 @@ private struct FilingRow: View {
     }
 }
 
-/// The library's folder tree as nested menus, each folder offering itself
-/// before its subfolders.
 struct FolderMenuItems: View {
     let nodes: [FolderNode]
     let action: (String) -> Void
@@ -584,14 +532,11 @@ struct FolderMenuItems: View {
     }
 }
 
-// MARK: - Several documents
-
 private struct BulkReview: View {
     @Environment(AppModel.self) private var model
     let rows: [DocumentRow]
     @State private var confirmingDiscard = false
 
-    /// Moving a mixed selection only makes sense within one library.
     private var library: Library? {
         let ids = Set(rows.map(\.library))
         return ids.count == 1 ? ids.first.flatMap(model.library) : nil
@@ -631,11 +576,6 @@ private struct BulkReview: View {
     }
 }
 
-// MARK: - Filing from anywhere
-
-/// The same folder picker, for a document outside the approval view: the
-/// context menu's "File In…". Loads the document's detail itself, since the
-/// row right-clicked need not be the one the inspector is showing.
 struct FilingSheet: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss

@@ -2,8 +2,6 @@ import Foundation
 
 extension AppModel {
 
-    // MARK: - Refresh
-
     func decode<T: Decodable>(_ key: String) -> T? {
         guard let raw = Preferences.uiState(key), let data = raw.data(using: .utf8) else { return nil }
         return try? JSONDecoder().decode(T.self, from: data)
@@ -82,8 +80,6 @@ extension AppModel {
         }
     }
 
-    /// Sums facet counts by value, so a doc-type value spanning two libraries
-    /// shows as one row.
     private static func mergeFacets(_ a: [Facet], _ b: [Facet]) -> [Facet] {
         guard !a.isEmpty else { return b }
         var byValue: [String: Facet] = [:]
@@ -99,11 +95,6 @@ extension AppModel {
         return byValue.values.sorted { $0.count > $1.count || ($0.count == $1.count && $0.value < $1.value) }
     }
 
-    /// One entry per field key for the merged surfaces — columns, the inspector,
-    /// the facet sections. Every library seeds the same built-ins, so a shared
-    /// key is the same field wherever it came from; the first library to define
-    /// one supplies its name, icon and position, and the per-library copies stay
-    /// on `Library.fields` for anything that has to write to a specific database.
     private static func mergeFields(_ fields: [Field]) -> [Field] {
         var seen = Set<String>()
         var merged: [Field] = []
@@ -113,8 +104,6 @@ extension AppModel {
         return merged.sorted { $0.position < $1.position }
     }
 
-    /// Which libraries a selection can possibly match. Tag and folder
-    /// selections name one; everything else fans out across all of them.
     private func librariesInScope(for selection: Selection) -> [Library] {
         switch selection {
         case .tag(let ref): return library(ref.library).map { [$0] } ?? []
@@ -123,9 +112,6 @@ extension AppModel {
         }
     }
 
-    /// How many rows the centre pane holds at once. Each library is queried for
-    /// this many, so the merge always has enough to fill the window whichever
-    /// library the top of the list comes from.
     private static let pageBatchSize = 500
 
     func loadMore() {
@@ -146,8 +132,6 @@ extension AppModel {
             let query = SearchQuery(text, fieldKeys: keys)
             let limit = self.currentLimit
 
-            // Each library answers in parallel and keeps its own order; the
-            // merge below is what turns them into one list.
             var byIndex: [Int: [DocumentRow]] = [:]
             await withTaskGroup(of: (Int, [DocumentRow]).self) { group in
                 for (i, lib) in libs.enumerated() {
@@ -171,7 +155,6 @@ extension AppModel {
                                   sort: sortField, ascending: asc, limit: limit)
             self.documents = rows
             self.hasMoreDocuments = rows.count >= limit
-            // Drop selections that no longer exist so the inspector cannot go stale.
             let live = Set(rows.map(\.id))
             let kept = self.selectedIDs.intersection(live)
             if kept != self.selectedIDs { self.selectedIDs = kept }
@@ -179,13 +162,6 @@ extension AppModel {
         }
     }
 
-    /// k-way merge of per-library results that are each already sorted the way
-    /// the user asked for.
-    ///
-    /// The comparison has to happen here rather than in SQL because no single
-    /// database sees all the rows. `DocumentSort` is the same comparator the
-    /// table headers use, so the merged order matches what a column header
-    /// promises.
     static func merge(_ lists: [[DocumentRow]], sort: SortField,
                       ascending: Bool, limit: Int) -> [DocumentRow] {
         let lists = lists.filter { !$0.isEmpty }
@@ -253,9 +229,6 @@ extension AppModel {
         }
     }
 
-    /// One document's full detail, stamped with its library. The inspector
-    /// keeps the selected one in `detail`; a sheet about some other row loads
-    /// its own through here.
     func loadDetail(_ ref: DocumentRef) async -> DocumentDetail? {
         guard let lib = library(ref.library) else { return nil }
         return await loadDetail(ref, from: lib)
@@ -267,8 +240,6 @@ extension AppModel {
         d.row.library = libID
         for i in d.tags.indices { d.tags[i].library = libID }
         for i in d.row.tags.indices { d.row.tags[i].library = libID }
-        // Similar documents are rows the inspector can navigate to, so they
-        // need their library as much as the subject does.
         for i in d.similarDocuments.indices {
             d.similarDocuments[i].library = libID
             for j in d.similarDocuments[i].tags.indices { d.similarDocuments[i].tags[j].library = libID }

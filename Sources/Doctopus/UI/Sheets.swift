@@ -1,7 +1,5 @@
 import SwiftUI
 
-/// Batch rename with a live preview. Renaming is always explicit — nothing here
-/// runs automatically.
 struct RenameSheet: View {
     @Environment(AppModel.self) private var model
     @Binding var isPresented: Bool

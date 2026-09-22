@@ -11,9 +11,6 @@ struct DocumentListView: View {
     @State private var dropTargeted = false
 
     var body: some View {
-        // The approval view splits: the list on top, the selected document's
-        // review below, where what was worked out can be corrected and the
-        // folders it goes in chosen.
         Group {
             if model.selection.isQueueMode {
                 VSplitView {
@@ -82,7 +79,6 @@ struct DocumentListView: View {
     }
 }
 
-/// Review header, shown for both queue selections.
 private struct QueueBar: View {
     @Environment(AppModel.self) private var model
 
@@ -115,16 +111,12 @@ private struct QueueBar: View {
     }
 }
 
-// MARK: - List
-
 private struct DocumentTableView: View {
     @Environment(AppModel.self) private var model
     @Binding var renameSheet: Bool
     @Binding var tagSheet: Bool
     @Binding var filingRow: DocumentRow?
 
-    /// Reflects the model's sort onto the headers, so the arrow is in the same
-    /// place whether the order was chosen from a header or from the toolbar.
     private var sortOrder: Binding<[DocumentSort]> {
         Binding(
             get: { [DocumentSort(field: model.sort, order: model.sortAscending ? .forward : .reverse)] },
@@ -134,7 +126,6 @@ private struct DocumentTableView: View {
             })
     }
 
-    /// Queue mode swaps in review-specific columns.
     private var queueColumns: [QueueColumn] {
         model.selection.isQueueMode ? QueueColumn.allCases : []
     }
@@ -178,12 +169,9 @@ private struct DocumentTableView: View {
             }
             .width(min: 240, ideal: 400)
             .customizationID("document")
-            // The name column is the list; hiding it would leave nothing to click.
             .disabledCustomizationBehavior(.visibility)
 
             TableColumnForEach(queueColumns) { kind in
-                // Not sortable: queue mode is always ordered by when the event
-                // happened, so an arrow here would promise something untrue.
                 TableColumn(kind.title) { (row: DocumentRow) in
                     QueueCell(row: row, kind: kind)
                 }
@@ -191,8 +179,6 @@ private struct DocumentTableView: View {
                 .customizationID("queue.\(kind.rawValue)")
             }
 
-            // Every configured field gets a column; Settings decides which are
-            // on by default and the header menu takes it from there.
             TableColumnForEach(model.fields) { field in
                 TableColumn(field.name, sortUsing: DocumentSort(field: .field(field.key))) { (row: DocumentRow) in
                     if let value = row.values[field.key] {
@@ -206,8 +192,6 @@ private struct DocumentTableView: View {
                 .defaultVisibility(field.showInList ? .visible : .hidden)
             }
 
-            // Only worth a column once the list can hold rows from more than
-            // one place; two libraries can easily hold files of the same name.
             TableColumn("Library") { (row: DocumentRow) in
                 Text(model.library(row.library)?.displayName ?? "—")
                     .lineLimit(1)
@@ -228,8 +212,6 @@ private struct DocumentTableView: View {
             .width(min: 80, ideal: 100)
             .customizationID("date")
 
-            // Both tag systems can be shown, and are deliberately separate
-            // columns: one is Doctopus's, the other is the Finder's.
             TableColumn("Tags") { (row: DocumentRow) in
                 TagChips(tags: row.tags)
             }
@@ -244,8 +226,6 @@ private struct DocumentTableView: View {
             .customizationID("finderTags")
             .defaultVisibility(.hidden)
 
-            // Off by default: the sort menu offers "Added" too, and a sort with
-            // no column on screen would have nowhere to put its arrow.
             TableColumn("Added", sortUsing: DocumentSort(field: .added)) { row in
                 Text(row.createdAt, format: .dateTime.year().month(.abbreviated).day())
                     .monospacedDigit()
@@ -329,8 +309,6 @@ private struct QueueCell: View {
     }
 }
 
-/// Thumbnail with Finder's alias convention: a small corner arrow when the
-/// document is only present in this folder as a link to its master elsewhere.
 struct AliasBadgedThumbnail: View {
     let row: DocumentRow
     var width: CGFloat
@@ -340,9 +318,6 @@ struct AliasBadgedThumbnail: View {
 
     private var isGallery: Bool { width > 60 }
 
-    /// The badge is a corner mark, not a second subject: at row size it has to
-    /// stay legible against a 20-point thumbnail, but at gallery size the same
-    /// proportion turns it into a button stuck over the page.
     private var badge: CGFloat { max(6, width * (isGallery ? 0.14 : 0.28)) }
 
     var body: some View {
@@ -364,17 +339,11 @@ struct AliasBadgedThumbnail: View {
     }
 }
 
-// MARK: - Gallery
-
 private struct DocumentGalleryView: View {
     @Environment(AppModel.self) private var model
     @Binding var renameSheet: Bool
     @Binding var tagSheet: Bool
     @Binding var filingRow: DocumentRow?
-    /// Where a ⇧-extended selection reaches back to. Only a plain or ⌘ click
-    /// moves it; a ⇧ click reads it without disturbing it, the way Finder's
-    /// icon view does, so a run of ⇧ clicks keeps extending from the same spot
-    /// rather than walking forward one cell at a time.
     @State private var selectionAnchor: DocumentRef?
 
     private var cell: CGFloat { CGFloat(model.settings.galleryThumbnailSize) }
@@ -388,11 +357,8 @@ private struct DocumentGalleryView: View {
                         .draggable(DocumentDragItem(row)) {
                             DocumentDragPreview(row: row, count: model.dragCount(from: row))
                         }
-                        // One tap handler that reads the click count, rather
-                        // than a double-tap gesture stacked on a single-tap
-                        // one: SwiftUI holds a single tap back until a second
-                        // click can no longer follow, which left every
-                        // selection a few hundred milliseconds behind the mouse.
+                        // One tap handler reading the click count: a stacked double-tap gesture
+                        // makes SwiftUI hold every single click back.
                         .onTapGesture { click(row) }
                         .contextMenu {
                             DocumentMenu(rows: model.selectedIDs.contains(row.id) ? model.selectedRows : [row],
@@ -402,8 +368,6 @@ private struct DocumentGalleryView: View {
             }
             .padding(18)
         }
-        // Clicking the empty area behind the grid clears the selection and
-        // still offers the import menu, the way a Finder window does.
         .background {
             Color.clear
                 .contentShape(Rectangle())
@@ -412,8 +376,6 @@ private struct DocumentGalleryView: View {
         }
     }
 
-    /// The first click of a double-click has already selected the cell by the
-    /// time the second arrives, so the second only has to open it.
     private func click(_ row: DocumentRow) {
         if (NSApp.currentEvent?.clickCount ?? 1) >= 2 {
             model.open(model.selectedIDs.contains(row.id) ? model.selectedRows : [row])
@@ -449,8 +411,6 @@ enum GallerySelection {
            let clickedIndex = order.firstIndex(of: id) {
             let range = anchorIndex < clickedIndex ? anchorIndex...clickedIndex : clickedIndex...anchorIndex
             let ids = Set(order[range])
-            // ⌘⇧ adds the run to whatever was already selected, plain ⇧
-            // replaces the selection with it — the same split Finder makes.
             return Outcome(selection: modifiers.contains(.command) ? selection.union(ids) : ids,
                            anchor: anchor)
         }
@@ -506,17 +466,11 @@ private struct GalleryCell: View {
                 }
                 .foregroundStyle(isSelected ? Color.white : Color.primary)
         }
-        // One target for the whole cell: the padding around the thumbnail and
-        // the gap above the title are part of what the user is aiming at.
         .contentShape(.rect)
         .help(row.filename)
     }
 }
 
-// MARK: - Menus
-
-/// Shown when documents are right-clicked; falls back to the import menu when
-/// the click landed on empty space.
 private struct DocumentMenu: View {
     @Environment(AppModel.self) private var model
     let rows: [DocumentRow]
@@ -595,9 +549,6 @@ private struct DocumentMenu: View {
                 Button("Put Back") { model.restore(rows) }
                 Button("Remove from Library", role: .destructive) { model.forget(rows) }
             } else if case .folder(let folder) = model.selection, rows.allSatisfy(\.isAliasHere) {
-                // Everything selected is in this folder as an alias, and that
-                // is all deleting it takes away — so the menu says so rather
-                // than promising the Trash.
                 Button(rows.count == 1
                        ? "Remove Alias from “\((folder as NSString).lastPathComponent)”"
                        : "Remove \(rows.count) Aliases from “\((folder as NSString).lastPathComponent)”",
@@ -609,14 +560,10 @@ private struct DocumentMenu: View {
     }
 }
 
-/// Right-clicking empty space imports into whatever folder the sidebar has
-/// selected, so scan-in-place works from the browser as well as the tree.
 private struct BackgroundMenu: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
-        // `nil` rather than the Inbox, so an import from here is routed
-        // unless a folder is selected — the same as from the toolbar.
         ScanMenu(destination: model.explicitImportDirectory)
         Button("Import Files…") { importFiles() }
         Divider()
@@ -633,8 +580,6 @@ private struct BackgroundMenu: View {
         model.importFiles(urls, into: nil)
     }
 }
-
-// MARK: - Chrome
 
 private struct StatusDot: View {
     let row: DocumentRow
@@ -690,10 +635,6 @@ private struct ResultsBar: View {
     }
 }
 
-/// What a column header sorts by. The ordering itself is done by SQLite over
-/// the whole result set — the table only ever shows a window of it — so this
-/// exists to carry the choice into the model and to put the arrow on the right
-/// header. `compare` is implemented anyway so the comparator is not a lie.
 struct DocumentSort: SortComparator, Hashable {
     var field: SortField
     var order: SortOrder = .forward

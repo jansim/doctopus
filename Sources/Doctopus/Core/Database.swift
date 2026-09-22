@@ -1,11 +1,8 @@
 import Foundation
 import SQLite3
 
-/// Thin, allocation-conscious wrapper over the system SQLite3 C API.
-///
-/// Deliberately dependency-free: the system library already ships with FTS5,
-/// WAL and the `unicode61` tokenizer, which is everything the index needs.
-/// Not thread-safe on its own — always reached through `Store`.
+/// Thin wrapper over the system SQLite3 C API. Not thread-safe on its own —
+/// always reached through `Store`.
 final class Database {
     enum Error: Swift.Error, CustomStringConvertible {
         case open(String)
@@ -39,8 +36,8 @@ final class Database {
             "PRAGMA synchronous=NORMAL",
             "PRAGMA foreign_keys=ON",
             "PRAGMA temp_store=MEMORY",
-            "PRAGMA cache_size=-16000",   // 16 MB page cache
-            "PRAGMA mmap_size=268435456", // 256 MB
+            "PRAGMA cache_size=-16000",
+            "PRAGMA mmap_size=268435456",
         ] { try exec(pragma) }
     }
 
@@ -61,7 +58,6 @@ final class Database {
         }
     }
 
-    /// Returns a cached, reset prepared statement for `sql`.
     private func statement(_ sql: String) throws -> OpaquePointer {
         if let s = cache[sql] {
             sqlite3_reset(s)
@@ -88,7 +84,6 @@ final class Database {
         return lastInsertRowID
     }
 
-    /// Streams rows through `body`. The `Row` is only valid inside the closure.
     func query(_ sql: String, _ args: [Value] = [], _ body: (Row) throws -> Void) throws {
         let s = try statement(sql)
         bind(s, args)
@@ -124,8 +119,6 @@ final class Database {
             throw error
         }
     }
-
-    // MARK: - Binding
 
     enum Value {
         case int(Int64)

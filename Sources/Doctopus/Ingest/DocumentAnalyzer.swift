@@ -10,9 +10,6 @@ enum DocumentAnalyzer {
     struct Findings: Sendable {
         var date: Date?
         var dateSource: String?
-        /// Every plausible date found, best first. The review offers them as
-        /// chips: one wrong guess out of three good candidates is a click to
-        /// fix, where a single wrong answer is a retype.
         var dates: [DateCandidate] = []
         var title: String?
         var correspondent: String?
@@ -21,22 +18,13 @@ enum DocumentAnalyzer {
         var confidence: Double = 0
     }
 
-    /// What the analyzer needs to know that is the library's business rather
-    /// than the document's: how to read an ambiguous numeric date, and which
-    /// dates never count.
     struct Options: Sendable {
         var dateOrder: DateOrder = .automatic
-        /// Days that are never a document date — the date printed in a
-        /// letterhead, a form's revision date — as `yyyy-MM-dd`.
         var ignoredDays: Set<String> = []
         /// The library's dominant language, which is what `.automatic` reads
         /// the date order from. The *system* locale would mean the same library
         /// giving different answers on two Macs.
         var language: String?
-        /// Correspondents and document types that carry a pattern identifying
-        /// them. "Anything mentioning DE12 3456 is from this bank" is the
-        /// cheapest classification there is: no model, no network, and right
-        /// every time the pattern is.
         var entityRules: [Entity] = []
 
         static let `default` = Options()
@@ -53,7 +41,6 @@ enum DocumentAnalyzer {
 
         let pdfInfo = pdfAttributes(url)
 
-        // Date: OCR text > embedded document metadata > EXIF > filename > filesystem.
         var candidates = datesInText(text, source: "ocr", options: options)
         if let d = embeddedDate(pdfInfo) {
             candidates += [DateCandidate(date: DayDate.startOfDay(d), source: "pdf", labelled: false)]
@@ -69,8 +56,6 @@ enum DocumentAnalyzer {
             f.date = best.date
             f.dateSource = best.source
         } else {
-            // The filesystem is the last resort and is never offered as a
-            // choice: it says when the file arrived, not when it was issued.
             f.date = DayDate.startOfDay(fallbackDate)
             f.dateSource = "fs"
         }
@@ -93,34 +78,20 @@ enum DocumentAnalyzer {
         return f
     }
 
-    // MARK: - Dates
-
     private static let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.date.rawValue)
 
-    /// `12/03/2026`, `2026-03-12`, `12.3.26` — the forms whose meaning depends
-    /// on where you are, which is exactly why the reading is configured rather
-    /// than taken from whatever Mac this happens to be.
     private static let numericDate = try? NSRegularExpression(
         pattern: #"(?<![\d/.\-])(\d{1,4})[./\-](\d{1,2})[./\-](\d{2,4})(?![\d/.\-])"#)
 
-    /// Compact forms with no separators at all: `20260114`.
     private static let compactDate = try? NSRegularExpression(
         pattern: #"(?<!\d)(19|20)(\d{2})(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])(?!\d)"#)
 
-    /// Words that mark the date *of* the document, as opposed to a due date, a
-    /// print date or the year a form was revised.
     private static let dateCues = ["date", "datum", "dated", "issued", "invoice date",
                                    "rechnungsdatum", "ausstellungsdatum", "vom", "fecha", "datte"]
 
-    /// Every plausible date in a piece of text, in the order they appear.
-    ///
-    /// Three rules Paperless learned the hard way, all of them here: a year
-    /// before 1900 is not a date, **a document is never issued in the future**,
-    /// and an ambiguous numeric date is read according to a configured order
-    /// rather than the machine's locale.
-    ///
-    /// `allowFuture` is for the callers that are not reading a document date: a
-    /// due date is routinely in the future, and only the issue date cannot be.
+    /// A year before 1900 is not a date, an issue date is never in the future
+    /// (unless `allowFuture`), and an ambiguous numeric date follows the configured
+    /// order rather than the machine's locale.
     static func datesInText(_ text: String, source: String,
                             options: Options = .default,
                             allowFuture: Bool = false) -> [DateCandidate] {
@@ -187,9 +158,6 @@ enum DocumentAnalyzer {
         return out
     }
 
-    /// Best first: a date next to an explicit label beats one that is merely
-    /// present, and text beats the filename. At most a handful are kept — the
-    /// point is to offer a choice, not a list.
     static func rank(_ candidates: [DateCandidate], options: Options = .default,
                      limit: Int = 3) -> [DateCandidate] {
         func weight(_ c: DateCandidate) -> Int {
@@ -216,25 +184,18 @@ enum DocumentAnalyzer {
             .map { $0 }
     }
 
-    /// The single best date in a piece of text, for callers that only want one.
     static func dateInText(_ text: String, options: Options = .default) -> Date? {
         rank(datesInText(text, source: "ocr", options: options), options: options).first?.date
     }
 
-    /// Any date at all, future ones included — what a field holding a due date
-    /// needs, and exactly what a document's issue date must not accept.
     static func anyDate(in text: String, options: Options = .default) -> Date? {
         datesInText(text, source: "ocr", options: options, allowFuture: true).first?.date
     }
 
-    /// Turns three numbers into a day, given how the ambiguous ones are read.
     private static func assemble(_ parts: [Int], widths: [Int], order: DateOrder) -> Date? {
         guard parts.count == 3 else { return nil }
         let (a, b, c) = (parts[0], parts[1], parts[2])
-        // A four-digit first number can only be a year.
         if widths[0] == 4 { return day(year: a, month: b, day: c) }
-        // One of the two leading numbers being over twelve settles it whatever
-        // the configured order says — nobody writes a thirteenth month.
         if a > 12, b <= 12 { return day(year: expand(c), month: b, day: a) }
         if b > 12, a <= 12 { return day(year: expand(c), month: a, day: b) }
         switch order {
@@ -244,7 +205,6 @@ enum DocumentAnalyzer {
         }
     }
 
-    /// A two-digit year, by the POSIX convention: 69–99 is last century.
     private static func expand(_ year: Int) -> Int {
         guard year < 100 else { return year }
         return year >= 69 ? 1900 + year : 2000 + year
@@ -255,7 +215,6 @@ enum DocumentAnalyzer {
         var c = DateComponents()
         c.year = year; c.month = month; c.day = day
         guard let date = DayDate.calendar.date(from: c) else { return nil }
-        // Reject a day the month does not have: 31 February is a misread.
         let back = DayDate.calendar.dateComponents([.year, .month, .day], from: date)
         guard back.year == year, back.month == month, back.day == day else { return nil }
         return date
@@ -287,8 +246,6 @@ enum DocumentAnalyzer {
         return fmt.date(from: raw)
     }
 
-    // MARK: - Type
-
     private static let typeKeywords: [(String, [String])] = [
         ("Invoice",       ["invoice", "rechnung", "facture", "factura", "fattura", "amount due", "betrag", "vat id", "ust-id"]),
         ("Receipt",       ["receipt", "quittung", "kassenbon", "beleg", "thank you for your purchase", "subtotal"]),
@@ -313,12 +270,6 @@ enum DocumentAnalyzer {
         return best?.0
     }
 
-    // MARK: - Values that identify themselves
-
-    /// The first value whose own pattern matches the document. A correspondent
-    /// carrying its IBAN, a document type carrying the form number it always
-    /// prints — these beat every heuristic below, because somebody wrote them
-    /// down on purpose.
     static func matchingEntity(in text: String, rules: [Entity]) -> String? {
         guard !text.isEmpty else { return nil }
         let head = String(text.prefix(6000))
@@ -332,15 +283,11 @@ enum DocumentAnalyzer {
         return nil
     }
 
-    // MARK: - Correspondent
-
     private static let noiseWords: Set<String> = [
         "invoice", "rechnung", "receipt", "statement", "page", "seite", "date", "datum",
         "customer", "kunde", "total", "summary", "document", "copy", "original",
     ]
 
-    /// Known names win (keeps a library's vocabulary stable); otherwise the first
-    /// header line that reads like an organisation is used.
     static func correspondent(text: String, known: [String]) -> String? {
         guard !text.isEmpty else { return nil }
         let head = String(text.prefix(2500))
@@ -361,10 +308,8 @@ enum DocumentAnalyzer {
             let l = line.lowercased()
             if noiseWords.contains(where: { l.contains($0) }) { continue }
             if line.rangeOfCharacter(from: .letters) == nil { continue }
-            // Digit-heavy lines are addresses, order numbers or dates.
             let digits = line.filter(\.isNumber).count
             if Double(digits) / Double(line.count) > 0.2 { continue }
-            // Legal-form suffixes are a strong signal; otherwise require title case.
             let forms = ["gmbh", "ag", "ltd", "llc", "inc", "b.v.", "s.a.", "kg", "e.v.", "plc", "co."]
             if forms.contains(where: { l.hasSuffix($0) || l.contains(" \($0)") }) { return line }
             let capitalized = words.filter { $0.first?.isUppercase == true }.count
@@ -372,8 +317,6 @@ enum DocumentAnalyzer {
         }
         return nil
     }
-
-    // MARK: - Amount
 
     private static let amountRegex = try? NSRegularExpression(
         pattern: #"(?:(?:total|amount due|gesamt|summe|betrag|zu zahlen|balance)\D{0,20})([€$£]\s?\d[\d.,]{1,12}|\d[\d.,]{1,12}\s?(?:EUR|USD|GBP|CHF|€|\$|£))"#,
@@ -388,17 +331,13 @@ enum DocumentAnalyzer {
         return ns.substring(with: m.range(at: 1)).trimmingCharacters(in: .whitespaces)
     }
 
-    // MARK: - Title
-
     static func title(url: URL, text: String, type: String?, correspondent: String?) -> String? {
-        // A filename that is not machine noise is the best title we have.
         let stem = url.deletingPathExtension().lastPathComponent
         if !looksGenerated(stem) {
             return stem.replacingOccurrences(of: "_", with: " ")
                 .replacingOccurrences(of: "-", with: " ")
                 .trimmingCharacters(in: .whitespaces)
         }
-        // Otherwise build one from what we understood.
         if let correspondent, let type { return "\(type) — \(correspondent)" }
         let lines = text.components(separatedBy: "\n")
         if let heading = lines.first(where: { $0.count > 6 && $0.count < 70 }) {
@@ -407,7 +346,6 @@ enum DocumentAnalyzer {
         return type
     }
 
-    /// `IMG_4821`, `Scan 2026-01-14 at 10.22`, `document(3)` — camera and scanner noise.
     private static func looksGenerated(_ stem: String) -> Bool {
         let l = stem.lowercased()
         let prefixes = ["img_", "img-", "image", "scan", "scanned", "photo", "dsc", "doc", "document", "untitled", "unbenannt", "pdf"]

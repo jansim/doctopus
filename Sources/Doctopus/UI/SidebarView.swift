@@ -9,17 +9,12 @@ struct SidebarView: View {
         @Bindable var model = model
 
         List(selection: $model.selection) {
-            // Everything in this first section spans every open library.
             Section(model.libraries.count > 1 ? "All Libraries" : "Library") {
                 row(.all, "All Documents", "tray.full", model.stats.total)
-                // Needs Review is the queue filtered to undecided entries, so
-                // its count comes from the same place the queue's does.
                 row(.needsReview, "Needs Review", "exclamationmark.triangle",
                     model.queue.filter { !$0.approved }.count)
                 row(.untagged, "Untagged", "tag.slash", nil)
                 row(.queue, "Recent Processing", "clock.arrow.circlepath", model.queue.count)
-                // Only worth a row when there is something in it: an empty
-                // Trash is not a place anyone needs to visit.
                 if model.stats.deleted > 0 {
                     row(.deleted, "Recently Deleted", "trash", model.stats.deleted)
                 }
@@ -46,10 +41,6 @@ struct SidebarView: View {
                 }
             }
 
-            // Folders and tags belong to one library each, so with more than
-            // one open they are grouped under it. A single library needs no
-            // such header — its name is the window's, and the plain Folders /
-            // Tags sections read better.
             if model.libraries.count == 1, let library = model.libraries.first {
                 if !library.folders.isEmpty {
                     Section("Folders") {
@@ -74,8 +65,6 @@ struct SidebarView: View {
                 }
             }
 
-            // The Finder's tags, kept clearly apart from Doctopus's own: these
-            // live on the files themselves and are shared with every other app.
             if !model.finderTags.isEmpty {
                 Section("Finder Tags") {
                     ForEach(model.finderTags) { tag in
@@ -97,9 +86,6 @@ struct SidebarView: View {
                 }
             }
 
-            // Facet sections are entirely configuration-driven: which fields
-            // appear here, in what order, and under what name comes from
-            // Settings rather than being wired into the view.
             ForEach(model.fields.filter(\.showInSidebar)) { field in
                 let values = model.facets[field.key] ?? []
                 if !values.isEmpty {
@@ -135,9 +121,6 @@ struct SidebarView: View {
         }
     }
 
-    // MARK: - Rows
-
-    /// A library's tags, and the button that adds one to that same library.
     @ViewBuilder
     private func tagRows(_ library: Library) -> some View {
         ForEach(library.tags) { tag in
@@ -174,8 +157,6 @@ struct SidebarView: View {
         return Locale.current.localizedString(forLanguageCode: value)?.capitalized ?? value.uppercased()
     }
 
-    // MARK: - Context menus
-
     @ViewBuilder
     private func facetMenu(_ field: Field, _ facet: Facet) -> some View {
         Button("Change Icon…") { iconTarget = IconTarget(field: field, facet: facet) }
@@ -186,8 +167,6 @@ struct SidebarView: View {
                 initial: facet.value) else { return }
             model.renameFieldValue(field, from: facet.value, to: new)
         }
-        // A taxonomy value can identify itself. This is how most
-        // classification gets done with no model involved at all.
         if Store.entityColumn(for: field.builtinColumn) != nil {
             Button("Identify by…") {
                 guard let pattern = TextPrompt.ask(
@@ -211,8 +190,6 @@ struct SidebarView: View {
 
 }
 
-/// The header of one library's group of sections, and where that library as a
-/// whole is acted on.
 private struct LibraryHeader: View {
     @Environment(AppModel.self) private var model
     let library: Library
@@ -226,29 +203,20 @@ private struct LibraryHeader: View {
                     NSWorkspace.shared.activateFileViewerSelecting([library.root])
                 }
                 Divider()
-                // Closing forgets the library; the `.doctopus` folder it is
-                // named after stays on disk, so it can be reopened as it was.
                 Button("Close Library", role: .destructive) { model.closeLibrary(library) }
             }
     }
 }
 
-/// A tag row: selectable, renameable, colourable, and a drop target that
-/// assigns the tag to whatever was dragged.
 private struct TagRow: View {
     @Environment(AppModel.self) private var model
     let tag: Tag
-    /// Every tag in the same library, for the "Move Under" menu.
     var siblings: [Tag] = []
     @State private var targeted = false
 
     var body: some View {
         Label {
             HStack {
-                // Nesting is drawn by indentation rather than by disclosure
-                // triangles: a tag tree is shallow, and hiding a child behind a
-                // twisty makes it harder to drop onto, which is what these rows
-                // are mostly for.
                 if tag.depth > 0 {
                     Spacer().frame(width: CGFloat(tag.depth) * 11)
                 }
@@ -274,12 +242,8 @@ private struct TagRow: View {
         } isTargeted: { targeted = $0 }
     }
 
-    /// Every tag this one could sit under: not itself, and not anything already
-    /// below it, which would make a loop out of the tree.
     private var candidateParents: [Tag] {
         var banned: Set<Int64> = [tag.tagID]
-        // `siblings` is in drawing order, parents before children, so one pass
-        // is enough to find the whole subtree.
         for other in siblings where other.parentID.map({ banned.contains($0) }) == true {
             banned.insert(other.tagID)
         }
@@ -306,8 +270,6 @@ private struct TagRow: View {
         Toggle("Mirror to Disk as Aliases", isOn: Binding(
             get: { tag.mirrors },
             set: { model.setTagMirroring(tag, enabled: $0) }))
-        // Nesting: assigning a child assigns its parents too, so filtering by
-        // the parent finds everything underneath it.
         Menu("Move Under") {
             Button("Nothing — Top Level") { model.setTagParent(tag, to: nil) }
                 .disabled(tag.parentID == nil)
@@ -325,21 +287,14 @@ private struct TagRow: View {
     }
 }
 
-/// One folder in the physical tree, with its own disclosure state. Not private:
-/// the drop checks host a row of their own.
 struct FolderRow: View {
     @Environment(AppModel.self) private var model
     let node: FolderNode
     let depth: Int
 
     @State private var hovering: FolderDropIntent?
-    /// Carries what the keys said while the drag was over the row into the drop.
     @State private var dropState = FolderDropState()
-    /// Expanded unless the user has said otherwise, and the exceptions are
-    /// remembered across launches.
     private var isExpanded: Bool { !model.collapsedFolders.contains(node.path) }
-    /// Which library this folder is in — a rescan started here should not run
-    /// over the others.
     private var owningLibrary: Library? { model.libraries.first { $0.owns(path: node.path) } }
 
     var body: some View {
@@ -363,8 +318,6 @@ struct FolderRow: View {
                 } else {
                     Spacer().frame(width: 10)
                 }
-                // Roots show their folder name, not their full path — the path
-                // is still one hover away.
                 Text(node.name)
                     .lineLimit(1)
                     .truncationMode(.middle)
@@ -398,8 +351,6 @@ struct FolderRow: View {
 
     @ViewBuilder
     private var menu: some View {
-        // Scan-in-place: the destination is pinned to this folder, so the
-        // auto-routing engine is bypassed entirely.
         ScanMenu(destination: URL(fileURLWithPath: node.path))
         Button("Import Files Here…") { importHere() }
         Divider()
@@ -432,8 +383,6 @@ struct FolderRow: View {
         let url = URL(fileURLWithPath: node.path).appendingPathComponent(name, isDirectory: true)
         do {
             try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
-            // The watcher would pick this up on its own, but only after its
-            // debounce — refresh now so the new row shows immediately.
             model.refreshAll()
             model.selection = .folder(url.path)
         } catch {
@@ -441,9 +390,6 @@ struct FolderRow: View {
         }
     }
 
-    /// Renames the folder on disk. The watcher sees the old path vanish and the
-    /// new one appear, and relinks every document inside by hash — the same
-    /// path the rest of Doctopus already uses for Finder-driven moves.
     private func renameFolder() {
         guard let name = TextPrompt.ask(title: "Rename Folder",
                                         message: "Renames the folder on disk; documents inside keep their tags and metadata.",
@@ -454,12 +400,8 @@ struct FolderRow: View {
     }
 }
 
-/// Small modal text prompt. A sheet would need state plumbed through every
-/// context menu; for a one-field question this is the honest amount of code.
 enum TextPrompt {
     @MainActor
-    /// `allowEmpty` is for the prompts where clearing the field is a real
-    /// answer rather than a cancel — a pattern you want to stop using.
     static func ask(title: String, message: String, initial: String,
                     confirm: String = "Rename", allowEmpty: Bool = false) -> String? {
         let alert = NSAlert()
@@ -476,8 +418,6 @@ enum TextPrompt {
     }
 }
 
-/// The panel behind every "Import Files…". Folders can be chosen as well, and
-/// bring in the documents inside them.
 enum ImportPanel {
     @MainActor
     static func choose() -> [URL]? {
@@ -510,8 +450,6 @@ private struct StatusFooter: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Divider()
-            // Which model is running is a setting rather than a number, and
-            // Settings says it with more detail than a dot and one word can.
             HStack(spacing: 6) {
                 Text("\(model.stats.total.formatted()) doc\(model.stats.total == 1 ? "" : "s")")
                 Spacer(minLength: 6)
@@ -528,7 +466,6 @@ private struct StatusFooter: View {
 }
 
 extension View {
-    /// Consistent highlight for every sidebar drop target.
     func dropHighlight(_ active: Bool) -> some View {
         background {
             RoundedRectangle(cornerRadius: 5)
@@ -547,8 +484,6 @@ enum TagColor {
     }
 }
 
-/// The facet whose icon is being chosen. Wrapped because `sheet(item:)` needs
-/// something identifiable.
 struct IconTarget: Identifiable {
     var field: Field
     var facet: Facet

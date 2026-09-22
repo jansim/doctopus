@@ -4,7 +4,6 @@ import Foundation
 import FoundationModels
 #endif
 
-/// Structured result of the enrichment pass, independent of who produced it.
 struct DocumentInsight: Sendable {
     var summary: String?
     var correspondent: String?
@@ -14,7 +13,6 @@ struct DocumentInsight: Sendable {
     var title: String?
     var tags: [String] = []
     var confidence: Double = 0
-    /// Which backend produced this, stored verbatim in `metadata.source`.
     var source: String = "llm"
 }
 
@@ -45,12 +43,8 @@ private struct GeneratedInsight {
 }
 #endif
 
-/// Apple on-device Foundation model, when the machine has one.
-///
-/// The framework only exists on macOS 26 with Apple Intelligence enabled, so it
-/// is weak-linked and every touchpoint is behind an availability check. On any
-/// other machine `isAvailable` is false and the pipeline keeps its heuristic
-/// results — the app never degrades into a broken state.
+/// FoundationModels only exists on macOS 26 with Apple Intelligence, so it is
+/// weak-linked and every touchpoint sits behind an availability check.
 actor LLMService {
     private(set) var status: LLMStatus = .unsupported("Requires macOS 26 with Apple Intelligence")
     private var probed = false

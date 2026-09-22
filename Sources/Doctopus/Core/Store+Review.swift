@@ -1,11 +1,6 @@
 import Foundation
 
-/// What the review needs beyond the document itself: one approval state per
-/// document, a way to throw away what the pipeline guessed, and more places
-/// to file it than the router alone came up with.
 extension Store {
-
-    // MARK: - Approval
 
     /// Approval belongs to the document, not to one queue entry. Approving it
     /// settles every entry it has — otherwise an older "imported" entry left
@@ -25,7 +20,6 @@ extension Store {
         }
     }
 
-    /// Everything waiting for review, approved in one go.
     func approveAllPending() throws {
         try db.transaction {
             try db.run("""
@@ -36,16 +30,8 @@ extension Store {
         }
     }
 
-    // MARK: - Discarding generated information
-
-    /// Throws away what the pipeline worked out for a document — title,
-    /// correspondent, type, language, summary, intent, amount and the date it
-    /// guessed — along with the tags rules assigned and every suggestion still
-    /// pending. What someone typed is kept: a date set by hand, tags added by
-    /// hand, custom fields. The extracted text stays too, so Analyze can be run
-    /// again from scratch.
-    ///
-    /// Only the index changes. The file itself is not touched.
+    /// Throws away what the pipeline guessed; hand edits and extracted text stay.
+    /// Only the index changes — the file itself is never touched.
     func discardGeneratedInfo(_ docID: Int64) throws {
         try db.transaction {
             try db.run("""
@@ -63,12 +49,6 @@ extension Store {
         }
     }
 
-    // MARK: - More places to file a document
-
-    /// Folders where documents like this one already live — same
-    /// correspondent first, then same type — busiest first. The library's own
-    /// habits are often a better guess than any rule, and they cost nothing to
-    /// offer.
     func similarFolders(for docID: Int64, limit: Int = 4) throws -> [PathSuggestion] {
         guard let (correspondentID, docTypeID, directory) = try db.first("""
             SELECT m.correspondent_id, m.doc_type_id, d.directory FROM documents d
@@ -78,9 +58,6 @@ extension Store {
 
         var out: [PathSuggestion] = []
         var seen: Set<String> = [directory]
-        // Matching on the entity rather than on its spelling: two documents
-        // from the same correspondent are now the same correspondent even when
-        // the extractor wrote the name two ways.
         for (idColumn, entityID, label) in [("correspondent_id", correspondentID, "from"),
                                             ("doc_type_id", docTypeID, "of type")] {
             guard let entityID, let value = try entityName(entityID)?.nilIfBlank else { continue }
@@ -100,14 +77,10 @@ extension Store {
         return Array(out.prefix(limit))
     }
 
-    // MARK: - Similar Documents (More-Like-This)
-
-    /// Finds documents similar in content to `docID` using high-frequency terms from the search index.
     func similarDocuments(for docID: Int64, limit: Int = 5) throws -> [DocumentRow] {
         let text = (try? ocrText(docID)) ?? ""
         guard !text.isEmpty else { return [] }
 
-        // Extract distinctive words (>= 4 chars, excluding common stop words)
         let stopWords: Set<String> = [
             "with", "from", "that", "this", "have", "were", "what", "your", "page", "total", "date",
             "und", "der", "die", "das", "mit", "von", "fuer", "für", "den", "dem", "des",
@@ -141,8 +114,6 @@ extension Store {
         return similarIDs.compactMap { byID[$0] }
     }
 
-    /// The folders a document has been filed in as an alias by hand — its
-    /// secondary places. Tag aliases are the tag's business and are left out.
     func folderAliases(for docID: Int64) throws -> [String] {
         try db.map("SELECT path FROM aliases WHERE doc_id=? AND tag_id IS NULL", [.int(docID)]) {
             absPath($0.string(0))
