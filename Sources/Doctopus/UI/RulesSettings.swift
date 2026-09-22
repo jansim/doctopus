@@ -1,11 +1,9 @@
 import SwiftUI
 
-/// Every rule in the chosen library, in the order they are evaluated.
 struct RulesSettings: View {
     @Environment(AppModel.self) private var model
     @State private var rules: [Rule] = []
     @State private var selected: Rule.ID?
-    /// The rule open in the editor sheet — an unsaved draft when adding.
     @State private var editing: Rule?
 
     var body: some View {
@@ -47,7 +45,6 @@ struct RulesSettings: View {
                     Button("Delete", role: .destructive) { remove(id) }
                 }
             } primaryAction: { ids in
-                // Double-click (or Return) opens the rule.
                 if let id = ids.first { editing = rules.first { $0.id == id } }
             }
 
@@ -113,9 +110,6 @@ struct RulesSettings: View {
         }
     }
 
-    /// A new rule is only a draft until the editor saves it, so cancelling
-    /// leaves nothing behind. It goes to the bottom of the list, where it
-    /// cannot pre-empt a rule that already works.
     private func addRule() {
         let lowest = rules.map(\.priority).min() ?? 10
         editing = Rule(id: 0, name: "", priority: lowest - 10)
@@ -138,8 +132,6 @@ struct RulesSettings: View {
         }
     }
 
-    /// Order is priority, so moving a rule rewrites every priority to match
-    /// the new order rather than trying to squeeze one number in between.
     private func move(_ id: Rule.ID, by offset: Int) {
         guard let store = model.settingsLibrary?.store,
               let index = rules.firstIndex(where: { $0.id == id }) else { return }

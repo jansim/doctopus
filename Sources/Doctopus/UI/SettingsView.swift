@@ -15,15 +15,10 @@ struct SettingsView: View {
             IntelligenceSettings().tabItem { Label("Intelligence", systemImage: "sparkles") }
         }
         .frame(width: 620, height: 470)
-        // An analysis started from the Intelligence pane finishes while this
-        // window is in front, so it shows the result too.
         .noticeOverlay(model)
     }
 }
 
-/// Picks which library the per-library settings on a pane apply to. One choice,
-/// shared by every pane, so switching tabs never quietly changes the target.
-/// Hidden when there is nothing to choose between.
 struct LibraryPicker: View {
     @Environment(AppModel.self) private var model
 
@@ -116,9 +111,6 @@ private struct GeneralSettings: View {
     }
 }
 
-/// The list of document attributes. Built-ins and user-defined fields are
-/// managed identically here — which is the point: nothing is special-cased into
-/// prominence, the configuration decides.
 private struct FieldSettings: View {
     @Environment(AppModel.self) private var model
     @State private var newName = ""
@@ -196,8 +188,6 @@ private struct FieldRow: View {
                     model.updateField(updated)
                 }
             if field.isBuiltin {
-                // A built-in's type comes from the column behind it, so it is
-                // shown rather than offered.
                 Text(field.type == .string ? "built-in" : "built-in · \(field.type.label)")
                     .font(.caption2).foregroundStyle(.tertiary)
             } else {
@@ -245,7 +235,6 @@ private struct FieldRow: View {
                 })
     }
 
-    /// Positions are spaced by ten, so swapping with the neighbour is enough.
     private func move(by offset: Int) {
         let ordered = model.fields
         guard let index = ordered.firstIndex(where: { $0.id == field.id }) else { return }
@@ -261,7 +250,6 @@ private struct FieldRow: View {
 private struct TagSettings: View {
     @Environment(AppModel.self) private var model
 
-    /// Tags live in one library's database, so this pane edits one library's.
     private var tags: [Tag] { model.settingsLibrary?.tags ?? [] }
 
     var body: some View {
@@ -479,8 +467,6 @@ struct IntelligenceSettings: View {
             }
         }
         .formStyle(.grouped)
-        // The status was last read at launch, or before the endpoint was
-        // edited somewhere else; opening the pane is the moment to ask again.
         .task {
             model.refreshModelStatus()
             await loadModels()
@@ -575,8 +561,6 @@ struct IntelligenceSettings: View {
         availableModels = await model.intelligence.models(model.settings.remoteConfig)
     }
 
-    /// A library-wide run can mean thousands of requests to somebody's paid
-    /// API, so it asks first and says how many.
     private func confirmLibraryRun() {
         let count = model.stats.total
         let alert = NSAlert()

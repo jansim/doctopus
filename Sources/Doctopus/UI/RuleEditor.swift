@@ -1,11 +1,5 @@
 import SwiftUI
 
-/// Edits one rule: the conditions a document has to satisfy, and what happens
-/// to it when it does. Works on a draft, so Cancel really does leave the rule —
-/// and for a new one, the rule list — exactly as it was.
-///
-/// The count of documents already in the library the rule catches goes
-/// through the same matcher routing uses, so it is what routing will do.
 struct RuleEditor: View {
     @Environment(\.dismiss) private var dismiss
     @State private var draft: Rule
@@ -81,8 +75,6 @@ struct RuleEditor: View {
         .onChange(of: draft.requiresAll) { refreshMatches() }
     }
 
-    /// The draft without the rows the editor keeps on screen but nobody
-    /// filled in.
     private func tidied() -> Rule {
         var rule = draft
         rule.name = rule.name.nilIfBlank ?? "Untitled Rule"
@@ -95,7 +87,6 @@ struct RuleEditor: View {
         !draft.liveConditions.isEmpty && draft.hasEffect
     }
 
-    // MARK: - Conditions
 
     @ViewBuilder
     private var conditionsSection: some View {
@@ -158,8 +149,6 @@ struct RuleEditor: View {
         matched = names
     }
 
-    // MARK: - Actions
-
     @ViewBuilder
     private var actionsSection: some View {
         Section {
@@ -219,7 +208,6 @@ struct RuleEditor: View {
                                     date: DayDate.calendar.date(from: DateComponents(year: 2026, month: 3, day: 14)))
     }
 
-    /// Rendered from the same sample values as the template fields elsewhere.
     private var example: String? {
         let folder = destinationURL.map(describe)
         let name = draft.rename.map { TemplateFieldKind.filename.preview($0) }
@@ -239,8 +227,6 @@ struct RuleEditor: View {
         }
         return url.path
     }
-
-    // MARK: - Applying
 
     private func applyToMatching() {
         applying = true

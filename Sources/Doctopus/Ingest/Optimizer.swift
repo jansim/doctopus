@@ -4,13 +4,8 @@ import ImageIO
 import PDFKit
 import UniformTypeIdentifiers
 
-/// On-device raster optimization for scans and image-heavy PDFs.
-///
-/// The rule that keeps this safe: a page is only ever rasterized if it has **no**
-/// text layer to begin with. Pages that carry real text are re-drawn into the
-/// output PDF context, which copies their text and vector operators through
-/// intact. So the pass can shrink a 40 MB phone-camera scan without a
-/// searchable PDF ever losing its selectable text.
+/// Safety rule: a page is only rasterized if it has no text layer. Pages with
+/// text are redrawn, which keeps their text and vectors selectable.
 enum Optimizer {
 
     struct Result: Sendable {
@@ -23,16 +18,13 @@ enum Optimizer {
     struct Options: Sendable {
         var targetDPI: CGFloat = 150
         var jpegQuality: CGFloat = 0.6
-        /// Below this saving the original is kept — churning files for 3% is not worth it.
         var minimumSaving: Double = 0.15
-        /// Pages smaller than this are already efficient; skip them.
         var minimumPageBytes: Int64 = 120_000
         var grayscale = false
 
         static let `default` = Options()
     }
 
-    /// Returns nil when the file was left untouched.
     static func optimize(url: URL, options: Options = .default) throws -> Result? {
         guard url.pathExtension.lowercased() == "pdf" else { return nil }
         let originalSize = fileSize(url)
@@ -44,7 +36,6 @@ enum Optimizer {
         let bytesPerPage = originalSize / Int64(pageCount)
         guard bytesPerPage > options.minimumPageBytes else { return nil }
 
-        // Which pages are pure raster (no text to preserve)?
         var rasterPages = Set<Int>()
         for i in 0..<pageCount {
             let text = pdfkit?.page(at: i)?.string?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -101,8 +92,6 @@ enum Optimizer {
         return Result(originalSize: originalSize, newSize: newSize, pagesRasterized: rasterized)
     }
 
-    /// Renders one page and round-trips it through JPEG so Core Graphics embeds
-    /// the compressed data rather than a fresh lossless bitmap.
     private static func compressedImage(of page: CGPDFPage, box: CGRect, options: Options) -> CGImage? {
         var scale = options.targetDPI / 72.0
         let longest = max(box.width, box.height) * scale

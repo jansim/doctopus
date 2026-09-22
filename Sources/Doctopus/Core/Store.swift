@@ -4,16 +4,12 @@ import Foundation
 /// here, which keeps the connection single-threaded without a mutex.
 actor Store {
     let db: Database
-    /// The `library.doctopus` directory holding the database.
     let containerURL: URL
-    /// The library root: the folder that contains `library.doctopus`. Document
-    /// paths in the database are stored relative to this.
     let root: URL
-    /// Stable identifier from `meta.json`, unchanged when the folder moves.
     let libraryID: LibraryID
     var fieldCache: [Field]?
 
-    private let rootPrefix: String   // root.path + "/"
+    private let rootPrefix: String
 
     init(directory: URL) throws {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -27,15 +23,9 @@ actor Store {
         try Schema.migrate(db)
     }
 
-    // MARK: - Relative-path translation
-    //
-    // The database stores every document/alias path relative to `root` so the
-    // library is portable. Nothing outside `Store` sees a relative path: reads
-    // hand back absolute URLs, writes take them.
+    // Paths are stored relative to `root` so the library is portable. Nothing
+    // outside `Store` ever sees a relative path.
 
-    /// Normalises the `/var`, `/tmp`, `/etc` symlinks to their `/private/…`
-    /// targets so a path from the file-system enumerator, from FSEvents and from
-    /// the app's own `URL`s all compare equal. `/Users/…` paths are untouched.
     nonisolated static func canonical(_ path: String) -> String {
         for prefix in ["/var/", "/tmp/", "/etc/"] where path.hasPrefix(prefix) {
             return "/private" + path
@@ -43,8 +33,6 @@ actor Store {
         return path
     }
 
-    /// Absolute filesystem path → root-relative. Paths outside the root (a
-    /// tag-alias folder the user pointed elsewhere) are stored as-is.
     nonisolated func relPath(_ absolute: String) -> String {
         let path = Store.canonical(absolute)
         if path == root.path { return "" }
@@ -52,7 +40,6 @@ actor Store {
         return String(path.dropFirst(rootPrefix.count))
     }
 
-    /// Root-relative → absolute. An already-absolute value is returned untouched.
     nonisolated func absPath(_ relative: String) -> String {
         if relative.isEmpty { return root.path }
         if relative.hasPrefix("/") { return relative }
@@ -63,21 +50,13 @@ actor Store {
         URL(fileURLWithPath: absPath(relative))
     }
 
-    // MARK: - meta.json
-
-    /// What this build of Doctopus writes. A library stamped with a higher
-    /// number was written by a newer app, and reading it with this one would
-    /// misinterpret whatever it does not know about — so it is refused instead.
     static let formatVersion = 2
 
-    /// This build's marketing version, stamped into `meta.json` so a library
-    /// that has to be refused can say which app last wrote it.
     static var appVersion: String {
         (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "unknown"
     }
 
     enum OpenError: Swift.Error, CustomStringConvertible {
-        /// The library was written by a newer Doctopus than this one.
         case futureFormat(found: Int, supported: Int, writtenBy: String?)
 
         var description: String {
@@ -94,7 +73,6 @@ actor Store {
         var id: String
         var formatVersion: Int
         var name: String?
-        /// The marketing version of the app that last wrote this file.
         var appVersion: String?
     }
 
@@ -111,8 +89,6 @@ actor Store {
                                              supported: formatVersion,
                                              writtenBy: meta.appVersion)
             }
-            // Opening an older library upgrades it in step with the schema
-            // migrations that are about to run.
             if meta.formatVersion < formatVersion || meta.appVersion != appVersion {
                 meta.formatVersion = formatVersion
                 meta.appVersion = appVersion
@@ -130,8 +106,6 @@ actor Store {
         return meta.id
     }
 
-    // MARK: - Settings
-
     func setting(_ key: String) throws -> String? {
         try db.first("SELECT value FROM settings WHERE key=?", [.text(key)]) { $0.string(0) }
     }
@@ -141,18 +115,13 @@ actor Store {
                    [.text(key), .text(value)])
     }
 
-    // MARK: - Document ingest
-
     struct FileFacts: Sendable {
-        /// Absolute filesystem path; `Store` stores it relative to the root.
         var path: String
         var size: Int64
         var mtime: Date
         var created: Date
     }
 
-    /// Inserts or refreshes the row for a file. Returns the row id and whether
-    /// the content changed (and therefore needs re-OCR).
     func upsertDocument(_ f: FileFacts) throws -> (id: Int64, isNew: Bool, changed: Bool) {
         let url = URL(fileURLWithPath: f.path)
         let relative = relPath(f.path)
@@ -172,8 +141,6 @@ actor Store {
                 WHERE id=?
                 """, [.int(f.size), .double(f.mtime.timeIntervalSince1970),
                       .text(dir), .text(name), .text(ext), .int(id)])
-            // Only the filename is indexed here, so a scan that finds nothing
-            // new does not rewrite the search index for every document it sees.
             if oldName != name { try refreshSearchIndex(id) }
             if changed {
                 try db.run("UPDATE documents SET hash=NULL, original_hash=NULL, ocr_state=0 WHERE id=?",
@@ -192,8 +159,6 @@ actor Store {
         return (id, true, true)
     }
 
-    /// Disk is the source of truth: a vanished path that reappears elsewhere with
-    /// the same content is a move, not a deletion. `seenPaths` are absolute.
     func reconcileMissing(seenPaths: Set<String>) throws -> Int {
         let seenRelative = Set(seenPaths.map { relPath($0) })
         var stale: [Int64] = []
@@ -208,8 +173,6 @@ actor Store {
         return stale.count
     }
 
-    /// Reattaches a missing row to a new path when the content hash matches,
-    /// so a Finder move keeps all metadata. `newPath` is absolute.
     func relinkByHash(hash: String, newPath: String) throws -> Int64? {
         let match = try db.first(
             "SELECT id FROM documents WHERE hash=? AND missing=1 AND deleted_at IS NULL LIMIT 1", [.text(hash)],
@@ -225,24 +188,13 @@ actor Store {
         return id
     }
 
-    /// `path` is absolute.
     func markMissing(path: String) throws {
         try db.run("UPDATE documents SET missing=1, missing_since=COALESCE(missing_since,?) WHERE path=?",
                    [.double(Date().timeIntervalSince1970), .text(relPath(path))])
     }
 
-    /// How long a row whose file has vanished is kept. It is the row that makes
-    /// a Finder move survive — relinked by content hash, with its tags, title
-    /// and history intact — and rows are tiny, so the old week was far too
-    /// short to buy anything. Paperless settled on thirty days; so does this.
     static let missingGrace: TimeInterval = 30 * 24 * 3600
 
-    /// Missing rows are kept for a while on purpose: they are what lets a file
-    /// moved in Finder be relinked by content hash with its tags and metadata
-    /// intact. Past the grace period they are just dead weight — unless the
-    /// file is sitting in the Trash, where it can still be put back, and
-    /// forgetting the row now is exactly what would turn that into a brand-new
-    /// document with nothing on it.
     @discardableResult
     func purgeMissing(olderThan seconds: TimeInterval = Store.missingGrace) throws -> Int {
         let cutoff = Date().timeIntervalSince1970 - seconds
@@ -277,10 +229,6 @@ actor Store {
         return Set(contents.map(\.lastPathComponent))
     }
 
-    // MARK: - Soft delete
-
-    /// Marks a document deleted without forgetting it. `trashPath` is where the
-    /// file ended up in the Trash, which is what Restore needs to put it back.
     func softDelete(_ docID: Int64, trashPath: String?) throws {
         let now = Date().timeIntervalSince1970
         try db.run("""
@@ -290,7 +238,6 @@ actor Store {
             """, [.double(now), .text(trashPath), .double(now), .int(docID)])
     }
 
-    /// Where in the Trash a deleted document's file went, if it is still there.
     func trashedFile(_ docID: Int64) throws -> String? {
         guard let path = try db.first("SELECT deleted_path FROM documents WHERE id=?",
                                       [.int(docID)], { $0.stringOrNil(0) }) ?? nil
@@ -298,8 +245,6 @@ actor Store {
         return FileManager.default.fileExists(atPath: path) ? path : nil
     }
 
-    /// Brings a deleted document back. The caller puts the file back first;
-    /// this revives the row, with everything that was ever on it.
     func restore(_ docID: Int64, at path: String? = nil) throws {
         if let path {
             try updatePath(docID, to: path)
@@ -310,8 +255,6 @@ actor Store {
             """, [.int(docID)])
     }
 
-    /// Deleted rows past the grace period, for good. The file is the Trash's
-    /// business; this only forgets the row.
     @discardableResult
     func purgeDeleted(olderThan seconds: TimeInterval = Store.missingGrace) throws -> Int {
         let cutoff = Date().timeIntervalSince1970 - seconds
@@ -328,10 +271,6 @@ actor Store {
         } ?? 0
     }
 
-    /// Records the content hash of the file as it is on disk now. `isOriginal`
-    /// additionally stamps `original_hash`: the bytes as they arrived, before
-    /// optimization rewrote them. Both are needed, because a document imported
-    /// and then re-encoded no longer hashes to what its source file does.
     func setHash(_ id: Int64, _ hash: String, isOriginal: Bool = false) throws {
         if isOriginal {
             try db.run("UPDATE documents SET hash=?, original_hash=? WHERE id=?",
@@ -341,10 +280,6 @@ actor Store {
         }
     }
 
-    /// Documents whose bytes match `hash`, as stored now or as they arrived.
-    /// Matching both is what makes the check fire for documents Doctopus
-    /// optimized itself — their `hash` is of the re-encoded file, which the
-    /// original will never match.
     func documents(matchingHash hash: String, excluding docID: Int64? = nil) throws -> [Int64] {
         try db.map("""
             SELECT id FROM documents
@@ -358,8 +293,6 @@ actor Store {
         var path: String
     }
 
-    /// Finds any existing non-deleted document that matches `hash` either on disk
-    /// or in its pre-optimized original form.
     func findDuplicate(hash: String) throws -> DuplicateMatch? {
         try db.first("""
             SELECT id, filename, path FROM documents
@@ -377,27 +310,20 @@ actor Store {
             """, [.int(limit)]) { ($0.int(0), absPath($0.string(1)), $0.string(2)) }
     }
 
-    /// Every document still present on disk, newest first. The input for a
-    /// library-wide manual pass, which wants ids rather than whole rows.
     func allDocumentIDs(limit: Int = 20000) throws -> [Int64] {
         try db.map("SELECT id FROM documents WHERE missing=0 AND deleted_at IS NULL ORDER BY created_at DESC LIMIT ?",
                    [.int(limit)]) { $0.int(0) }
     }
 
-    /// Absolute path of a document.
     func documentPath(_ id: Int64) throws -> String? {
         try db.first("SELECT path FROM documents WHERE id=?", [.int(id)]) { absPath($0.string(0)) }
     }
 
-    /// Pages counted the last time the document was read, for a pass that asks
-    /// the model about a document already in the index.
     func documentPageCount(_ id: Int64) throws -> Int? {
         try db.first("SELECT page_count FROM documents WHERE id=?", [.int(id)]) {
             $0.intOrNil(0).map(Int.init)
         } ?? nil
     }
-
-    // MARK: - OCR
 
     func storeOCR(docID: Int64, text: String, confidence: Double, words: Int,
                   source: String, elapsedMS: Int, pageCount: Int?) throws {
@@ -419,13 +345,9 @@ actor Store {
         try db.run("UPDATE documents SET ocr_state=? WHERE id=?", [.int(state.rawValue), .int(id)])
     }
 
-    /// The extracted text of one document. `doc_fts` is keyed by `rowid`, so
-    /// this is a single row lookup rather than a scan of the whole corpus.
     func ocrText(_ id: Int64) throws -> String {
         try db.first("SELECT body FROM doc_fts WHERE rowid=?", [.int(id)]) { $0.string(0) } ?? ""
     }
-
-    // MARK: - Search index
 
     /// `bm25()` weights for `doc_fts`, in column order: title, correspondent,
     /// doc_type, tags, fields, notes, filename, body. A title hit should
@@ -433,10 +355,6 @@ actor Store {
     /// and would otherwise dominate purely by having more chances to match.
     static let bm25Weights = "10.0, 8.0, 4.0, 4.0, 2.0, 2.0, 3.0, 1.0"
 
-    /// Rebuilds one document's row in `doc_fts` from whatever the index holds
-    /// about it now. Pass `body` when the extracted text is what changed;
-    /// otherwise the text already indexed is carried over, so a metadata or
-    /// tag edit never costs a re-extraction.
     func refreshSearchIndex(_ docID: Int64, body: String? = nil) throws {
         let text: String
         if let body {
@@ -473,13 +391,9 @@ actor Store {
         }
     }
 
-    /// Every document that carries a tag, for refreshing the index after the
-    /// tag itself is renamed, merged or dropped.
     func documentIDs(withTag tagID: Int64) throws -> [Int64] {
         try db.map("SELECT doc_id FROM document_tags WHERE tag_id=?", [.int(tagID)]) { $0.int(0) }
     }
-
-    // MARK: - Metadata
 
     struct MetadataPatch: Sendable {
         var docID: Int64
@@ -496,8 +410,6 @@ actor Store {
         var amount: String?
     }
 
-    /// The patch carries names; the index stores the entity they refer to,
-    /// making one if this is the first document to name it.
     func storeMetadata(_ p: MetadataPatch) throws {
         let correspondentID = try entityID(named: p.correspondent, builtin: "correspondent")
         let docTypeID = try entityID(named: p.docType, builtin: "doc_type")
@@ -527,12 +439,9 @@ actor Store {
         try refreshSearchIndex(p.docID)
     }
 
-    /// User edits overwrite unconditionally (including clearing a field).
     func overwriteMetadataField(_ docID: Int64, column: String, value: String?) throws {
         guard Store.editableColumns.contains(column) else { return }
         try db.run("INSERT OR IGNORE INTO metadata(doc_id) VALUES(?)", [.int(docID)])
-        // A taxonomy value is a row; typing a new name into the inspector makes
-        // one, exactly as picking an existing name reuses it.
         if let idColumn = Store.entityColumns[column] {
             let id = try entityID(named: value, builtin: column)
             try db.run("UPDATE metadata SET \(idColumn)=? WHERE doc_id=?", [.int(id), .int(docID)])
@@ -540,7 +449,6 @@ actor Store {
             return
         }
         try db.run("UPDATE metadata SET \(column)=? WHERE doc_id=?", [.text(value), .int(docID)])
-        // The amount's text keeps the currency; its number is what sorts.
         if column == "amount" {
             try db.run("UPDATE metadata SET amount_value=? WHERE doc_id=?",
                        [.double(value.flatMap { FieldType.number(from: $0) }), .int(docID)])
@@ -548,19 +456,12 @@ actor Store {
         try refreshSearchIndex(docID)
     }
 
-    /// A document is issued on a day, so that is what is stored: the UTC start
-    /// of it, never an instant in a timezone nobody recorded.
     func setDocumentDate(_ docID: Int64, _ date: Date?, source: String = "manual") throws {
         try db.run("INSERT OR IGNORE INTO metadata(doc_id) VALUES(?)", [.int(docID)])
         try db.run("UPDATE metadata SET doc_date=?, date_source=? WHERE doc_id=?",
                    [.date(date.map { DayDate.startOfDay($0) }), .text(source), .int(docID)])
     }
 
-    // MARK: - Date candidates
-
-    /// Replaces the dates found for a document, best first. Keeping the ones
-    /// that were not chosen is what lets the review offer them as a click
-    /// rather than making someone retype the right one.
     func setDateCandidates(_ candidates: [DateCandidate], for docID: Int64) throws {
         try db.transaction {
             try db.run("DELETE FROM date_candidates WHERE doc_id=?", [.int(docID)])
@@ -584,8 +485,6 @@ actor Store {
         }
     }
 
-    /// The language most of this library's documents are in, which is what an
-    /// automatic date order reads itself from.
     func dominantLanguage() throws -> String? {
         try db.first("""
             SELECT m.language FROM metadata m
@@ -595,12 +494,6 @@ actor Store {
             """) { $0.stringOrNil(0) } ?? nil
     }
 
-    // MARK: - Tags
-
-    /// Every tag, with how many live documents carry it, in the order the
-    /// sidebar draws them: each parent immediately followed by its children,
-    /// alphabetically within a level, and `depth` filled in so the view only
-    /// has to indent.
     func tags() throws -> [Tag] {
         let flat = try db.map("""
             SELECT t.id, t.name, t.color, t.mirrors, t.folder, COUNT(dt.doc_id), t.parent_id
@@ -616,9 +509,6 @@ actor Store {
         return Store.nested(flat)
     }
 
-    /// Flattens a tag list into drawing order, stamping each one's depth. A tag
-    /// whose parent is missing — or which is part of a cycle some older build
-    /// wrote — is treated as a root rather than being dropped.
     nonisolated static func nested(_ tags: [Tag]) -> [Tag] {
         var children: [Int64: [Tag]] = [:]
         var roots: [Tag] = []
@@ -640,12 +530,10 @@ actor Store {
             for child in children[tag.tagID] ?? [] { walk(child, depth: depth + 1) }
         }
         for root in roots { walk(root, depth: 0) }
-        // Anything left is in a cycle; show it rather than losing it.
         for tag in tags where !placed.contains(tag.tagID) { walk(tag, depth: 0) }
         return out
     }
 
-    /// The tags above this one, nearest parent first.
     func ancestors(of tagID: Int64) throws -> [Int64] {
         var out: [Int64] = []
         var current = tagID
@@ -661,18 +549,10 @@ actor Store {
         return out
     }
 
-    /// Moves a tag under another, or to the top level with `nil`.
-    ///
-    /// Refuses a tag as its own parent, a descendant as its parent, and a move
-    /// that would push the tree past its depth cap. Re-runs ancestor assignment
-    /// over every document that already carries the tag, so the documents catch
-    /// up with the new shape rather than being right only for what is tagged
-    /// next.
     @discardableResult
     func setTagParent(_ tagID: Int64, to parentID: Int64?) throws -> Bool {
         guard tagID != parentID else { return false }
         if let parentID {
-            // A descendant as the parent would make a cycle out of the tree.
             if try ancestors(of: parentID).contains(tagID) { return false }
             let above = try ancestors(of: parentID).count + 1
             let below = try depthBelow(tagID)
@@ -683,7 +563,6 @@ actor Store {
         return true
     }
 
-    /// How many levels of tags sit under this one.
     private func depthBelow(_ tagID: Int64) throws -> Int {
         let children = try db.map("SELECT id FROM tags WHERE parent_id=?", [.int(tagID)]) { $0.int(0) }
         guard !children.isEmpty else { return 0 }
@@ -694,8 +573,6 @@ actor Store {
         return deepest
     }
 
-    /// Gives every document carrying `tagID` — or anything under it — the
-    /// ancestors it should now have.
     func reapplyAncestors(of tagID: Int64) throws {
         var subtree = [tagID]
         var frontier = [tagID]
@@ -724,13 +601,6 @@ actor Store {
         }
     }
 
-    /// A slash in the name — "tax/2025" — nests rather than becoming a literal
-    /// character: each segment becomes its own tag, chained under the one
-    /// before it, exactly as typing each name separately and "Move Under"-ing
-    /// the next one by hand would leave it. Tag names stay globally unique
-    /// either way (see the table's own constraint), so a segment that already
-    /// exists elsewhere in the tree is reused and re-parented rather than
-    /// duplicated — the same reuse-by-name a plain tag already gets.
     @discardableResult
     func tagID(named name: String, color: Int64 = 0) throws -> Int64 {
         let segments = name.split(separator: "/")
@@ -755,9 +625,6 @@ actor Store {
         return try db.run("INSERT INTO tags(name, color) VALUES(?,?)", [.text(name), .int(color)])
     }
 
-    /// Assigning a tag assigns everything it sits under too. That is what makes
-    /// "Finances" find what is filed as "Finances / Invoices" — the ancestors
-    /// are marked automatic, since nobody chose them by hand.
     func assign(tag tagID: Int64, to docID: Int64, auto: Bool = false) throws {
         guard tagID > 0 else { return }
         try db.run("INSERT OR IGNORE INTO document_tags(doc_id, tag_id, auto) VALUES(?,?,?)",
@@ -796,9 +663,6 @@ actor Store {
         }
     }
 
-    // MARK: - Aliases
-
-    /// `path` is the absolute location of the alias file.
     func recordAlias(docID: Int64, tagID: Int64?, path: String) throws {
         try db.run("INSERT OR REPLACE INTO aliases(doc_id, tag_id, path, created_at) VALUES(?,?,?,?)",
                    [.int(docID), .int(tagID), .text(relPath(path)), .double(Date().timeIntervalSince1970)])
@@ -814,17 +678,6 @@ actor Store {
         try db.run("DELETE FROM aliases WHERE id=?", [.int(id)])
     }
 
-    // MARK: - History and the processing queue
-    //
-    // Two different things, kept apart. `events` is the record of what happened
-    // to a document: append-only, never trimmed, and the only honest answer to
-    // "why is this file here". `processing` is the recency view the review
-    // reads — bounded, with the one piece of state that is its own, whether an
-    // entry has been signed off — and it reads everything else back from the
-    // event it points at.
-
-    /// How many entries the review queue keeps on show. The history behind it
-    /// is not trimmed; only this view is.
     static let queueLength = 500
 
     func logProcessing(docID: Int64, action: String, detail: String?, confidence: Double?,
@@ -836,10 +689,6 @@ actor Store {
                   .double(confidence), .text(rule), .text(from), .text(to)])
         try db.run("INSERT INTO processing(event_id, doc_id, status) VALUES(?,?,?)",
                    [.int(eventID), .int(docID), .bool(approved)])
-        // An entry that needs review makes the document need review, so the
-        // status dot and the inspector agree with the queue. An approved entry
-        // leaves the document as it was: a later "indexed" does not settle an
-        // earlier question.
         if !approved {
             try db.run("UPDATE documents SET approved=0 WHERE id=?", [.int(docID)])
         }
@@ -852,9 +701,6 @@ actor Store {
             """, [.int(Store.queueLength - 1)])
     }
 
-    /// A change somebody made by hand. It joins the record but never the
-    /// review queue: what the user typed is the answer, not a proposal, so
-    /// recording it must not push the document back into review.
     func logEdit(docID: Int64, detail: String) throws {
         try db.run("INSERT INTO events(doc_id, at, action, detail) VALUES(?,?,?,?)",
                    [.int(docID), .double(Date().timeIntervalSince1970),
@@ -879,9 +725,6 @@ actor Store {
         }
     }
 
-    /// Everything that has happened to one document, newest first. Unlike the
-    /// queue this is complete: nothing trims it, so an import from a year and
-    /// fifty thousand documents ago is still here.
     func history(for docID: Int64, limit: Int = 200) throws -> [HistoryEvent] {
         try db.map("""
             SELECT id, at, action, detail, confidence, rule, from_path, to_path
@@ -895,11 +738,6 @@ actor Store {
         }
     }
 
-    // MARK: - Notes
-
-    /// A document's notes, newest first. This is the escape hatch for what the
-    /// schema does not model — "cancelled by phone on the 4th", "the original
-    /// is in the red folder" — and it is indexed, so it is findable.
     func notes(for docID: Int64) throws -> [Note] {
         try db.map("""
             SELECT id, body, created_at, updated_at FROM notes
@@ -921,7 +759,6 @@ actor Store {
         return id
     }
 
-    /// Editing a note to nothing deletes it — an empty note is not a note.
     func updateNote(_ id: Int64, body: String) throws {
         guard let docID = try db.first("SELECT doc_id FROM notes WHERE id=?", [.int(id)],
                                        { $0.int(0) }) else { return }
@@ -942,22 +779,15 @@ actor Store {
         try refreshSearchIndex(docID)
     }
 
-    /// How many events the library has recorded in total — the number the
-    /// capped queue used to throw away.
     func eventCount() throws -> Int {
         try db.first("SELECT COUNT(*) FROM events") { Int($0.int(0)) } ?? 0
     }
-
-    // MARK: - Classifier Training Data
 
     struct ClassifierTrainingData: Sendable {
         var docs: [DocumentClassifier.TrainingDoc]
         var fingerprint: String
     }
 
-    /// The training set's fingerprint on its own, without loading a line of
-    /// document text. Indexing asks once per document, where the corpus only
-    /// changes when a document is approved or edited.
     func classifierTrainingFingerprint() throws -> String {
         let row = try db.first("""
             SELECT COUNT(*), COALESCE(MAX(mtime), 0)
@@ -1001,8 +831,6 @@ actor Store {
         return ClassifierTrainingData(docs: trainingDocs, fingerprint: fingerprint)
     }
 
-    // MARK: - Optimization Originals
-
     var originalsDirectory: URL {
         containerURL.appendingPathComponent("originals", isDirectory: true)
     }
@@ -1016,9 +844,6 @@ actor Store {
         return FileManager.default.fileExists(atPath: file.path) ? file : nil
     }
 
-    /// - Returns: whether this call is the one that wrote the copy. Originals
-    ///   are content-addressed and therefore shared, so an already-present copy
-    ///   belongs to an earlier optimization and is not the caller's to remove.
     @discardableResult
     func saveOriginalFile(for docID: Int64, from sourceURL: URL, hash: String) throws -> Bool {
         let fm = FileManager.default
@@ -1030,18 +855,10 @@ actor Store {
         return true
     }
 
-    /// Drops a pre-optimization copy whose optimization never happened. Nothing
-    /// records it in that case — `original_size` stays NULL — so left alone it
-    /// would sit in `originals/` for the life of the library.
     func discardOriginalFile(hash: String, ext: String) {
         try? FileManager.default.removeItem(at: originalsDirectory.appendingPathComponent("\(hash).\(ext)"))
     }
 
-    /// Frees a document's saved pre-optimization copy for good — the fallback
-    /// `Revert to Original` offers, not the optimized file already in place,
-    /// which is untouched. `original_size` is kept so the savings the
-    /// optimization made stay on record; only `original_hash` is cleared,
-    /// which is what `originalFileURL` and `revertOptimization` key off.
     func deleteOriginalFile(for docID: Int64) throws {
         guard let (path, originalHash) = try db.first("""
             SELECT path, original_hash FROM documents
@@ -1095,8 +912,6 @@ actor Store {
         return true
     }
 
-    // MARK: - Verification queries
-
     struct VerificationDocInfo: Sendable {
         var id: Int64
         var path: String
@@ -1138,22 +953,6 @@ actor Store {
         } ?? 0
     }
 
-    // MARK: - Undo
-
-    /// Reverts the most recent undoable file event (such as a move, rename, or routing).
-    ///
-    /// Two of these are about aliases rather than about the file, and both
-    /// carry the alias's own path as `to_path`:
-    ///
-    /// An `unfiled` event is a deleted alias. Nothing was moved, so nothing
-    /// moves back — the alias is simply written again, pointing at wherever
-    /// the document is now.
-    ///
-    /// A `promoted` event is a document that took the place of one of its own
-    /// aliases when it was deleted. It is put back whole: the document returns
-    /// to the folder it was deleted from *and* the alias it replaced is written
-    /// again, because undoing a delete that quietly unfiled the document from
-    /// somewhere else would be a worse surprise than the delete was.
     func undoLastEvent() async throws -> (action: String, filename: String)? {
         let fm = FileManager.default
         // Skips (and discards) events whose target file has since moved
@@ -1171,10 +970,6 @@ actor Store {
                 return nil
             }
 
-            // A deleted alias left nothing at `to` to put back, so this one is
-            // undone by writing the alias again rather than by moving a file.
-            // It is skipped, like any other stale event, when the document it
-            // pointed at is itself gone.
             if last.action == "unfiled" {
                 try db.run("DELETE FROM events WHERE id=?", [.int(last.id)])
                 guard let current = try documentPath(last.docID),
@@ -1217,8 +1012,6 @@ actor Store {
         }
     }
 
-    // MARK: - Saved Views
-
     func savedViews() throws -> [SavedView] {
         try db.map("""
             SELECT id, name, icon, query, sort_key, ascending, view_mode, position
@@ -1254,11 +1047,6 @@ actor Store {
         try db.run("DELETE FROM saved_views WHERE id=?", [.int(id)])
     }
 
-    // MARK: - Rules
-
-    /// Every rule with its conditions and actions, in evaluation order. Three
-    /// queries rather than a join: a rule is read whole or not at all, and
-    /// there are tens of them, not thousands.
     func rules() throws -> [Rule] {
         var conditions: [Int64: [RuleCondition]] = [:]
         for (ruleID, condition) in try db.map("""
@@ -1278,8 +1066,6 @@ actor Store {
         for (ruleID, kind, value) in try db.map("""
             SELECT rule_id, kind, value FROM rule_actions ORDER BY rule_id, position, id
             """, [], { ($0.int(0), $0.string(1), $0.string(2)) }) {
-            // An action kind this build does not know is skipped rather than
-            // guessed at.
             guard let kind = RuleActionKind(rawValue: kind) else { continue }
             actions[ruleID, default: []].append(RuleAction(kind: kind, value: value))
         }
@@ -1337,8 +1123,6 @@ actor Store {
         try db.run("DELETE FROM rules WHERE id=?", [.int(id)])
     }
 
-    /// Rewrites priorities so the rules run in exactly the order given, first
-    /// to last. Spaced by ten, like field positions.
     func reorderRules(_ ids: [Int64]) throws {
         try db.transaction {
             for (index, id) in ids.enumerated() {
@@ -1356,16 +1140,12 @@ actor Store {
         var metadataUpdated: Int = 0
     }
 
-    /// Applies a rule to all matching documents currently in the library.
     func applyRuleToExisting(ruleID: Int64) async throws -> RuleApplyResult {
         let allRules = try rules()
         guard let rule = allRules.first(where: { $0.id == ruleID }) else { return RuleApplyResult() }
         return try await applyRuleToExisting(rule)
     }
 
-    /// The same, for a rule that has not been saved yet — the rule editor
-    /// applies the draft in front of the user, and Cancel still has to leave
-    /// the rule list untouched.
     func applyRuleToExisting(_ rule: Rule) async throws -> RuleApplyResult {
         let docs = try db.map("""
             SELECT d.id, d.path, d.filename, d.created_at, m.doc_date, ec.name, et.name,
@@ -1392,11 +1172,7 @@ actor Store {
             guard rule.matches(subject) else { continue }
             result.matched += 1
 
-            // Documents already processed above must count even if a later
-            // one fails, so one bad row can't discard the whole batch's
-            // progress — the caller only ever sees `try?`'s empty fallback.
             do {
-                // 1. Assign tags
                 let tags = rule.tagNames
                 for tag in tags {
                     let tid = try tagID(named: tag)
@@ -1404,7 +1180,6 @@ actor Store {
                 }
                 if !tags.isEmpty { result.tagged += 1 }
 
-                // 2. Assign metadata
                 var patch = Store.MetadataPatch(docID: doc.id)
                 var updatedMeta = false
                 if let corr = rule.setCorrespondent {
@@ -1420,7 +1195,6 @@ actor Store {
                     result.metadataUpdated += 1
                 }
 
-                // 3. Move, then rename, each from wherever the file is by then
                 var path = doc.path
                 let correspondent = patch.correspondent ?? doc.correspondent
                 let docType = patch.docType ?? doc.docType
@@ -1468,10 +1242,6 @@ actor Store {
         return result
     }
 
-    /// The most recent documents, as a rule would see them, for trying one out
-    /// before it is saved. `doc_fts` is keyed by `rowid`, so each document's
-    /// text is one indexed lookup — the corpus no longer has to be loaded into
-    /// memory to avoid a scan per row.
     func ruleSamples(limit: Int = 5000) throws -> [Rule.Subject] {
         try db.map("""
             SELECT d.filename, ec.name, et.name,
@@ -1487,9 +1257,6 @@ actor Store {
         }
     }
 
-    // MARK: - Moves & renames
-
-    /// `newPath` is absolute.
     func updatePath(_ docID: Int64, to newPath: String) throws {
         let url = URL(fileURLWithPath: newPath)
         try db.run("""

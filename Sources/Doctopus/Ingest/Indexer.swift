@@ -10,10 +10,7 @@ struct IndexProgress: Sendable, Equatable {
 }
 
 /// Orchestrates scan → hash → OCR → analyze → enrich → optimize → route.
-///
-/// Work is bounded by `settings.effectiveConcurrency`: OCR is CPU/ANE bound and
-/// oversubscribing it makes the whole machine feel slow while making the batch
-/// no faster.
+/// Concurrency is bounded: oversubscribing OCR slows the machine, not the batch.
 actor Indexer {
     private let store: Store
     private let intelligence: Intelligence
@@ -44,13 +41,6 @@ actor Indexer {
     func cancel() { cancelled = true }
     var isRunning: Bool { running }
 
-    // MARK: - Scanning
-
-    /// Full in-place pass over every root. Adds new files, notices changed ones,
-    /// marks vanished ones missing, and relinks moves by content hash.
-    ///
-    /// Returns how many documents were (re)processed, or nil when a pass was
-    /// already running and this call did nothing.
     @discardableResult
     func indexAll() async -> Int? {
         guard !running else { return nil }
@@ -75,14 +65,9 @@ actor Indexer {
         }
         _ = try? await store.reconcileMissing(seenPaths: seen)
 
-        // A row whose file has been gone for a month is not coming back as a
-        // move — unless the file is sitting in the Trash, which `purgeMissing`
-        // checks before forgetting anything. Documents deleted on purpose age
-        // out on the same clock.
         _ = try? await store.purgeMissing()
         _ = try? await store.purgeDeleted()
 
-        // Anything still pending from a previous interrupted run.
         if let pending = try? await store.documentIDsNeedingOCR() {
             let known = Set(toProcess.map(\.0))
             toProcess.append(contentsOf: pending.filter { !known.contains($0.id) }.map { ($0.id, $0.path) })
@@ -92,7 +77,6 @@ actor Indexer {
         return await process(documents: toProcess, phase: "Indexing", isImport: false)
     }
 
-    /// Targeted refresh for FSEvents batches — far cheaper than a full rescan.
     func handleChanges(paths: [String]) async {
         let rootPrefix = store.root.path + "/"
         let fm = FileManager.default
@@ -102,14 +86,12 @@ actor Indexer {
 
         for path in paths {
             guard path == store.root.path || path.hasPrefix(rootPrefix) else { continue }
-            // Doctopus's own storage, not content.
             if FileScanner.isInsideLibraryContainer(URL(fileURLWithPath: path)) { continue }
 
             var isDir: ObjCBool = false
             let exists = fm.fileExists(atPath: path, isDirectory: &isDir)
 
             if isDir.boolValue {
-                // A directory event means a subtree changed; rescan just that subtree.
                 await rescan(directory: URL(fileURLWithPath: path), into: &toProcess)
                 touched = true
                 continue
@@ -119,8 +101,6 @@ actor Indexer {
             guard FileScanner.supportedExtensions.contains(url.pathExtension.lowercased()) else { continue }
 
             if !exists {
-                // Might be a move: mark it gone now and let the arrival of the
-                // destination path relink it by hash.
                 try? await store.markMissing(path: path)
                 touched = true
                 continue
@@ -129,7 +109,6 @@ actor Indexer {
             guard let v = try? url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey, .creationDateKey, .isAliasFileKey]),
                   v.isAliasFile != true else { continue }
 
-            // A file appearing at a new path with a known hash is a Finder move.
             if let hash = FileScanner.hash(url),
                (try? await store.relinkByHash(hash: hash, newPath: path)) != nil {
                 touched = true
@@ -161,14 +140,6 @@ actor Indexer {
         }
     }
 
-    // MARK: - Processing
-
-    /// Runs the per-document pipeline with bounded parallelism. Returns how
-    /// many documents it got through before finishing or being cancelled.
-    ///
-    /// `isImport` marks files Doctopus itself just brought into the library —
-    /// the only ones it may rewrite (optimize) unasked. `route` additionally
-    /// lets it move them, and is only true when nobody said where they go.
     @discardableResult
     func process(documents: [(Int64, String)], phase: String, isImport: Bool,
                  route: Bool = false) async -> Int {
@@ -205,13 +176,8 @@ actor Indexer {
         return done
     }
 
-    /// The whole per-document pipeline. Every stage degrades independently: a
-    /// failed OCR still yields filesystem metadata, a missing LLM still yields
-    /// heuristics, a failed optimization leaves the original untouched.
-    ///
-    /// Nothing here writes to a file the user already had. Only a fresh import
-    /// — a copy Doctopus made, or a scan it received — is optimized, and only
-    /// an import nobody gave a destination is routed.
+    /// Nothing here writes to a file the user already had: only a fresh import is
+    /// optimized, and only an import nobody gave a destination is routed.
     @discardableResult
     private func pipeline(id: Int64, path: String, isImport: Bool, route: Bool) async -> String? {
         var url = URL(fileURLWithPath: path)
@@ -226,8 +192,6 @@ actor Indexer {
         // later import.
         if let hash = FileScanner.hash(url) { try? await store.setHash(id, hash, isOriginal: true) }
 
-        // The Finder's tags are read straight off the file every pass, so the
-        // index follows whatever was done in the Finder without owning it.
         try? await store.indexFinderTags(docID: id, entries: FinderTags.entries(url))
 
         // 1. Optimize before OCR so the indexed text matches the stored bytes.
@@ -238,7 +202,6 @@ actor Indexer {
             optimized = await optimizeFile(id: id, url: url)
         }
 
-        // 2. Text.
         let extracted = (try? TextExtractor.extract(url: url)) ?? ExtractedText(source: "failed")
         if extracted.source == "failed" || extracted.source == "unreadable" {
             try? await store.markOCR(id, state: .failed)
@@ -248,21 +211,13 @@ actor Indexer {
                                       elapsedMS: extracted.elapsedMS, pageCount: extracted.pageCount)
         }
 
-        // 3. Deterministic findings.
         let known = (try? await store.facets(column: "correspondent"))?.map(\.value) ?? []
         let created = (try? url.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? Date()
         var findings = DocumentAnalyzer.analyze(url: url, text: extracted.text,
                                                 fallbackDate: created, knownCorrespondents: known,
                                                 options: await analyzerOptions())
-        // Every date found is kept, not just the one that won. `03/04/2026` is
-        // wrong half the time however carefully it is read, and the runner-up
-        // as a chip in the review is a click rather than a retype.
         try? await store.setDateCandidates(findings.dates, for: id)
 
-        // 3b. Local classifier prediction over approved library documents.
-        // The fingerprint is checked before the corpus is assembled: this runs
-        // once per document indexed, and loading the training set pulls every
-        // approved document's full text out of the index.
         if let fingerprint = try? await store.classifierTrainingFingerprint() {
             if await classifier.needsTraining(fingerprint: fingerprint),
                let trainData = try? await store.classifierTrainingData() {
@@ -282,7 +237,6 @@ actor Indexer {
             }
         }
 
-        // 4. Optional model enrichment, on-device or over the network.
         var insight: DocumentInsight?
         if settings.llmBackend != .off, !extracted.text.isEmpty || settings.sendsPageImage {
             let topTags = (try? await store.tags())?.prefix(10).map(\.name) ?? []
@@ -304,9 +258,6 @@ actor Indexer {
             source: insight?.source ?? "heuristic",
             amount: findings.amount))
 
-        // 5. Tags proposed by the model — staged as suggestions, not assigned
-        // outright, unless they match a tag already in use and the setting
-        // says to accept those automatically.
         for tag in (insight?.tags ?? []).prefix(4) {
             try? await store.suggestTag(tag, for: id, autoAcceptMatching: settings.autoAcceptMatchingTagSuggestions)
         }
@@ -317,7 +268,6 @@ actor Indexer {
             await self.route(id: id, url: &url, text: extracted.text, findings: findings, insight: insight)
         }
 
-        // 7. Mirror tag membership to disk if the user asked for that.
         await syncAliases(docID: id, target: url)
 
         if !isImport, optimized == nil {
@@ -329,12 +279,7 @@ actor Indexer {
         return name
     }
 
-    /// How this library reads a date, cached for the length of a pass: the
-    /// dominant language is a grouped scan, and asking per document would run
-    /// it once for every file in a bulk import.
     private var languageCache: String??
-    /// The correspondents and types that identify themselves, loaded once a
-    /// pass for the same reason.
     private var entityRuleCache: [Entity]?
     private func analyzerOptions() async -> DocumentAnalyzer.Options {
         if languageCache == nil {
@@ -357,8 +302,6 @@ actor Indexer {
         return parts.joined(separator: " · ")
     }
 
-    // MARK: - Routing & aliases
-
     private func route(id: Int64, url: inout URL, text: String,
                        findings: DocumentAnalyzer.Findings, insight: DocumentInsight?) async {
         let router = Router(rules: (try? await store.rules()) ?? [],
@@ -370,8 +313,6 @@ actor Indexer {
         let decision = router.evaluate(text: text, filename: url.lastPathComponent,
                                        findings: findings, insight: insight,
                                        currentDirectory: url.deletingLastPathComponent())
-        // Every candidate is kept, moved or not, so the review can offer the
-        // alternatives — and so an ambiguous document has its choices waiting.
         try? await store.setPathSuggestions(decision.candidates, for: id)
 
         if let corr = decision.setCorrespondent {
@@ -441,12 +382,8 @@ actor Indexer {
         }
     }
 
-    /// Brings the on-disk aliases in line with the document's mirroring tags.
-    ///
-    /// Only tag aliases are Doctopus's to prune. An alias someone made by
-    /// dragging a document onto a folder has no tag and is left alone here —
-    /// it goes when they remove it — and nothing is deleted unless it is still
-    /// an alias to this document (see `AliasManager.removeAlias`).
+    /// Only tag aliases are Doctopus's to prune. Hand-made folder aliases are left
+    /// alone, and nothing is deleted unless it is still our alias to this document.
     func syncAliases(docID: Int64, target: URL) async {
         let tags = (try? await store.tags(for: docID)) ?? []
         let mirroring = tags.filter { $0.mirrors || settings.mirrorTagsAsAliases }
@@ -456,11 +393,8 @@ actor Indexer {
         var wanted: [Int64: URL] = [:]
         for tag in mirroring { wanted[tag.tagID] = AliasManager.tagFolder(root: root, tag: tag) }
 
-        // Prune aliases for tags that are gone, or whose file vanished.
         for alias in existing {
             guard let tagID = alias.tagID else {
-                // A folder placement the user made. Only forget it once the
-                // alias itself has gone from disk.
                 if !FileManager.default.fileExists(atPath: alias.path) {
                     try? await store.deleteAlias(id: alias.id)
                 }
@@ -468,8 +402,6 @@ actor Indexer {
             }
             let stillThere = FileManager.default.fileExists(atPath: alias.path)
             if wanted[tagID] == nil || !stillThere {
-                // Something that is no longer our alias stays on disk, but the
-                // registry lets go of it either way.
                 if stillThere { AliasManager.removeAlias(at: alias.path, pointingTo: target) }
                 try? await store.deleteAlias(id: alias.id)
             }
@@ -483,30 +415,6 @@ actor Indexer {
         }
     }
 
-    /// Hands a document's home over to the nearest folder it was also filed
-    /// in, and says where it ended up.
-    ///
-    /// A document dragged onto a second folder lives there as an alias: one
-    /// document, two places. Trashing the file would leave that placement
-    /// pointing at nothing, so deleting such a document is read as "not here
-    /// any more" rather than "gone" — the closest alias is taken away and the
-    /// document itself moved into its place. The library keeps the document
-    /// and loses exactly one of the folders it was in, which is what the
-    /// second placement was there to say in the first place.
-    ///
-    /// Only placements made by hand count. A tag mirror in `Tags/` is a view of
-    /// the library rather than a home, and promoting one would make a folder
-    /// Doctopus maintains the only copy of a document; a placement outside the
-    /// library root is passed over too, since moving the file there would take
-    /// it out of the library altogether.
-    ///
-    /// The promotion is recorded as a `promoted` event, which Undo knows how to
-    /// take apart: the document goes back where it was and the alias it stood
-    /// in for is written again, so undoing a delete leaves the library exactly
-    /// as it was before it.
-    ///
-    /// Returns nil when there is nowhere to go, and the caller deletes as it
-    /// otherwise would.
     func promoteClosestAlias(docID: Int64) async -> URL? {
         guard let path = try? await store.documentPath(docID) else { return nil }
         let url = URL(fileURLWithPath: path)
@@ -519,16 +427,11 @@ actor Indexer {
             let folder = Store.canonical(
                 URL(fileURLWithPath: alias.path).deletingLastPathComponent()
                     .standardizedFileURL.path)
-            // A stale record for the folder the document itself is in now says
-            // nothing about where else it can be found.
             guard folder != homePath else { return false }
             return folder == rootPath || folder.hasPrefix(rootPath + "/")
         }
         guard !placements.isEmpty else { return nil }
 
-        // Closest first; ties go to the shallower folder and then to the
-        // alphabetically first, so the same library always promotes the same
-        // placement.
         let ordered = placements.sorted { l, r in
             let lf = URL(fileURLWithPath: l.path).deletingLastPathComponent()
             let rf = URL(fileURLWithPath: r.path).deletingLastPathComponent()
@@ -548,13 +451,9 @@ actor Indexer {
             // file, and the placement is skipped for the next one along.
             guard AliasManager.removeAlias(at: alias.path, pointingTo: url) else { continue }
             try? await store.deleteAlias(id: alias.id)
-            // The document keeps its own name rather than inheriting whatever
-            // the alias was uniquified into when it was filed ("Invoice 2.pdf").
             let target = Naming.uniqueURL(in: folder, filename: url.lastPathComponent)
             do { try FileManager.default.moveItem(at: url, to: target) }
             catch {
-                // The placement is gone but the document is untouched, which is
-                // the safe half of this: the caller trashes it as it would have.
                 return nil
             }
             try? await store.updatePath(docID, to: target.path)
@@ -569,9 +468,6 @@ actor Indexer {
         return nil
     }
 
-    // MARK: - On-demand operations
-
-    /// Re-runs the pipeline for specific documents (context menu "Reprocess").
     @discardableResult
     func reprocess(ids: [Int64], asImport: Bool = false) async -> Int {
         var work: [(Int64, String)] = []
@@ -581,14 +477,10 @@ actor Indexer {
         return await process(documents: work, phase: "Reprocessing", isImport: asImport)
     }
 
-    // MARK: - Model enrichment
-
-    /// What a manual enrichment pass did, for the message the UI shows after it.
     struct AnalyzeSummary: Sendable {
         var updated = 0
         var skipped = 0
         var failed = 0
-        /// Set when the pass never started, carrying the reason verbatim.
         var blocked: String?
     }
 
@@ -598,13 +490,6 @@ actor Indexer {
         case failed
     }
 
-    /// Re-runs the model pass alone, over text that is already in the index.
-    ///
-    /// This is the manual trigger. Nothing on disk is read or written, no OCR
-    /// runs and no file moves — a document with no indexed text is reported as
-    /// skipped rather than quietly re-read, because Reprocess is the action for
-    /// that. It is the one way to enrich a library that was indexed before a
-    /// model was configured, or to ask a better model the same question again.
     func analyze(ids: [Int64]) async -> AnalyzeSummary {
         guard settings.llmBackend != .off else {
             return AnalyzeSummary(blocked: "No model is selected in Settings › Intelligence.")
@@ -655,15 +540,10 @@ actor Indexer {
         let name = url.lastPathComponent
         let text = (try? await store.ocrText(id)) ?? ""
         guard text.count >= LLMPrompt.minimumCharacters || settings.sendsPageImage else { return .skipped }
-        // The file itself, not just its text: a vision-capable endpoint is shown
-        // the first page, which this pass has to go back to disk for.
         let pages = (try? await store.documentPageCount(id)) ?? nil
         guard let insight = await intelligence.enrich(text: text, filename: name, url: url,
                                                       pageCount: pages) else { return .failed }
 
-        // Dates, their provenance and amounts belong to the deterministic
-        // analyzer, which has the file itself to work from; passing nil here
-        // leaves whatever it found in place.
         try? await store.storeMetadata(Store.MetadataPatch(
             docID: id,
             title: insight.title,
@@ -695,32 +575,18 @@ actor Indexer {
         return parts.joined(separator: " · ")
     }
 
-    /// What an import did, for the message the UI shows after it.
     struct ImportSummary: Sendable {
-        /// Files brought into the library — copied in, or a scan received.
         var imported = 0
-        /// Of `imported`, how many the router moved on to a folder.
         var routed = 0
-        /// Files that were already inside the library and were only indexed.
         var alreadyInLibrary = 0
-        /// Files skipped because their byte-identical copy is already in the library.
         var duplicates = 0
         var duplicateNames: [String] = []
         var failed = 0
     }
 
-    /// Imports files that arrived from a scan or a drop into `destination`.
-    ///
-    /// Only a file new to the library is an import. One from anywhere else is
-    /// copied in and the original left exactly where it was — `movingSource` is
-    /// only ever true for files the app itself produced, such as a scan staged
-    /// in the temporary directory. A file that is already inside the library is
-    /// indexed where it lies, exactly as a rescan would: it is the user's, so it
-    /// is neither optimized nor routed, whatever the import was asked to do.
-    ///
-    /// `route` is true only when nobody chose where the files go. With an
-    /// explicit destination — scan into this folder, import here — they stay
-    /// where they were put.
+    /// A file from outside the library is copied in and the original left alone —
+    /// `movingSource` is only for files the app itself produced. A file already in
+    /// the library is indexed in place, never optimized or routed.
     @discardableResult
     func importFiles(_ urls: [URL], into destination: URL,
                      movingSource: Bool = false, route: Bool = false) async -> ImportSummary {
@@ -730,9 +596,6 @@ actor Indexer {
         let rootPath = store.root.path
         var madeDestination = false
 
-        // Folders are brought in as the documents inside them, flattened into
-        // the destination: from the Inbox the router files each on its merits,
-        // which the folder it happened to arrive in says little about.
         for url in FileScanner.importable(urls) {
             let path = Store.canonical(url.standardizedFileURL.path)
             if path == rootPath || path.hasPrefix(rootPath + "/") {
@@ -742,16 +605,12 @@ actor Indexer {
                 if r.changed { inPlace.append((r.id, path)) }
                 continue
             }
-            // Pre-flight duplicate check
             if let sourceHash = FileScanner.hash(url),
                (try? await store.findDuplicate(hash: sourceHash)) != nil {
                 summary.duplicates += 1
                 summary.duplicateNames.append(url.lastPathComponent)
-                // `movingSource` files are the app's own scratch copies (e.g. a
-                // scan staged in the temp directory); the move is skipped, so
-                // this is the only chance to clean it up instead of leaking it.
-                // A plain import's source is the user's own file and is never
-                // touched.
+                // `movingSource` files are the app's own scratch copies, so this is the only
+                // chance to clean one up. A plain import's source is never touched.
                 if movingSource { try? FileManager.default.removeItem(at: url) }
                 continue
             }
@@ -792,7 +651,6 @@ actor Indexer {
                                created: v.creationDate ?? Date())
     }
 
-    /// Applies a naming template to documents on demand. Never automatic.
     func rename(ids: [Int64], template: String) async -> Int {
         var renamed = 0
         for id in ids {
@@ -825,7 +683,6 @@ actor Indexer {
         return renamed
     }
 
-    /// Moves documents to a folder the user picked. Explicit, never inferred.
     func move(ids: [Int64], to destination: URL) async -> Int {
         var moved = 0
         try? FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)

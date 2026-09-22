@@ -1,7 +1,5 @@
 import SwiftUI
 
-/// Global search / Quick Switcher palette across documents, tags, correspondents,
-/// document types, folders, and saved views.
 struct QuickSwitcherSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(AppModel.self) private var model

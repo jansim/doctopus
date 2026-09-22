@@ -45,15 +45,11 @@ struct Rule: Identifiable, Hashable, Sendable {
             : live.contains { $0.matches(subject) }
     }
 
-    // MARK: - Actions
-
     func action(_ kind: RuleActionKind) -> String? {
         actions.first { $0.kind == kind }?.value.nilIfBlank
     }
 
-    /// Where the rule moves a document, as a path template.
     var destination: String? { action(.moveFile) }
-    /// A naming template.
     var rename: String? { action(.renameFile) }
     var setCorrespondent: String? { action(.setCorrespondent) }
     var setDocType: String? { action(.setDocType) }
@@ -63,13 +59,8 @@ struct Rule: Identifiable, Hashable, Sendable {
             .compactMap { $0.trimmingCharacters(in: .whitespaces).nilIfBlank }
     }
 
-    /// A rule with no action is a rule that does nothing, which the editor
-    /// refuses to save and the router skips.
     var hasEffect: Bool { actions.contains { $0.value.nilIfBlank != nil } }
 
-    // MARK: - How it reads in a list
-
-    /// The first condition, and how many more there are and how they join.
     var conditionSummary: String {
         let live = liveConditions
         guard let first = live.first else { return "—" }
@@ -102,7 +93,6 @@ enum RuleField: String, CaseIterable, Sendable {
         }
     }
 
-    /// The same thing, as it reads inside a sentence.
     var phrase: String {
         switch self {
         case .text: return "the text"
@@ -114,9 +104,8 @@ enum RuleField: String, CaseIterable, Sendable {
 }
 
 struct RuleCondition: Identifiable, Hashable, Sendable {
-    /// Identity for the editor's list only. Conditions are rewritten as a
-    /// block whenever their rule is saved, so a database row id would be zero
-    /// for exactly the rows a list needs to tell apart.
+    /// For the editor's list: conditions are rewritten on every save, so they
+    /// have no stable row id.
     let id = UUID()
     var field: RuleField = .text
     var pattern: String = ""

@@ -56,24 +56,19 @@ enum URLSchemeHandler: Sendable {
 
 extension AppModel {
 
-    // MARK: - Global Search
-
     func globalSearch(text: String, limit: Int = 20) -> [GlobalSearchResult] {
         guard !text.trimmingCharacters(in: .whitespaces).isEmpty else { return [] }
         let query = text.lowercased()
         var results: [GlobalSearchResult] = []
 
-        // 1. Saved Views
         for sv in savedViews where sv.name.lowercased().contains(query) {
             results.append(GlobalSearchResult(id: "sv-\(sv.id)", category: .savedView, title: sv.name, subtitle: sv.query, icon: sv.icon, savedViewID: sv.id))
         }
 
-        // 2. Tags
         for tag in distinctTags where tag.name.lowercased().contains(query) {
             results.append(GlobalSearchResult(id: "tag-\(tag.tagID)", category: .tag, title: tag.name, subtitle: "\(tag.count) document(s)", icon: "tag", tagRef: tag.id))
         }
 
-        // 3. Correspondents & Types
         let taxonomies: [(key: String, category: GlobalSearchResult.Category, icon: String)] = [
             ("correspondent", .correspondent, "person.2"),
             ("doc_type", .docType, "doc.on.doc"),
@@ -87,7 +82,6 @@ extension AppModel {
             }
         }
 
-        // 4. Folders
         func collectFolders(_ nodes: [FolderNode]) {
             for n in nodes {
                 if n.name.lowercased().contains(query) && !n.isRoot {
@@ -98,7 +92,6 @@ extension AppModel {
         }
         collectFolders(folders)
 
-        // 5. Documents
         for doc in documents where doc.displayTitle.lowercased().contains(query) || doc.filename.lowercased().contains(query) {
             results.append(GlobalSearchResult(id: "doc-\(doc.library)-\(doc.doc)", category: .document,
                                               title: doc.displayTitle, subtitle: doc.filename,
@@ -107,8 +100,6 @@ extension AppModel {
 
         return Array(results.prefix(limit))
     }
-
-    // MARK: - Smart Folders / Saved Views
 
     func saveCurrentSearchAsSmartFolder(name: String, icon: String = "line.3.horizontal.decrease.circle") {
         guard let lib = activeLibrary else { return }
@@ -149,8 +140,6 @@ extension AppModel {
             viewMode = mode
         }
     }
-
-    // MARK: - URL Schemes & Shortcuts
 
     func handleURL(_ url: URL) {
         guard let action = URLSchemeHandler.parse(url) else { return }

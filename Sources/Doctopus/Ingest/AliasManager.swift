@@ -1,13 +1,7 @@
 import Foundation
 
-/// Creates and prunes real macOS Finder aliases so that tag membership can be
-/// mirrored into the file tree without ever duplicating a document's bytes.
-///
-/// Aliases are written with `NSURL.writeBookmarkData(to:options:)`, which is the
-/// same mechanism Finder's "Make Alias" uses — they survive the target moving.
 enum AliasManager {
 
-    /// Directory that holds mirrored tag folders, e.g. `<root>/Tags/Invoices/`.
     static func tagFolder(root: URL, tag: Tag) -> URL {
         if let custom = tag.folder?.nilIfBlank {
             return URL(fileURLWithPath: (custom as NSString).expandingTildeInPath)
@@ -26,14 +20,9 @@ enum AliasManager {
         return dest
     }
 
-    /// Deletes an alias Doctopus made — and nothing else.
-    ///
-    /// The registry only records where an alias *was* written. Anything could
-    /// be at that path now: the user may have replaced the alias with the real
-    /// file, or with an alias of their own to something else. So the item is
-    /// only removed when it is still an alias file and, when `target` is given,
-    /// still points at that document (or at nothing, if the document is gone).
-    /// Returns whether anything was deleted.
+    /// Deletes an alias Doctopus made — and nothing else. Anything could be at that
+    /// path now, so it is removed only if it is still an alias (to `target`, when
+    /// given). Returns whether anything was deleted.
     @discardableResult
     static func removeAlias(at path: String, pointingTo target: URL? = nil) -> Bool {
         let url = URL(fileURLWithPath: path)
@@ -46,7 +35,6 @@ enum AliasManager {
         return (try? FileManager.default.removeItem(at: url)) != nil
     }
 
-    /// Resolves an alias file back to its target, used when the tree scan meets one.
     static func resolve(_ url: URL) -> URL? {
         guard let data = try? NSURL.bookmarkData(withContentsOf: url) else { return nil }
         var stale = false
@@ -54,13 +42,6 @@ enum AliasManager {
                         relativeTo: nil, bookmarkDataIsStale: &stale)
     }
 
-    /// How far apart two folders are in the tree: the steps up from one to the
-    /// folder they share, and back down to the other. A subfolder is 1 away, a
-    /// sibling 2, an unrelated branch further.
-    ///
-    /// This is what "closest" means when a document has been filed in several
-    /// places and one of them has to stand in for where it used to live: the
-    /// nearest folder is the one that changes least about where it is found.
     static func distance(from: URL, to: URL) -> Int {
         let a = from.standardizedFileURL.pathComponents
         let b = to.standardizedFileURL.pathComponents
