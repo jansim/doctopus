@@ -41,6 +41,48 @@ enum LLMBackend: String, Codable, CaseIterable, Sendable, Identifiable {
     }
 }
 
+/// The parts of a `DocumentInsight` the user can switch off one by one.
+enum InsightField: String, Codable, CaseIterable, Sendable, Identifiable {
+    case title
+    case summary
+    case correspondent
+    case documentType
+    case language
+    case intent
+    case tags
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .title: return "Title"
+        case .summary: return "Summary"
+        case .correspondent: return "Correspondent"
+        case .documentType: return "Category"
+        case .language: return "Language"
+        case .intent: return "Intent"
+        case .tags: return "Tags"
+        }
+    }
+}
+
+extension DocumentInsight {
+    /// Drops what the user asked the model not to fill in. Only the answer is
+    /// trimmed, never the question: every document is asked the same thing, so
+    /// switching a field back on later does not make older answers stale.
+    func keeping(_ fields: Set<InsightField>) -> DocumentInsight {
+        var kept = self
+        if !fields.contains(.title) { kept.title = nil }
+        if !fields.contains(.summary) { kept.summary = nil }
+        if !fields.contains(.correspondent) { kept.correspondent = nil }
+        if !fields.contains(.documentType) { kept.docType = nil }
+        if !fields.contains(.language) { kept.language = nil }
+        if !fields.contains(.intent) { kept.intent = nil }
+        if !fields.contains(.tags) { kept.tags = [] }
+        return kept
+    }
+}
+
 /// `metadata.source` is written as `backend[:model][:vN]`. Read it back only
 /// through here, so adding a component never breaks a prefix match elsewhere.
 enum MetadataSource: Equatable {
@@ -186,11 +228,13 @@ actor Intelligence {
     private var backend: LLMBackend = .onDevice
     private var config = RemoteLLMConfig()
     private var excerptLimit = 6000
+    private var fields = Set(InsightField.allCases)
 
     func update(settings: AppSettings) async {
         backend = settings.llmBackend
         config = settings.remoteConfig
         excerptLimit = settings.llmExcerptLimit
+        fields = settings.predictedFields
     }
 
     func status() async -> LLMStatus {
@@ -211,6 +255,13 @@ actor Intelligence {
 
     func enrich(text: String, filename: String, url: URL? = nil, pageCount: Int? = nil,
                 candidateTags: [String] = []) async -> DocumentInsight? {
+        guard !fields.isEmpty else { return nil }
+        return await ask(text: text, filename: filename, url: url, pageCount: pageCount,
+                         candidateTags: candidateTags)?.keeping(fields)
+    }
+
+    private func ask(text: String, filename: String, url: URL?, pageCount: Int?,
+                     candidateTags: [String]) async -> DocumentInsight? {
         let readable = text.count >= LLMPrompt.minimumCharacters
         switch backend {
         case .off:

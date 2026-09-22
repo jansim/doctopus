@@ -650,6 +650,28 @@ enum SelfTest {
         print("  analyze with no backend: \(blocked.blocked ?? "ran anyway")")
         Check.that("a manual run with no model reports why", blocked.blocked != nil)
 
+        let trimmed = parsed?.keeping([.summary, .correspondent])
+        Check.that("only the fields asked for are kept from an answer",
+                   trimmed?.summary == "A gas bill." && trimmed?.correspondent == "Stadtwerke"
+                       && trimmed?.title == nil && trimmed?.docType == nil && trimmed?.language == nil
+                       && trimmed?.intent == nil && trimmed?.tags.isEmpty == true)
+
+        var nothingAsked = settings
+        nothingAsked.llmBackend = .onDevice
+        nothingAsked.predictedFields = []
+        Check.that("switched-off fields survive being stored",
+                   nothingAsked.appWide.unpredictedFields.count == InsightField.allCases.count
+                       && AppWideSettings.decoded(from: (try? JSONEncoder().encode(nothingAsked.appWide)) ?? Data())
+                           .predictedFields.isEmpty)
+        Check.that("a stored field name that no longer exists is ignored",
+                   AppWideSettings.decoded(from: Data(#"{"unpredictedFields": ["horoscope", "tags"]}"#.utf8))
+                       .predictedFields == Set(InsightField.allCases).subtracting([.tags]))
+        await indexer.update(settings: nothingAsked)
+        let nothingToAsk = await indexer.analyze(ids: rows.map(\.doc))
+        Check.that("a manual run with every field off reports why",
+                   nothingToAsk.blocked?.contains("switched off") == true)
+        await indexer.update(settings: noModel)
+
         let testPrompt = LLMPrompt.user(text: "Sample Document", filename: "invoice.pdf", limit: 1000, candidateTags: ["finances", "invoices"])
         Check.that("prompt includes untrusted user data marker", testPrompt.contains("untrusted user data"))
         Check.that("prompt includes candidate taxonomy tags", testPrompt.contains("finances, invoices"))

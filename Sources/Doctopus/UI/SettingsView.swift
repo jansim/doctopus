@@ -432,18 +432,29 @@ struct IntelligenceSettings: View {
             }
 
             if model.settings.llmBackend != .off {
-                Section("What it extracts") {
-                    Label("A one or two sentence summary", systemImage: "text.alignleft")
-                    Label("Correspondent, category, language and intent", systemImage: "person.text.rectangle")
-                    Label("Proposed tags and a canonical title", systemImage: "tag")
-                }
-                .font(.callout)
-
-                Section("Tag Suggestions") {
-                    Text("Proposed tags appear in a document's inspector as suggestions you accept or dismiss individually — they never show up in the sidebar on their own.")
+                Section {
+                    ForEach(InsightField.allCases) { field in
+                        Toggle(field.label, isOn: Binding(
+                            get: { model.settings.predictedFields.contains(field) },
+                            set: { on in
+                                if on { model.settings.predictedFields.insert(field) }
+                                else { model.settings.predictedFields.remove(field) }
+                            }))
+                    }
+                } header: {
+                    Text("Suggestions")
+                } footer: {
+                    Text("Only the checked fields are taken from the model. The others are left to the built-in heuristics, and re-analyzing a document leaves them as they are.")
                         .font(.caption).foregroundStyle(.secondary)
-                    Toggle("Automatically accept suggestions that match an existing tag",
-                           isOn: $model.settings.autoAcceptMatchingTagSuggestions)
+                }
+
+                if model.settings.predictedFields.contains(.tags) {
+                    Section("Tag Suggestions") {
+                        Text("Proposed tags appear in a document's inspector as suggestions you accept or dismiss individually — they never show up in the sidebar on their own.")
+                            .font(.caption).foregroundStyle(.secondary)
+                        Toggle("Automatically accept suggestions that match an existing tag",
+                               isOn: $model.settings.autoAcceptMatchingTagSuggestions)
+                    }
                 }
             }
 

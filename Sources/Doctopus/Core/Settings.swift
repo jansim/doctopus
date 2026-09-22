@@ -32,6 +32,10 @@ struct AppWideSettings: StoredSettings, Sendable, Equatable {
     var llmExcerptLimit = 6000
     var remoteVision = false
     var remoteVisionImageSize = 1024
+    /// Raw values of the `InsightField`s switched off, rather than the ones
+    /// switched on: a field added later starts out on, and a stored name that
+    /// no longer exists cannot fail the decode and reset every other setting.
+    var unpredictedFields: [String] = []
     var ocrConcurrency = 0        // 0 = auto
     var viewMode: ViewMode = .list
     var galleryThumbnailSize: Double = 150
@@ -52,6 +56,11 @@ struct AppWideSettings: StoredSettings, Sendable, Equatable {
     }
 
     var sendsPageImage: Bool { llmBackend == .remote && remoteVision }
+
+    var predictedFields: Set<InsightField> {
+        get { Set(InsightField.allCases.filter { !unpredictedFields.contains($0.rawValue) }) }
+        set { unpredictedFields = InsightField.allCases.filter { !newValue.contains($0) }.map(\.rawValue) }
+    }
 
     var effectiveConcurrency: Int {
         if ocrConcurrency > 0 { return min(ocrConcurrency, 16) }
@@ -101,6 +110,10 @@ struct AppSettings: Sendable, Equatable {
     var optimizerOptions: Optimizer.Options { appWide.optimizerOptions }
     var remoteConfig: RemoteLLMConfig { appWide.remoteConfig }
     var sendsPageImage: Bool { appWide.sendsPageImage }
+    var predictedFields: Set<InsightField> {
+        get { appWide.predictedFields }
+        set { appWide.predictedFields = newValue }
+    }
     var effectiveConcurrency: Int { appWide.effectiveConcurrency }
 
     static let storageKey = "app_settings_v1"
