@@ -70,10 +70,7 @@ struct DocumentDragItem: Codable, Transferable, Hashable, Sendable {
     }
 }
 
-/// What a document drag looks like under the pointer: the page, and once it
-/// carries more than one document, Finder's red count in the corner — the
-/// drop takes the whole selection along, so the drag should say so before it
-/// lands rather than after.
+/// A dragged document, with Finder's red count once it carries more than one.
 struct DocumentDragPreview: View {
     let row: DocumentRow
     let count: Int
@@ -82,7 +79,6 @@ struct DocumentDragPreview: View {
     var body: some View {
         AliasBadgedThumbnail(row: row, width: width, height: width * 1.3,
                              cornerRadius: 4, showsShadow: true)
-            // Room for the badge to hang over the corner without being clipped.
             .padding(10)
             .overlay(alignment: .topTrailing) {
                 if count > 1 {
@@ -204,8 +200,7 @@ extension AppModel {
     /// Resolves a dropped payload to full rows. Dragging one row out of a
     /// multiple selection carries the whole selection, which is what every
     /// other Mac app does.
-    /// How many documents a drag starting on `row` will carry, by the same
-    /// rule `rows(forDropped:)` applies when it lands.
+    /// Must agree with `rows(forDropped:)`.
     func dragCount(from row: DocumentRow) -> Int {
         selectedIDs.contains(row.id) ? selectedIDs.count : 1
     }

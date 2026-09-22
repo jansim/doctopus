@@ -221,7 +221,6 @@ enum UITest {
                    stale == .init(selection: [order[2]], anchor: order[2]))
     }
 
-    /// The badge on a drag preview has to promise what the drop will act on.
     private static func dragCountsTheSelection(_ model: AppModel) {
         let rows = model.documents
         guard rows.count >= 3 else {
