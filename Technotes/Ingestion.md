@@ -24,8 +24,31 @@ device left the room — and keeps its count and its destination, so Resume
 (⌥⌘S) picks it up exactly where it was. A capture already in flight when the
 run stops is still filed.
 
+**What a capture is taken as.** A device offers the same capture in several
+forms and lists them in its own order, so the form is chosen by this app's
+preference — PDF first — rather than by whichever the device happened to name
+first. Every raster form of a multi-page document scan is one page, so taking
+the wrong one silently throws the rest away. A capture that arrives as a
+multi-image container (a multi-page TIFF, a HEIC sequence) becomes a PDF with
+one page per image, never its first image alone. A capture handed over as a
+file rather than as bytes is read from that file while it still exists, since
+it goes when the pasteboard does.
+
+**Nothing arrives silently short.** A capture that cannot be read is gone — the
+pasteboard it came on is discarded moments later, and nothing asks the device
+again — so every capture a delivery offered is accounted for against the
+documents that reach the library. A shortfall is an alert on a one-off scan,
+and pauses a continuous run with `Incomplete` in the toolbar rather than
+carrying on into a gap. Each delivery also leaves a record of what was offered,
+what was taken and how many pages it held:
+
+```bash
+log show --last 1h --predicate 'subsystem == "io.doctopus"'
+```
+
 Continuity Camera cannot be checked without a real device in the room; see
-[Testing](Testing.md) for `--scantest`.
+[Testing](Testing.md) for `--scantest`. The decoding either side of it —
+which form is taken, and how many pages it yields — is checked in `--selftest`.
 
 ## Routing
 

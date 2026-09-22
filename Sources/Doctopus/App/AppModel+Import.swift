@@ -1,5 +1,6 @@
 import Foundation
 import AppKit
+import os
 
 extension AppModel {
 
@@ -64,7 +65,8 @@ extension AppModel {
         }
     }
 
-    func importScanned(_ items: [ScannedItem], into destination: URL?) {
+    func importScanned(_ delivery: ScanDelivery, into destination: URL?) {
+        let items = delivery.items
         guard !items.isEmpty else { return }
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent("doctopus-scan-\(UUID().uuidString)", isDirectory: true)
@@ -76,7 +78,14 @@ extension AppModel {
             let url = tmp.appendingPathComponent(name)
             if (try? item.data.write(to: url)) != nil { urls.append(url) }
         }
-        importFiles(urls, into: destination, movingSource: true)
+        if !urls.isEmpty { importFiles(urls, into: destination, movingSource: true) }
+
+        let lost = delivery.offered - urls.count
+        guard lost > 0 else { return }
+        ScanCapture.log.error("\(lost, privacy: .public) of \(delivery.offered, privacy: .public) capture(s) never reached the library")
+        scanIncomplete(urls.isEmpty
+            ? "Nothing your iPhone or iPad sent could be read. Scan it again."
+            : "\(lost) of the \(delivery.offered) captures your iPhone or iPad sent could not be read. What arrived has been filed — scan the rest again.")
     }
 
     private static let scanTimeout = Duration.seconds(120)
@@ -112,11 +121,11 @@ extension AppModel {
         notify(finished.count == 1 ? "Scanned 1 document." : "Scanned \(finished.count) documents.")
     }
 
-    func scanDelivered(_ documents: Int) {
+    func scanDelivered(_ delivery: ScanDelivery) {
         guard scanSession != nil else { return }
         scanRound?.cancel()
         scanRound = nil
-        scanSession?.received(documents)
+        scanSession?.received(delivery.items.count, pages: delivery.pages)
         guard scanSession?.isRunning == true else { return }
         fireNextScan(after: Self.scanRearm)
     }
@@ -127,6 +136,15 @@ extension AppModel {
             return
         }
         suspendScan(.failed)
+        notify(message, .warning)
+    }
+
+    func scanIncomplete(_ message: String) {
+        guard scanSession != nil else {
+            errorMessage = message
+            return
+        }
+        suspendScan(.incomplete)
         notify(message, .warning)
     }
 

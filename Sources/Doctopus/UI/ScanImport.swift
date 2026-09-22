@@ -1,11 +1,7 @@
 import SwiftUI
 import AppKit
 import UniformTypeIdentifiers
-
-struct ScannedItem: Sendable {
-    var data: Data
-    var ext: String
-}
+import os
 
 struct ScanOption: Identifiable, Hashable, Sendable {
     var id: Int { index }
@@ -24,11 +20,13 @@ struct ScanSession: Equatable, Sendable {
         case lostFocus
         case timedOut
         case failed
+        case incomplete
         case deviceGone
 
         var summary: String {
             switch self {
             case .deviceGone: return "Device gone"
+            case .incomplete: return "Incomplete"
             default: return "Paused"
             }
         }
@@ -41,6 +39,8 @@ struct ScanSession: Equatable, Sendable {
                 return "Nothing arrived from the device, so the scan was probably cancelled there. Click Resume to ask again."
             case .failed:
                 return "The last capture could not be read. Click Resume to try again."
+            case .incomplete:
+                return "Part of the last scan could not be read, so the run stopped rather than carry on. Check what arrived, then click Resume."
             case .deviceGone:
                 return "The device is no longer offering that. Bring it back in range and click Resume."
             }
@@ -53,12 +53,14 @@ struct ScanSession: Equatable, Sendable {
     var action: String
     var destination: URL?
     var count: Int = 0
+    var pages: Int = 0
     var paused: Pause? = nil
 
     var isRunning: Bool { paused == nil }
 
-    mutating func received(_ documents: Int) {
+    mutating func received(_ documents: Int, pages: Int) {
         count += documents
+        self.pages += pages
         if paused?.isResolvedByDelivery == true { paused = nil }
     }
 
@@ -66,7 +68,8 @@ struct ScanSession: Equatable, Sendable {
     mutating func resume() { paused = nil }
 
     var label: String {
-        let scanned = count == 1 ? "1 document" : "\(count) documents"
+        var scanned = count == 1 ? "1 document" : "\(count) documents"
+        if pages > count { scanned += " · \(pages) pages" }
         guard let reason = paused else {
             return count == 0 ? "Waiting for the first scan…" : "Scanning · \(scanned)"
         }
@@ -103,7 +106,7 @@ final class ScanCoordinator: NSObject {
     static let shared = ScanCoordinator()
 
     var pendingDestination: URL?
-    var onScan: (([ScannedItem], URL?) -> Void)?
+    var onScan: ((ScanDelivery, URL?) -> Void)?
     var onScanFailed: ((String) -> Void)?
 
     private weak var deviceItem: NSMenuItem?
@@ -178,17 +181,23 @@ final class ScanCoordinator: NSObject {
         return scan(option, into: destination)
     }
 
-    /// Concrete image types are spelled out: SwiftUI turns these into pasteboard
-    /// types literally, so `.image` alone is not offered `public.jpeg`.
-    static let importTypes: [UTType] = [.pdf, .jpeg, .png, .heic, .tiff, .image]
-
     func accept(_ providers: [NSItemProvider]) -> Bool {
         let captures = providers.compactMap { provider in
-            provider.registeredContentTypes
-                .first { type in Self.importTypes.contains { type.conforms(to: $0) } }
+            ScanCapture.preferredType(among: provider.registeredContentTypes,
+                                      accepting: ScanCapture.importTypes)
                 .map { (provider, $0) }
         }
-        guard !captures.isEmpty else { return false }
+        for (index, provider) in providers.enumerated() {
+            let offered = provider.registeredContentTypes.map(\.identifier).joined(separator: ", ")
+            ScanCapture.log.notice("capture \(index + 1, privacy: .public) of \(providers.count, privacy: .public) offers [\(offered, privacy: .public)]")
+        }
+        guard !captures.isEmpty else {
+            ScanCapture.log.error("nothing offered could be read — the delivery was refused")
+            return false
+        }
+        if captures.count < providers.count {
+            ScanCapture.log.error("\(providers.count - captures.count, privacy: .public) item(s) offered nothing this app can read")
+        }
 
         // The capture sits on a pasteboard the system discards the moment this
         // returns, and the providers read from it lazily: loaded any later,
@@ -204,17 +213,32 @@ final class ScanCoordinator: NSObject {
         while !loads.isComplete, Date() < deadline {
             RunLoop.current.run(mode: .default, before: Date(timeIntervalSinceNow: 0.05))
         }
-
-        let items = zip(captures, loads.results).compactMap { capture, data in
-            data.flatMap { item(from: $0, ext: capture.1.preferredFilenameExtension ?? "") }
+        if loads.unfinished > 0 {
+            ScanCapture.log.error("\(loads.unfinished, privacy: .public) capture(s) still loading after 30s")
         }
+
+        let items = zip(captures, loads.results).compactMap { capture, data -> ScannedItem? in
+            guard let data else {
+                ScanCapture.log.error("\(capture.1.identifier, privacy: .public) came back with no data")
+                return nil
+            }
+            guard let item = ScanCapture.item(from: data, declared: capture.1) else {
+                ScanCapture.log.error("\(capture.1.identifier, privacy: .public), \(data.count, privacy: .public) bytes: could not be read")
+                return nil
+            }
+            ScanCapture.log.notice("\(capture.1.identifier, privacy: .public), \(data.count, privacy: .public) bytes -> \(item.ext, privacy: .public), \(item.pages, privacy: .public) page(s)")
+            return item
+        }
+        let delivery = ScanDelivery(offered: providers.count, items: items)
+        ScanCapture.log.notice("delivered \(delivery.items.count, privacy: .public) of \(delivery.offered, privacy: .public) capture(s), \(delivery.pages, privacy: .public) page(s)")
+
         let destination = pendingDestination
         pendingDestination = nil
         DispatchQueue.main.async { [self] in
             if items.isEmpty {
                 onScanFailed?("The scan from your iPhone or iPad could not be read.")
             } else {
-                onScan?(items, destination)
+                onScan?(delivery, destination)
             }
         }
         return true
@@ -228,20 +252,8 @@ final class ScanCoordinator: NSObject {
 
         func finish(_ index: Int, with data: Data?) { lock.withLock { slots[index] = .some(data) } }
         var isComplete: Bool { lock.withLock { !slots.contains { $0 == nil } } }
+        var unfinished: Int { lock.withLock { slots.filter { $0 == nil }.count } }
         var results: [Data?] { lock.withLock { slots.map { $0 ?? nil } } }
-    }
-
-    private func item(from data: Data, ext: String) -> ScannedItem? {
-        switch ext.lowercased() {
-        case "pdf", "png", "jpg": return ScannedItem(data: data, ext: ext.lowercased())
-        case "jpeg": return ScannedItem(data: data, ext: "jpg")
-        default:
-            if data.starts(with: [0x25, 0x50, 0x44, 0x46]) { return ScannedItem(data: data, ext: "pdf") }
-            guard let rep = NSBitmapImageRep(data: data),
-                  let jpg = rep.representation(using: .jpeg, properties: [.compressionFactor: 0.9])
-            else { return nil }
-            return ScannedItem(data: jpg, ext: "jpg")
-        }
     }
 }
 
@@ -250,7 +262,7 @@ extension View {
     /// and one with no importing view answers `validRequestor` with nil, failing
     /// the capture with Cocoa error 66563.
     func acceptsScans() -> some View {
-        importsItemProviders(ScanCoordinator.importTypes) { ScanCoordinator.shared.accept($0) }
+        importsItemProviders(ScanCapture.importTypes) { ScanCoordinator.shared.accept($0) }
     }
 }
 

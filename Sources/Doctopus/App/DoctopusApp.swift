@@ -74,9 +74,9 @@ struct DoctopusApp: App {
                 .environment(model)
                 .task {
                     delegate.model = model
-                    ScanCoordinator.shared.onScan = { items, destination in
-                        model.importScanned(items, into: destination)
-                        model.scanDelivered(items.count)
+                    ScanCoordinator.shared.onScan = { delivery, destination in
+                        model.importScanned(delivery, into: destination)
+                        model.scanDelivered(delivery)
                     }
                     ScanCoordinator.shared.onScanFailed = { model.scanFailed($0) }
                     await model.bootstrap()
