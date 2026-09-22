@@ -27,6 +27,10 @@ land.
 Dropping onto a tag, a Finder tag or a facet assigns it rather than filing
 anything.
 
+Dragging one document out of a selection carries the whole selection. In the
+gallery the drag says so as it leaves: the page under the pointer carries
+Finder's red count of how many documents are going along.
+
 ## Centre pane
 
 A high-density list/table with SQLite-backed deep full-text search, token

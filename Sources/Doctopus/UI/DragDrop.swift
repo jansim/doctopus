@@ -58,6 +58,29 @@ struct DocumentDragItem: Codable, Transferable, Hashable, Sendable {
     }
 }
 
+struct DocumentDragPreview: View {
+    let row: DocumentRow
+    let count: Int
+    var width: CGFloat = 64
+
+    var body: some View {
+        AliasBadgedThumbnail(row: row, width: width, height: width * 1.3,
+                             cornerRadius: 4, showsShadow: true)
+            .padding(10)
+            .overlay(alignment: .topTrailing) {
+                if count > 1 {
+                    Text("\(count)")
+                        .font(.system(size: 12, weight: .semibold))
+                        .monospacedDigit()
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 6)
+                        .frame(minWidth: 22, minHeight: 22)
+                        .background(Capsule().fill(Color.red))
+                }
+            }
+    }
+}
+
 enum DropAction {
     case alias(folder: String)
     case move(folder: String)
@@ -138,6 +161,11 @@ struct FolderDropDelegate: DropDelegate {
 }
 
 extension AppModel {
+    /// Must agree with `rows(forDropped:)`.
+    func dragCount(from row: DocumentRow) -> Int {
+        selectedIDs.contains(row.id) ? selectedIDs.count : 1
+    }
+
     func rows(forDropped items: [DocumentDragItem]) -> [DocumentRow] {
         let dropped = Set(items.map(\.id))
         if !dropped.isDisjoint(with: selectedIDs) {
