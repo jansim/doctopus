@@ -385,7 +385,9 @@ private struct DocumentGalleryView: View {
                       spacing: 20) {
                 ForEach(model.documents) { row in
                     GalleryCell(row: row, width: cell)
-                        .draggable(DocumentDragItem(row))
+                        .draggable(DocumentDragItem(row)) {
+                            DocumentDragPreview(row: row, count: model.dragCount(from: row))
+                        }
                         // One tap handler that reads the click count, rather
                         // than a double-tap gesture stacked on a single-tap
                         // one: SwiftUI holds a single tap back until a second
