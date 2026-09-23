@@ -419,7 +419,7 @@ private struct DetailInspector: View {
                             Text(move).font(.caption2).foregroundStyle(.secondary)
                         } else if let note = event.detail?.nilIfBlank {
                             Text(note).font(.caption2).foregroundStyle(.secondary)
-                                .lineLimit(2)
+                                .lineLimit(event.action == "edited" ? 8 : 2)
                         }
                     }
                     Spacer(minLength: 0)
