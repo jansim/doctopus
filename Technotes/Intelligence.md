@@ -17,6 +17,21 @@ was shown the page as well.
 - Standard taxonomy tags and a canonical title — at most five words, also in the
   document's own language.
 
+Each of these can be switched off under Settings › Intelligence › Suggestions.
+A field that is off is not asked for at all — it is left out of the prompt and
+of the response schema, on both backends — and keeps whatever the heuristics or
+an earlier analysis put there.
+
+The question is one text template, `LLMPrompt.defaultTemplate`, which the user
+can replace in the same pane and reset with one click. It uses a small Mustache
+subset (`PromptTemplate`): `{{#title}}…{{/title}}` is kept only when that field
+is asked for, `{{^pageImage}}…{{/pageImage}}` only when no page image goes
+along. Field meanings live in the template alone — the JSON schema and the
+on-device `DynamicGenerationSchema` carry only names and types — so an edited
+prompt is never contradicted by a second copy of the question. The document,
+its filename and the library's existing tags follow as a separate message and
+are not part of the template.
+
 Proposed tags are staged as suggestions in the inspector rather than assigned
 outright — click one to accept it, or dismiss it with the ×  — and never appear
 in the sidebar until accepted. A suggestion that exactly matches a tag already
