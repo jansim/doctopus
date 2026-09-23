@@ -21,39 +21,36 @@ struct DocumentDragItem: Codable, Transferable, Hashable, Sendable {
         ProxyRepresentation(exporting: \.path)
     }
 
-    /// Waited out rather than handed a callback: the providers read lazily from
-    /// the drag pasteboard, which is taken away as soon as the drop returns.
-    static func read(from providers: [NSItemProvider]) -> [DocumentDragItem] {
-        guard !providers.isEmpty else { return [] }
+    /// Handed a callback rather than waited out: a drag out of this app's own
+    /// list is exported on the main thread, so a drop that blocks the main
+    /// thread for its payload waits for nothing and freezes the app doing it.
+    static func load(from providers: [NSItemProvider],
+                     then deliver: @escaping @MainActor @Sendable ([DocumentDragItem]) -> Void) {
         let loads = Loads(count: providers.count)
+        let group = DispatchGroup()
         for provider in providers {
+            group.enter()
             _ = provider.loadDataRepresentation(for: .doctopusDocument) { data, _ in
                 loads.finish(with: data)
+                group.leave()
             }
         }
-        let deadline = Date(timeIntervalSinceNow: 5)
-        while !loads.isComplete, Date() < deadline {
-            RunLoop.current.run(mode: .default, before: Date(timeIntervalSinceNow: 0.02))
+        group.notify(queue: .main) {
+            MainActor.assumeIsolated { deliver(loads.items) }
         }
-        return loads.items
     }
 
     private final class Loads: @unchecked Sendable {
         private let lock = NSLock()
-        private var outstanding: Int
         private var loaded: [DocumentDragItem] = []
 
-        init(count: Int) { outstanding = count }
+        init(count: Int) { loaded.reserveCapacity(count) }
 
         func finish(with data: Data?) {
             let item = data.flatMap { try? JSONDecoder().decode(DocumentDragItem.self, from: $0) }
-            lock.withLock {
-                if let item { loaded.append(item) }
-                outstanding -= 1
-            }
+            if let item { lock.withLock { loaded.append(item) } }
         }
 
-        var isComplete: Bool { lock.withLock { outstanding == 0 } }
         var items: [DocumentDragItem] { lock.withLock { loaded } }
     }
 }
@@ -148,10 +145,15 @@ struct FolderDropDelegate: DropDelegate {
 
     func performDrop(info: DropInfo) -> Bool {
         hovering = nil
-        let items = DocumentDragItem.read(from: info.itemProviders(for: [.doctopusDocument]))
-        guard !items.isEmpty else { return false }
+        let providers = info.itemProviders(for: [.doctopusDocument])
+        guard !providers.isEmpty else { return false }
+        // Decided now, while the keys still say what was held.
         let action = state.intent.action(on: folder)
-        return MainActor.assumeIsolated { model.handleDrop(items, action: action) }
+        DocumentDragItem.load(from: providers) { items in
+            guard !items.isEmpty else { return }
+            model.handleDrop(items, action: action)
+        }
+        return true
     }
 
     private func note(_ intent: FolderDropIntent) {

@@ -639,8 +639,9 @@ enum UITest {
         let retitled = await settle { recorded(title) }
         Check.that("a title typed by hand is recorded in the history", retitled)
 
-        Check.that("hand edits add to the history rather than replacing it",
-                   (model.detail?.history.count ?? 0) >= before + 3,
+        Check.that("hand edits made together are grouped into one history entry",
+                   (model.detail?.history.count ?? 0) <= before + 1
+                       && recorded(tag) && recorded(finderTag) && recorded(title),
                    "\(model.detail?.history.count ?? 0) events, was \(before)")
 
         Check.that("a hand edit does not queue the document for review",

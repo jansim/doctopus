@@ -433,19 +433,49 @@ struct IntelligenceSettings: View {
             }
 
             if model.settings.llmBackend != .off {
-                Section("What it extracts") {
-                    Label("A one or two sentence summary", systemImage: "text.alignleft")
-                    Label("Correspondent, category, language and intent", systemImage: "person.text.rectangle")
-                    Label("Proposed tags and a canonical title", systemImage: "tag")
-                }
-                .font(.callout)
-
-                Section("Tag Suggestions", scope: .library) {
-                    LibraryPicker()
-                    Text("Proposed tags appear in a document's inspector as suggestions you accept or dismiss individually — they never show up in the sidebar on their own.")
+                Section {
+                    ForEach(InsightField.allCases) { field in
+                        Toggle(field.label, isOn: Binding(
+                            get: { model.settings.predictedFields.contains(field) },
+                            set: { on in
+                                if on { model.settings.predictedFields.insert(field) }
+                                else { model.settings.predictedFields.remove(field) }
+                            }))
+                    }
+                } header: {
+                    ScopedHeader(title: "Suggestions", scope: .app)
+                } footer: {
+                    Text("Only the checked fields are asked of the model. The others are left to the built-in heuristics, and re-analyzing a document leaves them as they are.")
                         .font(.caption).foregroundStyle(.secondary)
-                    Toggle("Automatically accept suggestions that match an existing tag",
-                           isOn: $model.settings.autoAcceptMatchingTagSuggestions)
+                }
+
+                Section {
+                    TextEditor(text: promptTemplate)
+                        .font(.system(.caption, design: .monospaced))
+                        .frame(minHeight: 260)
+                    HStack {
+                        Text(model.settings.llmPromptTemplate.isEmpty
+                             ? "Using the default prompt." : "Using your own prompt.")
+                            .font(.caption).foregroundStyle(.secondary)
+                        Spacer()
+                        Button("Reset to Default") { model.settings.llmPromptTemplate = "" }
+                            .disabled(model.settings.llmPromptTemplate.isEmpty)
+                    }
+                } header: {
+                    ScopedHeader(title: "Prompt", scope: .app)
+                } footer: {
+                    Text(verbatim: "Text between {{#summary}} and {{/summary}} is only sent when Summary is checked above — likewise correspondent, documentType, language, intent, title and tags. {{#pageImage}}…{{/pageImage}} is only sent with a page image, {{^pageImage}}…{{/pageImage}} only without one. Keep asking for a JSON object with those keys; the document itself follows in a separate message.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+
+                if model.settings.predictedFields.contains(.tags) {
+                    Section("Tag Suggestions", scope: .library) {
+                        LibraryPicker()
+                        Text("Proposed tags appear in a document's inspector as suggestions you accept or dismiss individually — they never show up in the sidebar on their own.")
+                            .font(.caption).foregroundStyle(.secondary)
+                        Toggle("Automatically accept suggestions that match an existing tag",
+                               isOn: $model.settings.autoAcceptMatchingTagSuggestions)
+                    }
                 }
             }
 
@@ -473,6 +503,12 @@ struct IntelligenceSettings: View {
             model.refreshModelStatus()
             await loadModels()
         }
+    }
+
+    /// Stores "" while the text matches the default.
+    private var promptTemplate: Binding<String> {
+        Binding(get: { model.settings.llmPromptTemplate.nilIfBlank ?? LLMPrompt.defaultTemplate },
+                set: { model.settings.llmPromptTemplate = $0 == LLMPrompt.defaultTemplate ? "" : $0 })
     }
 
     @ViewBuilder
