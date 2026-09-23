@@ -22,7 +22,7 @@ extension AppModel {
             errorMessage = error.description
             return
         } catch {
-            errorMessage = "Could not open a library at \(root.lastPathComponent)."
+            errorMessage = "Could not open a library at \(root.lastPathComponent): \(error.localizedDescription)"
             return
         }
 
@@ -37,11 +37,14 @@ extension AppModel {
         defer { opening.remove(store.libraryID) }
 
         let lib = Library(store: store, bookmark: bookmark)
-        lib.settings = await AppSettings.load(from: store)
+        let loaded = await AppSettings.load(from: store)
+        lib.settings = loaded.settings
+        if let problem = loaded.problem { errorMessage = problem }
         lib.attachIndexer(
             intelligence: intelligence,
             onProgress: { [weak self] p in Task { @MainActor in self?.progress = p } },
-            onDataChanged: { [weak self] in Task { @MainActor in self?.refreshAll() } })
+            onDataChanged: { [weak self] in Task { @MainActor in self?.refreshAll() } },
+            onProblem: { [weak self] text in Task { @MainActor in self?.errorMessage = text } })
 
         if (try? await store.rules())?.isEmpty ?? true {
             for rule in Rule.starters { _ = try? await store.upsertRule(rule) }

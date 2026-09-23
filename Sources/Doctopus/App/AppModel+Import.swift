@@ -47,6 +47,7 @@ extension AppModel {
                        : "Those files are already in the library, so they were indexed where they are.", .info)
             } else if result.imported == 0 {
                 errorMessage = "Nothing could be imported from \(urls.count == 1 ? "that file" : "those files")."
+                    + (result.failures.isEmpty ? "" : "\n\n" + result.failures.prefix(5).joined(separator: "\n"))
             } else {
                 let n = result.imported
                 let what = movingSource ? "Scanned" : "Imported"
@@ -59,7 +60,9 @@ extension AppModel {
                 } else {
                     text += " into “\(dest.lastPathComponent)”"
                 }
-                notify(text + (result.failed > 0 ? " — \(result.failed) could not be read." : "."),
+                notify(text + (result.failed > 0
+                               ? " — \(result.failed) could not be imported. \(result.failures.first ?? "")"
+                               : "."),
                        result.failed > 0 ? .warning : .success)
             }
         }

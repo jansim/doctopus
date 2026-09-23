@@ -74,12 +74,17 @@ actor Store {
 
     enum OpenError: Swift.Error, CustomStringConvertible {
         case newer(writtenBy: String?)
+        case unreadableMeta(String)
 
         var description: String {
             switch self {
             case .newer(let writtenBy):
                 let by = writtenBy.map { " (Doctopus \($0))" } ?? ""
                 return "This library was written by a newer version of Doctopus\(by). Update Doctopus to open it."
+            case .unreadableMeta(let reason):
+                return "This library’s meta.json could not be read (\(reason)), so it was not opened. "
+                    + "It names the library, and replacing it would make this a different one: "
+                    + "restore it from a backup, or delete it to open the library under a new identity."
             }
         }
     }
@@ -91,11 +96,19 @@ actor Store {
         var appVersion: String?
     }
 
+    /// Only a library with no `meta.json` at all gets a new one. One that is
+    /// there but will not read is refused rather than replaced, since its id is
+    /// the library's identity.
     private static func loadOrCreateMeta(in container: URL) throws -> Meta {
         let metaURL = container.appendingPathComponent("meta.json")
-        if let data = try? Data(contentsOf: metaURL),
-           let meta = try? JSONDecoder().decode(Meta.self, from: data),
-           !meta.id.isEmpty {
+        if FileManager.default.fileExists(atPath: metaURL.path) {
+            let meta: Meta
+            do {
+                meta = try JSONDecoder().decode(Meta.self, from: Data(contentsOf: metaURL))
+            } catch {
+                throw OpenError.unreadableMeta(error.localizedDescription)
+            }
+            guard !meta.id.isEmpty else { throw OpenError.unreadableMeta("it names no library") }
             // A newer app may have written columns and tables this build would
             // drop on the first write.
             guard meta.formatVersion <= formatVersion else { throw OpenError.newer(writtenBy: meta.appVersion) }
@@ -104,7 +117,8 @@ actor Store {
         let meta = Meta(id: UUID().uuidString, formatVersion: formatVersion,
                         name: container.deletingLastPathComponent().lastPathComponent,
                         appVersion: appVersion)
-        try? JSONEncoder().encode(meta).write(to: metaURL, options: .atomic)
+        // Unwritten, the library would get a new identity on every open.
+        try JSONEncoder().encode(meta).write(to: metaURL, options: .atomic)
         return meta
     }
 
