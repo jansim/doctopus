@@ -50,12 +50,15 @@ actor Indexer {
 
         onProgress(IndexProgress(phase: "Scanning", done: 0, total: 1))
 
-        let found = FileScanner.scan(root: store.root)
+        // A new library's first pass is its existing archive, not new arrivals.
+        let firstPass = ((try? await store.documentCount()) ?? 0) == 0
+        let found = FileScanner.scan(root: store.root).map { Self.facts($0) }
         if cancelled { return nil }
-        let facts = found.map { Store.FileFacts(path: $0.url.path, size: $0.size, mtime: $0.mtime, created: $0.created) }
-        guard let upserted = try? await store.upsertDocuments(facts) else { return nil }
+        await relinkMoved(found)
+        guard let upserted = try? await store.upsertDocuments(found) else { return nil }
         var toProcess = upserted.filter(\.changed).map { ($0.id, $0.path) }
-        _ = try? await store.reconcileMissing(seenPaths: Set(facts.map(\.path)))
+        let fresh = firstPass ? [] : Set(upserted.filter(\.isNew).map(\.id))
+        _ = try? await store.reconcileMissing(seenPaths: Set(found.map(\.path)))
 
         _ = try? await store.purgeMissing()
         _ = try? await store.purgeDeleted()
@@ -66,7 +69,7 @@ actor Indexer {
         }
 
         onDataChanged()
-        return await process(documents: toProcess, phase: "Indexing", isImport: false)
+        return await process(documents: toProcess, phase: "Indexing", isImport: false, found: fresh)
     }
 
     func handleChanges(paths: [String]) async {
@@ -74,6 +77,7 @@ actor Indexer {
         let fm = FileManager.default
 
         var toProcess: [(Int64, String)] = []
+        var fresh: Set<Int64> = []
         var touched = false
 
         for path in paths {
@@ -84,7 +88,7 @@ actor Indexer {
             let exists = fm.fileExists(atPath: path, isDirectory: &isDir)
 
             if isDir.boolValue {
-                await rescan(directory: URL(fileURLWithPath: path), into: &toProcess)
+                await rescan(directory: URL(fileURLWithPath: path), into: &toProcess, fresh: &fresh)
                 touched = true
                 continue
             }
@@ -98,43 +102,54 @@ actor Indexer {
                 continue
             }
 
-            guard let v = try? url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey, .creationDateKey, .isAliasFileKey]),
+            guard let v = try? url.resourceValues(forKeys: Set(Self.factKeys + [.isAliasFileKey])),
                   v.isAliasFile != true else { continue }
+            let facts = Self.facts(path: path, v)
 
-            if let hash = FileScanner.hash(url),
+            // After a file-ID relink the upsert still runs, to catch an edit made on the way.
+            if (try? await store.relinkByFileID(facts)) == nil,
+               let hash = FileScanner.hash(url),
                (try? await store.relinkByHash(hash: hash, newPath: path)) != nil {
                 touched = true
                 continue
             }
 
-            let facts = Store.FileFacts(path: path, size: Int64(v.fileSize ?? 0),
-                                        mtime: v.contentModificationDate ?? Date(),
-                                        created: v.creationDate ?? Date())
-            if let result = try? await store.upsertDocument(facts), result.changed {
+            if let result = try? await store.upsertDocument(facts, origin: .inLibrary), result.changed {
                 toProcess.append((result.id, path))
+                if result.isNew { fresh.insert(result.id) }
             }
             touched = true
         }
 
         if touched { onDataChanged() }
         if !toProcess.isEmpty {
-            await process(documents: toProcess, phase: "Indexing", isImport: false)
+            await process(documents: toProcess, phase: "Indexing", isImport: false, found: fresh)
         }
     }
 
-    private func rescan(directory: URL, into toProcess: inout [(Int64, String)]) async {
-        for f in FileScanner.scan(root: directory) {
-            let facts = Store.FileFacts(path: f.url.path, size: f.size,
-                                        mtime: f.mtime, created: f.created)
-            if let r = try? await store.upsertDocument(facts), r.changed {
-                toProcess.append((r.id, f.url.path))
+    private func rescan(directory: URL, into toProcess: inout [(Int64, String)],
+                        fresh: inout Set<Int64>) async {
+        let found = FileScanner.scan(root: directory).map { Self.facts($0) }
+        await relinkMoved(found)
+        for facts in found {
+            if let r = try? await store.upsertDocument(facts, origin: .inLibrary), r.changed {
+                toProcess.append((r.id, facts.path))
+                if r.isNew { fresh.insert(r.id) }
             }
         }
     }
 
+    /// Before any upsert, so a new file at an old path cannot claim the moved row.
+    private func relinkMoved(_ found: [Store.FileFacts]) async {
+        for facts in found where facts.fileID != nil {
+            _ = try? await store.relinkByFileID(facts)
+        }
+    }
+
+    /// `found`: new to the index, but already in the library.
     @discardableResult
     func process(documents: [(Int64, String)], phase: String, isImport: Bool,
-                 route: Bool = false) async -> Int {
+                 route: Bool = false, found: Set<Int64> = []) async -> Int {
         guard !documents.isEmpty else { return 0 }
         let total = documents.count
         var done = 0
@@ -147,7 +162,8 @@ actor Indexer {
             var inFlight = 0
             while inFlight < width, let next = iterator.next() {
                 group.addTask { [weak self] in
-                    await self?.pipeline(id: next.0, path: next.1, isImport: isImport, route: route)
+                    await self?.pipeline(id: next.0, path: next.1, isImport: isImport, route: route,
+                                         isNew: found.contains(next.0))
                 }
                 inFlight += 1
             }
@@ -158,7 +174,8 @@ actor Indexer {
                 if cancelled { group.cancelAll(); break }
                 if let next = iterator.next() {
                     group.addTask { [weak self] in
-                        await self?.pipeline(id: next.0, path: next.1, isImport: isImport, route: route)
+                        await self?.pipeline(id: next.0, path: next.1, isImport: isImport, route: route,
+                                         isNew: found.contains(next.0))
                     }
                 }
             }
@@ -169,9 +186,10 @@ actor Indexer {
     }
 
     /// Nothing here writes to a file the user already had: only a fresh import is
-    /// optimized, and only an import nobody gave a destination is routed.
+    /// optimized, and only an import nobody gave a destination is moved.
     @discardableResult
-    private func pipeline(id: Int64, path: String, isImport: Bool, route: Bool) async -> String? {
+    private func pipeline(id: Int64, path: String, isImport: Bool, route: Bool,
+                          isNew: Bool) async -> String? {
         var url = URL(fileURLWithPath: path)
         let name = url.lastPathComponent
         guard FileManager.default.fileExists(atPath: url.path) else {
@@ -254,15 +272,17 @@ actor Indexer {
             try? await store.suggestTag(tag, for: id, autoAcceptMatching: settings.autoAcceptMatchingTagSuggestions)
         }
 
-        // 6. Routing — undirected imports only; existing files are never moved
-        // uninvited, and neither is anything imported into a chosen folder.
-        if isImport, route, settings.autoRouteImports {
-            await self.route(id: id, url: &url, text: extracted.text, findings: findings, insight: insight)
+        // 6. Routing — every new document gets suggestions; only undirected imports move.
+        if isImport || isNew {
+            await self.route(id: id, url: &url, text: extracted.text, findings: findings, insight: insight,
+                             moving: isImport && route && settings.autoRouteImports,
+                             chosen: isImport && !route,
+                             action: isImport ? "imported" : "indexed")
         }
 
         await syncAliases(docID: id, target: url)
 
-        if !isImport, optimized == nil {
+        if !isImport, !isNew, optimized == nil {
             try? await store.logProcessing(docID: id, action: .indexed,
                                            detail: summaryLine(extracted, findings, insight),
                                            confidence: findings.confidence, rule: nil,
@@ -294,8 +314,10 @@ actor Indexer {
         return parts.joined(separator: " · ")
     }
 
+    /// Renames and moves only when `moving`; a `chosen` folder heads the suggestions so the review keeps it.
     private func route(id: Int64, url: inout URL, text: String,
-                       findings: DocumentAnalyzer.Findings, insight: DocumentInsight?) async {
+                       findings: DocumentAnalyzer.Findings, insight: DocumentInsight?,
+                       moving: Bool, chosen: Bool, action: String) async {
         let router = Router(rules: (try? await store.rules()) ?? [],
                             threshold: settings.routingThreshold,
                             derivedTemplate: settings.derivedTemplate,
@@ -305,7 +327,14 @@ actor Indexer {
         let decision = router.evaluate(text: text, filename: url.lastPathComponent,
                                        findings: findings, insight: insight,
                                        currentDirectory: url.deletingLastPathComponent())
-        try? await store.setPathSuggestions(decision.candidates.map {
+        var candidates = decision.candidates
+        if chosen {
+            let here = url.deletingLastPathComponent()
+            candidates.removeAll { $0.destination.standardizedFileURL == here.standardizedFileURL }
+            candidates.insert(Router.Candidate(destination: here, confidence: 1, rule: "chosen",
+                                               explanation: "Chosen when it was brought in"), at: 0)
+        }
+        try? await store.setPathSuggestions(candidates.map {
             PathSuggestion(path: $0.destination.path, confidence: $0.confidence, source: $0.rule,
                            explanation: $0.explanation)
         }, for: id)
@@ -325,6 +354,16 @@ actor Indexer {
             } else {
                 try? await store.suggestTag(tag, for: id, autoAcceptMatching: settings.autoAcceptMatchingTagSuggestions)
             }
+        }
+
+        guard moving else {
+            let detail = decision.destination.map {
+                "Suggested “\($0.lastPathComponent)”, left where it is — \(decision.explanation)"
+            } ?? decision.explanation
+            try? await store.logProcessing(docID: id, action: action, detail: detail,
+                                           confidence: decision.confidence, rule: decision.rule,
+                                           from: nil, to: url.path, approved: false)
+            return
         }
 
         if let template = decision.rename {
@@ -467,6 +506,9 @@ actor Indexer {
         guard settings.llmBackend != .off else {
             return AnalyzeSummary(blocked: "No model is selected in Settings › Intelligence.")
         }
+        guard !settings.predictedFields.isEmpty else {
+            return AnalyzeSummary(blocked: "Every field is switched off under Suggestions in Settings › Intelligence.")
+        }
         let status = await intelligence.status()
         guard status.isReady else { return AnalyzeSummary(blocked: status.label) }
         guard !ids.isEmpty else { return AnalyzeSummary() }
@@ -559,13 +601,14 @@ actor Indexer {
 
     /// A file from outside the library is copied in and the original left alone —
     /// `movingSource` is only for files the app itself produced. A file already in
-    /// the library is indexed in place, never optimized or routed.
+    /// the library is indexed in place, never optimized or moved.
     @discardableResult
     func importFiles(_ urls: [URL], into destination: URL,
                      movingSource: Bool = false, route: Bool = false) async -> ImportSummary {
         var summary = ImportSummary()
         var imported: [(Int64, String)] = []
         var inPlace: [(Int64, String)] = []
+        var fresh: Set<Int64> = []
         let rootPath = store.root.path
         var madeDestination = false
 
@@ -573,9 +616,10 @@ actor Indexer {
             let path = Store.canonical(url.standardizedFileURL.path)
             if path == rootPath || path.hasPrefix(rootPath + "/") {
                 guard let facts = Self.facts(URL(fileURLWithPath: path)),
-                      let r = try? await store.upsertDocument(facts) else { summary.failed += 1; continue }
+                      let r = try? await store.upsertDocument(facts, origin: .inLibrary) else { summary.failed += 1; continue }
                 summary.alreadyInLibrary += 1
                 if r.changed { inPlace.append((r.id, path)) }
+                if r.isNew { fresh.insert(r.id) }
                 continue
             }
             if let sourceHash = FileScanner.hash(url),
@@ -598,15 +642,16 @@ actor Indexer {
                 } else {
                     try FileManager.default.copyItem(at: url, to: target)
                 }
+                let origin: DocumentOrigin = movingSource ? .scanned : .imported(from: path)
                 guard let facts = Self.facts(target),
-                      let r = try? await store.upsertDocument(facts) else { summary.failed += 1; continue }
+                      let r = try? await store.upsertDocument(facts, origin: origin) else { summary.failed += 1; continue }
                 imported.append((r.id, target.path))
                 summary.imported += 1
             } catch {
                 summary.failed += 1
             }
         }
-        await process(documents: inPlace, phase: "Indexing", isImport: false)
+        await process(documents: inPlace, phase: "Indexing", isImport: false, found: fresh)
         await process(documents: imported, phase: "Importing", isImport: true, route: route)
         if route {
             for (id, path) in imported {
@@ -616,12 +661,24 @@ actor Indexer {
         return summary
     }
 
+    private static let factKeys: [URLResourceKey] =
+        [.fileSizeKey, .contentModificationDateKey, .creationDateKey] + FileScanner.identityKeys
+
     private static func facts(_ url: URL) -> Store.FileFacts? {
-        guard let v = try? url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey, .creationDateKey])
-        else { return nil }
-        return Store.FileFacts(path: url.path, size: Int64(v.fileSize ?? 0),
-                               mtime: v.contentModificationDate ?? Date(),
-                               created: v.creationDate ?? Date())
+        guard let v = try? url.resourceValues(forKeys: Set(factKeys)) else { return nil }
+        return facts(path: url.path, v)
+    }
+
+    private static func facts(path: String, _ v: URLResourceValues) -> Store.FileFacts {
+        Store.FileFacts(path: path, size: Int64(v.fileSize ?? 0),
+                        mtime: v.contentModificationDate ?? Date(),
+                        created: v.creationDate ?? Date(),
+                        fileID: FileScanner.fileID(v))
+    }
+
+    private static func facts(_ f: FileScanner.Found) -> Store.FileFacts {
+        Store.FileFacts(path: f.url.path, size: f.size, mtime: f.mtime,
+                        created: f.created, fileID: f.fileID)
     }
 
     func rename(ids: [Int64], template: String) async -> Int {

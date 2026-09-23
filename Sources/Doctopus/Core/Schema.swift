@@ -7,6 +7,7 @@ enum Schema {
 
     private static let steps: [(Database) throws -> Void] = [
         v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19,
+        v20,
     ]
     static var current: Int { steps.count }
 
@@ -52,6 +53,12 @@ enum Schema {
                 return t.isEmpty || t.hasSuffix("*") ? t : t + "*"
             }
             .joined(separator: ", ")
+    }
+
+    /// File-system IDs, so a move is recognised even when the bytes changed.
+    private static func v20(_ db: Database) throws {
+        try addColumn(db, table: "documents", column: "file_id", declaration: "INTEGER")
+        try db.exec("CREATE INDEX IF NOT EXISTS idx_documents_file_id ON documents(file_id)")
     }
 
     /// Word patterns used to match at the start of a word; the `*` keeps every
