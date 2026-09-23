@@ -6,7 +6,7 @@ enum AliasManager {
         if let custom = tag.folder?.nilIfBlank {
             return URL(fileURLWithPath: (custom as NSString).expandingTildeInPath)
         }
-        return root.appendingPathComponent("Tags", isDirectory: true)
+        return root.appendingPathComponent(Store.tagMirrorFolder, isDirectory: true)
                    .appendingPathComponent(safe(tag.name), isDirectory: true)
     }
 

@@ -163,6 +163,26 @@ enum SelfTest {
         Check.that("the Tags/ mirror is not promoted into the folder tree",
                    findNode(path: tagsMirrorPath, in: treeWithTagsMirror) == nil)
 
+        if let sample = rows.first(where: { store.relPath($0.path).contains("/") }) {
+            let folder = (sample.path as NSString).deletingLastPathComponent
+            let renamed = folder + " Renamed"
+            try? await store.moveFolder(from: folder, to: renamed)
+            try? FileManager.default.moveItem(atPath: folder, toPath: renamed)
+            let followed = try? await store.documentPath(sample.doc)
+            let name = (sample.path as NSString).lastPathComponent
+            let movedFile = renamed + "/" + name
+            var rescan: (id: Int64, isNew: Bool, changed: Bool)?
+            if let f = FileScanner.scan(root: URL(fileURLWithPath: renamed)).first(where: { $0.url.lastPathComponent == name }) {
+                rescan = try? await store.upsertDocument(
+                    Store.FileFacts(path: f.url.path, size: f.size, mtime: f.mtime, created: f.created,
+                                    fileID: f.fileID), origin: .inLibrary)
+            }
+            Check.that("a renamed folder takes its documents' index entries along",
+                       followed == movedFile && rescan?.isNew == false, followed ?? "gone")
+            try? await store.moveFolder(from: renamed, to: folder)
+            try? FileManager.default.moveItem(atPath: renamed, toPath: folder)
+        }
+
         print("\nRENAME PREVIEW (\(Naming.defaultTemplate))")
         for row in rows.prefix(4) {
             let ctx = Naming.Context(date: row.docDate ?? row.createdAt, correspondent: row.correspondent,
@@ -929,7 +949,7 @@ enum SelfTest {
                    hits("net pay", .anyWord, "Total net pay: 2.400")
                        && !hits("net pay", .anyWord, "net payment"))
         Check.that("a pattern written before * existed keeps its meaning",
-                   PatternMatcher.openingEnds("invoice,  rechnung*, net pay") == "invoice*, rechnung*, net pay*")
+                   Schema.openingEnds("invoice,  rechnung*, net pay") == "invoice*, rechnung*, net pay*")
         Check.that("all words needs every one of them",
                    hits("amount, due", .allWords, "the amount due is")
                        && !hits("amount, missing", .allWords, "the amount due is"))
@@ -946,12 +966,12 @@ enum SelfTest {
                    hits("rechnung", .fuzzy, "Rechnunq Nr. 42")
                        && !hits("rechnung", .fuzzy, "Kontoauszug"))
         for pattern in ["Acme (UK) Ltd", "^inv-\\d+", "inv(oice"] {
-            print("  " + pattern.padded(20) + " → " + MatchMode.inferred(from: pattern).shortLabel)
+            print("  " + pattern.padded(20) + " → " + (MatchMode(rawValue: Schema.inferredMode(pattern))?.shortLabel ?? "?"))
         }
         Check.that("a pattern that was read as a regex keeps being one when migrated",
-                   MatchMode.inferred(from: "^inv-\\d+") == .regex)
+                   Schema.inferredMode("^inv-\\d+") == MatchMode.regex.rawValue)
         Check.that("…and one that never compiled is migrated as the words it was matching",
-                   MatchMode.inferred(from: "inv(oice") == .anyWord)
+                   Schema.inferredMode("inv(oice") == MatchMode.anyWord.rawValue)
 
         if let id = try? await store.upsertRule(
             Rule(id: 0, name: "Phrase Test", enabled: false, priority: 1,
@@ -1433,8 +1453,26 @@ enum SelfTest {
         catch { refused = nil }
         print("  a newer library         \(refused ?? "opened anyway")")
         Check.that("a library from a newer Doctopus is refused, with a reason",
-                   refused?.contains("format version") == true)
+                   refused?.contains("99.0") == true)
         try? FileManager.default.removeItem(at: future.deletingLastPathComponent())
+
+        let newerIndex = FileManager.default.temporaryDirectory
+            .appendingPathComponent("doctopus-newer-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("library.doctopus", isDirectory: true)
+        let indexPath = newerIndex.appendingPathComponent("index.sqlite").path
+        func indexVersion() -> Int {
+            (try? Database(path: indexPath).first("PRAGMA user_version") { Int($0.int(0)) }) ?? -1
+        }
+        _ = try? Store(directory: newerIndex)
+        Check.that("a new index is stamped with every migration", indexVersion() == Schema.current)
+        try? Database(path: indexPath).exec("PRAGMA user_version=\(Schema.current + 1)")
+        var refusedIndex = false
+        do { _ = try Store(directory: newerIndex) } catch Store.OpenError.newer { refusedIndex = true } catch {}
+        Check.that("an index migrated by a newer build is refused, even at the same format",
+                   refusedIndex)
+        Check.that("…and is not stamped back down to this build's version",
+                   indexVersion() == Schema.current + 1)
+        try? FileManager.default.removeItem(at: newerIndex.deletingLastPathComponent())
 
         print("\nSANITY CHECK / VERIFICATION")
         let healthyReport = (try? await LibraryVerifier.verify(store: store)) ?? VerificationReport()

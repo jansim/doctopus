@@ -317,7 +317,6 @@ struct FolderNode: Identifiable, Hashable, Sendable {
 
 enum Selection: Hashable, Sendable {
     case all
-    case inbox
     case queue
     case folder(String)
     case tag(TagRef)
