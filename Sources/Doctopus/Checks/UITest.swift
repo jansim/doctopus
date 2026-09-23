@@ -552,9 +552,12 @@ enum UITest {
 
         model.selection = .needsReview
         var rows: [DocumentRow] = []
+        // Both can be listed before the import is done — a rule that already
+        // matches puts one in Needs Review — and only the import's own entry
+        // says it arrived from outside, so wait for that rather than the listing.
         _ = await settle({
             rows = model.documents.filter { $0.filename.hasPrefix("batch-") }
-            return rows.count == 2
+            return rows.count == 2 && rows.contains { $0.filename.hasPrefix("batch-new") && $0.fromOutside }
         }, timeout: 60)
         let newRow = rows.first { $0.filename.hasPrefix("batch-new") }
         let foundRow = rows.first { $0.filename.hasPrefix("batch-found") }
