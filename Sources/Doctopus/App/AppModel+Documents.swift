@@ -257,6 +257,7 @@ extension AppModel {
                     try? await lib.store.logEdit(docID: row.doc,
                                                  detail: Self.editDetail(field.name, value))
                 }
+                await lib.indexer.reroute(rows.map(\.doc), applyingActions: false)
             }
             reloadDetail()
             refreshAll()
@@ -269,6 +270,7 @@ extension AppModel {
         Task {
             try? await lib.store.setFieldValue(docID: ref.doc, field: owned, value: value)
             try? await lib.store.logEdit(docID: ref.doc, detail: Self.editDetail(field.name, value))
+            await lib.indexer.reroute([ref.doc], applyingActions: false)
             reloadDetail()
             refreshAll()
         }
@@ -352,8 +354,10 @@ extension AppModel {
             try? await lib.store.overwriteMetadataField(ref.doc, column: column, value: value?.nilIfBlank)
             try? await lib.store.logEdit(docID: ref.doc,
                                          detail: Self.editDetail(label, value))
+            await lib.indexer.reroute([ref.doc], applyingActions: false)
             reloadDetail()
             reloadDocuments()
+            refreshRuleMatches()
         }
     }
 
@@ -369,8 +373,10 @@ extension AppModel {
             try? await lib.store.logEdit(
                 docID: ref.doc,
                 detail: Self.editDetail("Date", date.map(DayDate.display)))
+            await lib.indexer.reroute([ref.doc], applyingActions: false)
             reloadDetail()
             reloadDocuments()
+            refreshRuleMatches()
         }
     }
 }

@@ -37,6 +37,7 @@ private struct DetailInspector: View {
             VStack(alignment: .leading, spacing: 14) {
                 header
                 Divider()
+                RuleMatchSection(row: row)
                 summarySection
                 metadataSection
                 tagsSection

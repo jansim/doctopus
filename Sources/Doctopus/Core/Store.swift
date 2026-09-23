@@ -9,6 +9,9 @@ actor Store {
     let libraryID: LibraryID
     var fieldCache: [Field]?
 
+    // Store+RuleMatches
+    var ruleMatchCache = RuleMatchCache()
+
     private let rootPrefix: String
 
     init(directory: URL) throws {
@@ -1155,16 +1158,20 @@ actor Store {
         var subject: Rule.Subject
     }
 
-    func ruleTargets() throws -> [RuleTarget] {
-        try db.map("""
+    /// Skips the rule's outliers, unless it is applied to one document explicitly.
+    func ruleTargets(for rule: Rule, onlyTo docID: Int64? = nil) throws -> [RuleTarget] {
+        let scope = docID == nil
+            ? "AND d.id NOT IN (SELECT doc_id FROM rule_suppressions WHERE rule_id=?)"
+            : "AND d.id=?"
+        return try db.map("""
             SELECT d.id, d.path, d.filename, d.created_at, m.doc_date, ec.name, et.name,
                    (SELECT f.body FROM doc_fts f WHERE f.rowid = d.id), m.title, m.language
             FROM documents d
             LEFT JOIN metadata m ON m.doc_id = d.id
             LEFT JOIN entities ec ON ec.id = m.correspondent_id
             LEFT JOIN entities et ON et.id = m.doc_type_id
-            WHERE d.missing=0 AND d.deleted_at IS NULL
-            """) {
+            WHERE d.missing=0 AND d.deleted_at IS NULL \(scope)
+            """, [.int(docID ?? rule.id)]) {
             RuleTarget(id: $0.int(0), path: absPath($0.string(1)),
                        created: Date(timeIntervalSince1970: $0.double(3)), docDate: $0.date(4),
                        title: $0.stringOrNil(8), language: $0.stringOrNil(9),
