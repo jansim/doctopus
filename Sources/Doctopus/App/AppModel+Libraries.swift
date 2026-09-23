@@ -102,6 +102,43 @@ extension AppModel {
         Task { await openLibrary(container: container) }
     }
 
+    func createFolder(named name: String, in parent: URL) {
+        let url = parent.appendingPathComponent(name, isDirectory: true)
+        do {
+            try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+            refreshAll()
+            selection = .folder(url.path)
+        } catch {
+            errorMessage = "Could not create “\(name)”: \(error.localizedDescription)"
+        }
+    }
+
+    /// The index moves first, so the watcher never sees the new folder while
+    /// its documents are still recorded under the old one.
+    func renameFolder(_ path: String, to name: String) {
+        guard let lib = libraries.first(where: { $0.owns(path: path) }) else { return }
+        let source = URL(fileURLWithPath: path)
+        let destination = source.deletingLastPathComponent().appendingPathComponent(name, isDirectory: true).path
+        Task {
+            do {
+                try await lib.store.moveFolder(from: path, to: destination)
+                do {
+                    try FileManager.default.moveItem(atPath: path, toPath: destination)
+                } catch {
+                    try? await lib.store.moveFolder(from: destination, to: path)
+                    throw error
+                }
+            } catch {
+                errorMessage = "Could not rename “\(source.lastPathComponent)”: \(error.localizedDescription)"
+                return
+            }
+            if case .folder(let selected) = selection, selected == path || selected.hasPrefix(path + "/") {
+                selection = .folder(destination + selected.dropFirst(path.count))
+            }
+            refreshAll()
+        }
+    }
+
     func closeLibrary(_ lib: Library) {
         lib.watcher?.stop()
         libraries.removeAll { $0 === lib }

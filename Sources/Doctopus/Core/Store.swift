@@ -62,6 +62,8 @@ actor Store {
     }
 
     static let formatVersion = 2
+    /// Where tags mirror as aliases unless a tag names its own folder.
+    static let tagMirrorFolder = "Tags"
 
     static var appVersion: String {
         (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "unknown"
@@ -1289,6 +1291,25 @@ actor Store {
             """, [.text(relPath(newPath)), .text(relPath(url.deletingLastPathComponent().path)),
                   .text(url.lastPathComponent), .text(url.pathExtension.lowercased()), .int(docID)])
         try refreshSearchIndex(docID)
+    }
+
+    /// A folder renamed as a whole: every path under it follows, rather than
+    /// each document going missing and being found again by its hash.
+    func moveFolder(from old: String, to new: String) throws {
+        let columns = [("documents", "path"), ("documents", "directory"), ("aliases", "path")]
+        // Events keep the absolute paths they were logged with.
+        let absolute = [("events", "from_path"), ("events", "to_path")]
+        try db.transaction {
+            for (table, column) in columns + absolute {
+                let isAbsolute = table == "events"
+                let (from, to) = isAbsolute ? (Store.canonical(old), Store.canonical(new))
+                                            : (relPath(old), relPath(new))
+                try db.run("""
+                    UPDATE \(table) SET \(column) = ?2 || substr(\(column), length(?1) + 1)
+                    WHERE \(column) = ?1 OR substr(\(column), 1, length(?1) + 1) = ?1 || '/'
+                    """, [.text(from), .text(to)])
+            }
+        }
     }
 
     func setSizes(_ docID: Int64, size: Int64, originalSize: Int64?) throws {

@@ -59,9 +59,6 @@ extension Store {
 
         switch selection {
         case .all, .deleted, .savedView: break
-        case .inbox:
-            wheres.append("(d.directory = ? OR d.directory LIKE ?)")
-            args.append(.text("Inbox")); args.append(.text("%/Inbox"))
         case .queue:
             wheres.append("d.id IN (SELECT doc_id FROM processing)")
         case .folder(let path):
@@ -386,7 +383,7 @@ extension Store {
         }
 
         var allDirs = Set(counts.keys)
-        let tagsMirrorRoot = root.appendingPathComponent("Tags", isDirectory: true).path
+        let tagsMirrorRoot = root.appendingPathComponent(Store.tagMirrorFolder, isDirectory: true).path
         for url in FileScanner.directories(root: root) {
             let path = url.path
             guard path != tagsMirrorRoot, !path.hasPrefix(tagsMirrorRoot + "/") else { continue }

@@ -163,6 +163,25 @@ enum SelfTest {
         Check.that("the Tags/ mirror is not promoted into the folder tree",
                    findNode(path: tagsMirrorPath, in: treeWithTagsMirror) == nil)
 
+        if let sample = rows.first(where: { store.relPath($0.path).contains("/") }) {
+            let folder = (sample.path as NSString).deletingLastPathComponent
+            let renamed = folder + " Renamed"
+            try? await store.moveFolder(from: folder, to: renamed)
+            try? FileManager.default.moveItem(atPath: folder, toPath: renamed)
+            let followed = try? await store.documentPath(sample.doc)
+            let name = (sample.path as NSString).lastPathComponent
+            let movedFile = renamed + "/" + name
+            var rescan: (id: Int64, isNew: Bool, changed: Bool)?
+            if let f = FileScanner.scan(root: URL(fileURLWithPath: renamed)).first(where: { $0.url.lastPathComponent == name }) {
+                rescan = try? await store.upsertDocument(
+                    Store.FileFacts(path: f.url.path, size: f.size, mtime: f.mtime, created: f.created))
+            }
+            Check.that("a renamed folder takes its documents' index entries along",
+                       followed == movedFile && rescan?.isNew == false, followed ?? "gone")
+            try? await store.moveFolder(from: renamed, to: folder)
+            try? FileManager.default.moveItem(atPath: renamed, toPath: folder)
+        }
+
         print("\nRENAME PREVIEW (\(Naming.defaultTemplate))")
         for row in rows.prefix(4) {
             let ctx = Naming.Context(date: row.docDate ?? row.createdAt, correspondent: row.correspondent,
