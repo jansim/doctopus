@@ -79,9 +79,15 @@ struct QueueInfo: Hashable, Sendable {
     var approved: Bool
 }
 
+enum DocumentOrigin: Sendable {
+    case scanned
+    case imported(from: String)
+    case inLibrary
+}
+
 /// What an `events` row records. The raw values are what the index stores.
 enum EventAction: String, Sendable {
-    case imported, indexed, analyzed, optimized, aliased, unfiled, moved, renamed, routed, promoted, edited
+    case added, imported, indexed, analyzed, optimized, aliased, unfiled, moved, renamed, routed, promoted, edited
     case revertedOptimization = "reverted_optimization"
 
     init(stored: String) { self = EventAction(rawValue: stored) ?? .indexed }
@@ -91,6 +97,7 @@ enum EventAction: String, Sendable {
 
     var icon: String {
         switch self {
+        case .added: return "plus.circle"
         case .routed: return "arrow.triangle.branch"
         case .optimized: return "arrow.down.circle"
         case .renamed: return "character.cursor.ibeam"
@@ -390,9 +397,9 @@ extension String {
 /// `metadata.source` is written as `backend[:model][:vN]`. Read it back only
 /// through here, so adding a component never breaks a prefix match elsewhere.
 enum MetadataSource: Equatable {
-    /// Bump whenever the question the models are asked changes, so
+    /// Bump whenever the default prompt template changes, so
     /// `is:stale-analysis` can find the documents answered under an older one.
-    static let promptVersion = 4
+    static let promptVersion = 5
 
     case onDevice(model: String?)
     case remote(model: String?, vision: Bool)
