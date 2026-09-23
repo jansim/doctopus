@@ -1,5 +1,43 @@
 # Ingestion
 
+## Three ways in
+
+How a document reached the library decides what Doctopus may do to the file.
+What it may do to the index — read it, suggest metadata and folders, queue it
+for review — is the same for all three.
+
+| | Imported from outside | Found inside the library | Scanned |
+| --- | --- | --- | --- |
+| The file | Copied in; the original is never touched | Stays exactly where it is | Written into the library |
+| OCR, metadata, model pass | Yes | Yes | Yes |
+| Suggested folders | Yes | Yes | Yes |
+| Moved to a suggested folder | Only when no folder was chosen | Never | Only when no folder was chosen |
+| Renamed by a rule | Only when no folder was chosen | Never | Only when no folder was chosen |
+| Optimized | Yes, the copy | Only if ticked in the review | Yes |
+| Needs Review | Yes | Yes | Yes |
+
+**Imported from outside.** A file dropped in or chosen with Import that lives
+outside the library is copied in, and only the copy is ever worked on. With a
+folder chosen — its context menu, or with it selected — the copy stays there;
+otherwise it lands in the Inbox and is routed (see [Routing](#routing)). Either
+way it is given suggested folders.
+
+**Found inside the library.** A file that is already somewhere in the library
+folder — put there in Finder, noticed by the watcher or a reindex, or dropped
+onto the app from within the library — is new to the index but not new to the
+disk. It is read, analyzed and, if a model is configured, sent through it; it
+gets suggested folders and waits in Needs Review. Its path is never changed:
+not by routing, not by a rule's rename, and not by the review, which starts on
+the folder it is in. Optimization is a checkbox in the review, off until ticked.
+
+The very first pass over a newly opened library is the exception to Needs
+Review: that is the existing archive rather than something that just arrived,
+so it is indexed without queuing every document for a look.
+
+**Scanned.** A capture from an iPhone or iPad has no original anywhere else, so
+it gets the whole treatment: optimized, read, given suggested folders and — if
+it was not scanned into a chosen folder — routed.
+
 ## Getting documents in
 
 **Drag and drop, or Import.** Files from outside the library are copied in, a
@@ -52,6 +90,12 @@ which form is taken, and how many pages it yields — is checked in `--selftest`
 
 ## Routing
 
+Every new document — imported, scanned or found in place — is run past the
+rules and the derived path, and whatever folders they propose are kept as its
+suggestions in `path_suggestions`, best first. Only an unspecified import or
+inbox scan is then moved; everything else stays where it is and waits in Needs
+Review with the suggestions on offer.
+
 Unspecified imports and inbox scans are routed by the rules first. A rule that
 matches is certain, so the file moves to its folder — unless matching rules
 name different folders, in which case it stays in the Inbox, in Needs Review,
@@ -75,9 +119,11 @@ Correspondents and types that carry their own pattern are read the same way.
 The actions are moving the file, renaming it from a naming template, adding
 tags, and setting the correspondent or document type; each kind appears at
 most once per rule. Every matching rule applies: tags are combined, and for
-the single-valued actions the rule highest in the list wins. Moving and
-renaming only ever happen to a file Doctopus has just brought in, or when
-Apply to Existing is pressed in the editor.
+the single-valued actions the rule highest in the list wins. Tags,
+correspondent and type are applied to every new document. Moving and renaming
+only ever happen to a file Doctopus has just brought in without a chosen
+folder, or when Apply to Existing is pressed in the editor; for anything else a
+rule's folder is only a suggestion.
 
 Rules live in Settings › Rules, per library. The editor shows how many
 documents already in the library a rule catches, and where a document would
@@ -104,8 +150,10 @@ real text are re-drawn into the output PDF context, which copies their text and
 vector operators through intact. If the result is not at least 15% smaller, the
 original is kept byte-for-byte.
 
-This is automatic only for files Doctopus brings in itself. Anything already in
-the library is optimized only on request.
+This is automatic only for files Doctopus brings in itself — the copy an
+import makes, and a scan. Anything already in the library is optimized only on
+request: Optimize in the context menu, or *Optimize when approving* in the
+review, which is never ticked by default.
 
 ## Naming
 

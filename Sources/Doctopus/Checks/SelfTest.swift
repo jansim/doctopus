@@ -1650,7 +1650,29 @@ enum SelfTest {
             let row = await imported("doctopus-clear-chosen")
             Check.that("an import into a chosen folder is never routed away",
                        row?.directory == folder.path, row?.directory ?? "nowhere")
+            let offered = row.map { (try? await store.pathSuggestions(for: $0.doc)) ?? [] } ?? []
+            Check.that("…but is still offered the folder the rules would pick",
+                       offered.map(\.path).contains(root.appendingPathComponent("Filed/Clear").path))
             try? fm.removeItem(at: chosen)
+        }
+
+        if let staged = stage("doctopus-clear-found") {
+            let placed = inbox.appendingPathComponent(staged.lastPathComponent)
+            try? fm.moveItem(at: staged, to: placed)
+            let hash = FileScanner.hash(placed)
+            await indexer.importFiles([placed], into: inbox, route: true)
+            let row = await imported("doctopus-clear-found")
+            let offered = row.map { (try? await store.pathSuggestions(for: $0.doc)) ?? [] } ?? []
+            let waiting = ((try? await store.listDocuments(selection: .needsReview, query: SearchQuery(""),
+                                                           sort: .added, ascending: false)) ?? [])
+                .contains { $0.id == row?.id }
+            Check.that("a new file found in the library stays where it is, byte for byte",
+                       row?.path == placed.path && FileScanner.hash(placed) == hash,
+                       row?.path ?? "nowhere")
+            Check.that("…is offered the folder the rules would pick",
+                       offered.map(\.path).contains(root.appendingPathComponent("Filed/Clear").path))
+            Check.that("…and waits in Needs Review", waiting)
+            Check.that("…without being optimized", row?.originalSize == nil)
         }
 
         if let tie = stage("doctopus-tie") {

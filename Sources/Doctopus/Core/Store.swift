@@ -265,6 +265,10 @@ actor Store {
         return doomed.count
     }
 
+    func documentCount() throws -> Int {
+        try db.first("SELECT COUNT(*) FROM documents") { Int($0.int(0)) } ?? 0
+    }
+
     func deletedCount() throws -> Int {
         try db.first("SELECT COUNT(*) FROM documents WHERE deleted_at IS NOT NULL") {
             Int($0.int(0))

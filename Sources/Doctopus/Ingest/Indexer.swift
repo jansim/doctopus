@@ -50,7 +50,11 @@ actor Indexer {
 
         onProgress(IndexProgress(phase: "Scanning", done: 0, total: 1))
 
+        // The first pass over a library is its existing archive, not news:
+        // only a file that turns up after that waits in Needs Review.
+        let firstPass = ((try? await store.documentCount()) ?? 0) == 0
         var toProcess: [(Int64, String)] = []
+        var fresh: Set<Int64> = []
         let found = FileScanner.scan(root: store.root)
         var seen = Set<String>()
         seen.reserveCapacity(found.count)
@@ -62,6 +66,7 @@ actor Indexer {
                                         size: f.size, mtime: f.mtime, created: f.created)
             guard let result = try? await store.upsertDocument(facts) else { continue }
             if result.changed { toProcess.append((result.id, f.url.path)) }
+            if result.isNew, !firstPass { fresh.insert(result.id) }
         }
         _ = try? await store.reconcileMissing(seenPaths: seen)
 
@@ -74,7 +79,7 @@ actor Indexer {
         }
 
         onDataChanged()
-        return await process(documents: toProcess, phase: "Indexing", isImport: false)
+        return await process(documents: toProcess, phase: "Indexing", isImport: false, found: fresh)
     }
 
     func handleChanges(paths: [String]) async {
@@ -82,6 +87,7 @@ actor Indexer {
         let fm = FileManager.default
 
         var toProcess: [(Int64, String)] = []
+        var found: Set<Int64> = []
         var touched = false
 
         for path in paths {
@@ -92,7 +98,7 @@ actor Indexer {
             let exists = fm.fileExists(atPath: path, isDirectory: &isDir)
 
             if isDir.boolValue {
-                await rescan(directory: URL(fileURLWithPath: path), into: &toProcess)
+                await rescan(directory: URL(fileURLWithPath: path), into: &toProcess, found: &found)
                 touched = true
                 continue
             }
@@ -120,29 +126,34 @@ actor Indexer {
                                         created: v.creationDate ?? Date())
             if let result = try? await store.upsertDocument(facts), result.changed {
                 toProcess.append((result.id, path))
+                if result.isNew { found.insert(result.id) }
             }
             touched = true
         }
 
         if touched { onDataChanged() }
         if !toProcess.isEmpty {
-            await process(documents: toProcess, phase: "Indexing", isImport: false)
+            await process(documents: toProcess, phase: "Indexing", isImport: false, found: found)
         }
     }
 
-    private func rescan(directory: URL, into toProcess: inout [(Int64, String)]) async {
+    private func rescan(directory: URL, into toProcess: inout [(Int64, String)],
+                        found: inout Set<Int64>) async {
         for f in FileScanner.scan(root: directory) {
             let facts = Store.FileFacts(path: f.url.path, size: f.size,
                                         mtime: f.mtime, created: f.created)
             if let r = try? await store.upsertDocument(facts), r.changed {
                 toProcess.append((r.id, f.url.path))
+                if r.isNew { found.insert(r.id) }
             }
         }
     }
 
+    /// `found` are documents new to the index that were already in the library:
+    /// they are queued for review like an import, but nothing is done to the file.
     @discardableResult
     func process(documents: [(Int64, String)], phase: String, isImport: Bool,
-                 route: Bool = false) async -> Int {
+                 route: Bool = false, found: Set<Int64> = []) async -> Int {
         guard !documents.isEmpty else { return 0 }
         let total = documents.count
         var done = 0
@@ -155,7 +166,8 @@ actor Indexer {
             var inFlight = 0
             while inFlight < width, let next = iterator.next() {
                 group.addTask { [weak self] in
-                    await self?.pipeline(id: next.0, path: next.1, isImport: isImport, route: route)
+                    await self?.pipeline(id: next.0, path: next.1, isImport: isImport, route: route,
+                                         isNew: found.contains(next.0))
                 }
                 inFlight += 1
             }
@@ -166,7 +178,8 @@ actor Indexer {
                 if cancelled { group.cancelAll(); break }
                 if let next = iterator.next() {
                     group.addTask { [weak self] in
-                        await self?.pipeline(id: next.0, path: next.1, isImport: isImport, route: route)
+                        await self?.pipeline(id: next.0, path: next.1, isImport: isImport, route: route,
+                                         isNew: found.contains(next.0))
                     }
                 }
             }
@@ -177,9 +190,12 @@ actor Indexer {
     }
 
     /// Nothing here writes to a file the user already had: only a fresh import is
-    /// optimized, and only an import nobody gave a destination is routed.
+    /// optimized, and only an import nobody gave a destination is moved. Every
+    /// document new to the library — imported, scanned or found in place — is
+    /// given its suggested folders and waits in Needs Review.
     @discardableResult
-    private func pipeline(id: Int64, path: String, isImport: Bool, route: Bool) async -> String? {
+    private func pipeline(id: Int64, path: String, isImport: Bool, route: Bool,
+                          isNew: Bool) async -> String? {
         var url = URL(fileURLWithPath: path)
         let name = url.lastPathComponent
         guard FileManager.default.fileExists(atPath: url.path) else {
@@ -262,15 +278,18 @@ actor Indexer {
             try? await store.suggestTag(tag, for: id, autoAcceptMatching: settings.autoAcceptMatchingTagSuggestions)
         }
 
-        // 6. Routing — undirected imports only; existing files are never moved
-        // uninvited, and neither is anything imported into a chosen folder.
-        if isImport, route, settings.autoRouteImports {
-            await self.route(id: id, url: &url, text: extracted.text, findings: findings, insight: insight)
+        // 6. Routing. Every new document gets suggested folders, but only an
+        // undirected import is moved to one; a file found in the library, or
+        // imported into a chosen folder, stays where it is until reviewed.
+        if isImport || isNew {
+            await self.route(id: id, url: &url, text: extracted.text, findings: findings, insight: insight,
+                             moving: isImport && route && settings.autoRouteImports,
+                             action: isImport ? "imported" : "indexed")
         }
 
         await syncAliases(docID: id, target: url)
 
-        if !isImport, optimized == nil {
+        if !isImport, !isNew, optimized == nil {
             try? await store.logProcessing(docID: id, action: "indexed",
                                            detail: summaryLine(extracted, findings, insight),
                                            confidence: findings.confidence, rule: nil,
@@ -302,8 +321,12 @@ actor Indexer {
         return parts.joined(separator: " · ")
     }
 
+    /// Suggests folders and applies the rules' tags, correspondent and type.
+    /// Renaming and moving happen only when `moving`; otherwise the document is
+    /// logged under `action` and waits in Needs Review where it is.
     private func route(id: Int64, url: inout URL, text: String,
-                       findings: DocumentAnalyzer.Findings, insight: DocumentInsight?) async {
+                       findings: DocumentAnalyzer.Findings, insight: DocumentInsight?,
+                       moving: Bool, action: String) async {
         let router = Router(rules: (try? await store.rules()) ?? [],
                             threshold: settings.routingThreshold,
                             derivedTemplate: settings.derivedTemplate,
@@ -330,6 +353,16 @@ actor Indexer {
             } else {
                 try? await store.suggestTag(tag, for: id, autoAcceptMatching: settings.autoAcceptMatchingTagSuggestions)
             }
+        }
+
+        guard moving else {
+            let detail = decision.destination.map {
+                "Suggested “\($0.lastPathComponent)”, left where it is — \(decision.explanation)"
+            } ?? decision.explanation
+            try? await store.logProcessing(docID: id, action: action, detail: detail,
+                                           confidence: decision.confidence, rule: decision.rule,
+                                           from: nil, to: url.path, approved: false)
+            return
         }
 
         if let template = decision.rename {
@@ -586,13 +619,15 @@ actor Indexer {
 
     /// A file from outside the library is copied in and the original left alone —
     /// `movingSource` is only for files the app itself produced. A file already in
-    /// the library is indexed in place, never optimized or routed.
+    /// the library is indexed in place, never optimized or moved; if it is new to
+    /// the index it waits in Needs Review with its suggested folders.
     @discardableResult
     func importFiles(_ urls: [URL], into destination: URL,
                      movingSource: Bool = false, route: Bool = false) async -> ImportSummary {
         var summary = ImportSummary()
         var imported: [(Int64, String)] = []
         var inPlace: [(Int64, String)] = []
+        var found: Set<Int64> = []
         let rootPath = store.root.path
         var madeDestination = false
 
@@ -603,6 +638,7 @@ actor Indexer {
                       let r = try? await store.upsertDocument(facts) else { summary.failed += 1; continue }
                 summary.alreadyInLibrary += 1
                 if r.changed { inPlace.append((r.id, path)) }
+                if r.isNew { found.insert(r.id) }
                 continue
             }
             if let sourceHash = FileScanner.hash(url),
@@ -633,7 +669,7 @@ actor Indexer {
                 summary.failed += 1
             }
         }
-        await process(documents: inPlace, phase: "Indexing", isImport: false)
+        await process(documents: inPlace, phase: "Indexing", isImport: false, found: found)
         await process(documents: imported, phase: "Importing", isImport: true, route: route)
         if route {
             for (id, path) in imported {
