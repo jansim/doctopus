@@ -5,6 +5,8 @@ struct RulesSettings: View {
     @State private var rules: [Rule] = []
     @State private var selected: Rule.ID?
     @State private var editing: Rule?
+    @State private var outlierCounts: [Rule.ID: Int] = [:]
+    @State private var showingOutliers: Rule.ID?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -29,6 +31,10 @@ struct RulesSettings: View {
                         .font(.caption.monospaced()).lineLimit(1)
                         .help(r.actionSummary)
                 }
+                TableColumn("Suppressed") { r in
+                    outlierCell(r)
+                }
+                .width(70)
                 TableColumn("On") { r in
                     Toggle("", isOn: Binding(get: { r.enabled }, set: { toggle(r, $0) })).labelsHidden()
                 }
@@ -74,10 +80,37 @@ struct RulesSettings: View {
         }
         .task { await load() }
         .task(id: model.settingsLibrary?.id) { await load() }
+        // Documents are marked as outliers from the main window while this is open.
+        .onChange(of: model.settingsLibrary?.outlierRevision) { Task { await load() } }
         .sheet(item: $editing) { rule in
             if let library = model.settingsLibrary {
                 RuleEditor(rule: rule, library: library) { save($0) }
             }
+        }
+    }
+
+    @ViewBuilder
+    private func outlierCell(_ rule: Rule) -> some View {
+        let count = outlierCounts[rule.id] ?? 0
+        if count == 0 {
+            Text("—").foregroundStyle(.tertiary)
+        } else {
+            Button("\(count)") { showingOutliers = rule.id }
+                .buttonStyle(.link)
+                .monospacedDigit()
+                .help("Documents marked as outliers for “\(rule.name)”")
+                .popover(isPresented: Binding(
+                    get: { showingOutliers == rule.id },
+                    set: { if !$0 { showingOutliers = nil } }),
+                         arrowEdge: .trailing) {
+                    if let library = model.settingsLibrary {
+                        OutlierList(rule: rule, library: library) {
+                            Task { await load() }
+                        } onShow: {
+                            showingOutliers = nil
+                        }
+                    }
+                }
         }
     }
 
@@ -92,7 +125,9 @@ struct RulesSettings: View {
     private var selectedRule: Rule? { rules.first { $0.id == selected } }
 
     private func load() async {
-        rules = (try? await model.settingsLibrary?.store.rules()) ?? []
+        let store = model.settingsLibrary?.store
+        rules = (try? await store?.rules()) ?? []
+        outlierCounts = (try? await store?.suppressionCounts()) ?? [:]
     }
 
     private func toggle(_ rule: Rule, _ on: Bool) {
@@ -107,6 +142,7 @@ struct RulesSettings: View {
             let id = (try? await store.upsertRule(rule)) ?? rule.id
             await load()
             selected = id
+            model.refreshRuleMatches()
         }
     }
 
@@ -129,6 +165,7 @@ struct RulesSettings: View {
             try? await store.deleteRule(id)
             if selected == id { selected = nil }
             await load()
+            model.refreshRuleMatches()
         }
     }
 
@@ -143,6 +180,75 @@ struct RulesSettings: View {
             try? await store.reorderRules(ordered)
             await load()
             selected = id
+        }
+    }
+}
+
+/// A rule's outliers, each of which can be handed back to the rule, and the
+/// way to see them all in the main window.
+private struct OutlierList: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.openWindow) private var openWindow
+    let rule: Rule
+    let library: Library
+    let onChange: () -> Void
+    let onShow: () -> Void
+    @State private var outliers: [Store.Outlier] = []
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Outliers for “\(rule.name)”")
+                .font(.headline)
+            Text("The rule matches these documents but leaves them alone.")
+                .font(.caption).foregroundStyle(.secondary)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(outliers) { outlier in
+                        HStack(spacing: 8) {
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(outlier.filename).lineLimit(1).truncationMode(.middle)
+                                Text(outlier.folder)
+                                    .font(.caption).foregroundStyle(.secondary)
+                                    .lineLimit(1).truncationMode(.head)
+                            }
+                            Spacer(minLength: 8)
+                            Button {
+                                unsuppress(outlier)
+                            } label: {
+                                Image(systemName: "arrow.uturn.backward")
+                            }
+                            .buttonStyle(.borderless)
+                            .help("Stop suppressing: let “\(rule.name)” point this document out again")
+                        }
+                    }
+                }
+            }
+            .frame(maxHeight: 260)
+            Divider()
+            HStack {
+                Spacer()
+                Button("Show in Library") {
+                    model.showOutliers(of: rule.id, in: library)
+                    openWindow(id: "main")
+                    onShow()
+                }
+            }
+        }
+        .padding(12)
+        .frame(width: 320)
+        .task { await load() }
+    }
+
+    private func load() async {
+        outliers = (try? await library.store.outliers(of: rule.id)) ?? []
+    }
+
+    private func unsuppress(_ outlier: Store.Outlier) {
+        Task {
+            await model.setRuleSuppressed(false, rule: rule.id, name: rule.name,
+                                          doc: outlier.doc, in: library)
+            await load()
+            onChange()
         }
     }
 }

@@ -9,6 +9,9 @@ actor Store {
     let libraryID: LibraryID
     var fieldCache: [Field]?
 
+    // Store+RuleMatches
+    var ruleMatchCache = RuleMatchCache()
+
     private let rootPrefix: String
 
     init(directory: URL) throws {
@@ -1174,7 +1177,13 @@ actor Store {
         return try await applyRuleToExisting(rule)
     }
 
-    func applyRuleToExisting(_ rule: Rule) async throws -> RuleApplyResult {
+    /// Across the library the rule's outliers are skipped; given one document,
+    /// it is applied to that one whether or not it was marked as one, because
+    /// then someone asked for exactly that.
+    func applyRuleToExisting(_ rule: Rule, onlyTo docID: Int64? = nil) async throws -> RuleApplyResult {
+        let scope = docID == nil
+            ? "AND d.id NOT IN (SELECT doc_id FROM rule_suppressions WHERE rule_id=?)"
+            : "AND d.id=?"
         let docs = try db.map("""
             SELECT d.id, d.path, d.filename, d.created_at, m.doc_date, ec.name, et.name,
                    (SELECT f.body FROM doc_fts f WHERE f.rowid = d.id), m.title, m.language
@@ -1182,8 +1191,8 @@ actor Store {
             LEFT JOIN metadata m ON m.doc_id = d.id
             LEFT JOIN entities ec ON ec.id = m.correspondent_id
             LEFT JOIN entities et ON et.id = m.doc_type_id
-            WHERE d.missing=0 AND d.deleted_at IS NULL
-            """) {
+            WHERE d.missing=0 AND d.deleted_at IS NULL \(scope)
+            """, [.int(docID ?? rule.id)]) {
             (id: $0.int(0), path: absPath($0.string(1)), filename: $0.string(2),
              created: Date(timeIntervalSince1970: $0.double(3)),
              docDate: $0.date(4), correspondent: $0.stringOrNil(5),

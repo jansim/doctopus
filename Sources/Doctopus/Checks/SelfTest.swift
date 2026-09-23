@@ -268,6 +268,8 @@ enum SelfTest {
             _ = try? await store.upsertRule(original)
             try? await store.reorderRules(((try? await store.rules()) ?? [])
                 .sorted { $0.priority > $1.priority }.map(\.id))
+
+            await ruleMatches(store: store, payslip: payslip)
         }
 
         print("\nFIELDS")
@@ -1398,6 +1400,66 @@ enum SelfTest {
         }
 
         Check.finish("pipeline self-test")
+    }
+
+    /// A rule that would still change a filed document is pointed out on it,
+    /// until it is applied or the document is marked as an outlier for it —
+    /// and an outlier is left alone by Apply to Existing, but not by an
+    /// explicit apply to that one document.
+    private static func ruleMatches(store: Store, payslip: DocumentRow) async {
+        print("\nRULE MATCHES")
+        let rule = Rule(id: 0, name: "Outlier Check", priority: 1,
+                        conditions: [RuleCondition(field: .filename, pattern: "gehaltsabrechnung")],
+                        actions: [RuleAction(kind: .addTags, value: "outlier-check")])
+        guard let id = try? await store.upsertRule(rule) else {
+            Check.that("a rule to check matches with is saved", false)
+            return
+        }
+        var saved = rule
+        saved.id = id
+
+        func match() async -> RuleMatch? {
+            ((try? await store.ruleMatches()) ?? [:])[payslip.doc]?.first { $0.ruleID == id }
+        }
+        func tagged() async -> Bool {
+            ((try? await store.tags(for: payslip.doc)) ?? []).contains { $0.name == "outlier-check" }
+        }
+
+        let pending = await match()
+        Check.that("a matching rule that would change a document is pointed out on it",
+                   pending?.isPending == true && pending?.changes == [.addTags(["outlier-check"])],
+                   pending.map { $0.changes.map(\.label).joined(separator: "; ") } ?? "no match")
+
+        try? await store.setRuleSuppressed(true, rule: id, doc: payslip.doc)
+        let suppressed = await match()
+        Check.that("an outlier is still listed, but no longer pending",
+                   suppressed?.suppressed == true && suppressed?.isPending == false)
+        let counts = (try? await store.suppressionCounts()) ?? [:]
+        let listed = (try? await store.listDocuments(selection: .outliers(library: "", rule: id),
+                                                     query: SearchQuery(""), sort: .added,
+                                                     ascending: false)) ?? []
+        Check.that("a rule counts and lists its outliers",
+                   counts[id] == 1 && listed.map(\.doc) == [payslip.doc],
+                   "count \(counts[id] ?? 0), listed \(listed.count)")
+        let skipped = (try? await store.applyRuleToExisting(saved)) ?? Store.RuleApplyResult()
+        let skippedTagged = await tagged()
+        Check.that("Apply to Existing leaves an outlier alone",
+                   !skippedTagged, "matched \(skipped.matched)")
+
+        try? await store.setRuleSuppressed(false, rule: id, doc: payslip.doc)
+        let handedBack = await match()
+        Check.that("an outlier can be handed back to its rule", handedBack?.isPending == true)
+        let applied = (try? await store.applyRuleToExisting(saved, onlyTo: payslip.doc)) ?? Store.RuleApplyResult()
+        let appliedTagged = await tagged()
+        let after = await match()
+        Check.that("applying the rule to the one document settles the match",
+                   applied.matched == 1 && appliedTagged && after == nil)
+
+        try? await store.setRuleSuppressed(true, rule: id, doc: payslip.doc)
+        try? await store.deleteRule(id)
+        let orphaned = ((try? await store.suppressions()) ?? [:])[payslip.doc]?.contains(id) == true
+        Check.that("deleting a rule forgets its outliers", !orphaned)
+        if let tag = try? await store.tagID(named: "outlier-check") { try? await store.deleteTag(tag) }
     }
 
     private static func ruleMigration() {

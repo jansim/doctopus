@@ -23,6 +23,10 @@ final class Library: Identifiable {
     var facets: [String: [Facet]] = [:]
     var queue: [ProcessingEntry] = []
     var stats = Store.Stats()
+    /// Rules that would still change a document, and its outliers, by document.
+    var ruleMatches: [Int64: [RuleMatch]] = [:]
+    /// Bumped whenever a document is marked as an outlier or stops being one.
+    var outlierRevision = 0
 
     var displayName: String { root.lastPathComponent }
 

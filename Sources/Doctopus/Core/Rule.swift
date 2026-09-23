@@ -191,3 +191,50 @@ extension Rule {
                        RuleAction(kind: .addTags, value: tags)])
     }
 }
+
+/// A rule that matches a document and would still change something about it,
+/// or one the document has been marked as an outlier for.
+struct RuleMatch: Identifiable, Hashable, Sendable {
+    var ruleID: Int64
+    var ruleName: String
+    var changes: [Change]
+    var suppressed: Bool
+
+    var id: Int64 { ruleID }
+
+    /// Pending is what the list points out: something to do, and nobody has
+    /// said the document is an exception.
+    var isPending: Bool { !suppressed && !changes.isEmpty }
+
+    enum Change: Hashable, Sendable {
+        case move(to: String)
+        case rename(to: String)
+        case addTags([String])
+        case setCorrespondent(String)
+        case setDocType(String)
+
+        var icon: String {
+            switch self {
+            case .move: return "folder"
+            case .rename: return "character.cursor.ibeam"
+            case .addTags: return "tag"
+            case .setCorrespondent: return "building.2"
+            case .setDocType: return "doc.on.doc"
+            }
+        }
+
+        var label: String {
+            switch self {
+            case .move(let folder): return "Move to \(folder)"
+            case .rename(let name): return "Rename to \(name)"
+            case .addTags(let tags): return "Add tag\(tags.count == 1 ? "" : "s") \(tags.joined(separator: ", "))"
+            case .setCorrespondent(let value): return "Set correspondent to \(value)"
+            case .setDocType(let value): return "Set type to \(value)"
+            }
+        }
+    }
+
+    var summary: String {
+        "Rule “\(ruleName)”: " + changes.map(\.label).joined(separator: "; ")
+    }
+}

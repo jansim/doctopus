@@ -304,7 +304,9 @@ actor Indexer {
 
     private func route(id: Int64, url: inout URL, text: String,
                        findings: DocumentAnalyzer.Findings, insight: DocumentInsight?) async {
-        let router = Router(rules: (try? await store.rules()) ?? [],
+        // Reprocessing an outlier must not undo what marking it as one was for.
+        let outlierOf = (try? await store.suppressedRuleIDs(for: id)) ?? []
+        let router = Router(rules: ((try? await store.rules()) ?? []).filter { !outlierOf.contains($0.id) },
                             threshold: settings.routingThreshold,
                             derivedTemplate: settings.derivedTemplate,
                             root: store.root,
