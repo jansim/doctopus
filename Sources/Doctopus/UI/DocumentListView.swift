@@ -69,6 +69,7 @@ struct DocumentListView: View {
         case .needsReview: return "Everything the pipeline filed has been reviewed."
         case .queue: return "Imports, scans, moves and optimizations show up here as they happen."
         case .deleted: return "Documents you move to the Trash wait here, so putting one back brings its tags and history with it."
+        case .outliers: return "No document is marked as an outlier for this rule."
         default: return "Documents added to this folder appear here as they are indexed. Right-click to scan one in from your iPhone."
         }
     }
@@ -160,6 +161,12 @@ private struct DocumentTableView: View {
                                 .font(.caption).foregroundStyle(.tertiary)
                                 .lineLimit(1).truncationMode(.middle)
                         }
+                    }
+                    let pending = model.pendingRuleMatches(for: row)
+                    if !pending.isEmpty {
+                        Spacer(minLength: 4)
+                        RuleMatchBadge(size: 16)
+                            .help(RuleMatchBadge.help(pending))
                     }
                 }
             }
@@ -432,6 +439,14 @@ private struct GalleryCell: View {
                 }
                 .overlay(alignment: .topTrailing) {
                     StatusDot(row: row).padding(7)
+                }
+                .overlay(alignment: .bottomTrailing) {
+                    let pending = model.pendingRuleMatches(for: row)
+                    if !pending.isEmpty {
+                        RuleMatchBadge(size: 20)
+                            .help(RuleMatchBadge.help(pending))
+                            .padding(9)
+                    }
                 }
                 .overlay(alignment: .topLeading) {
                     if let queue = row.queue {

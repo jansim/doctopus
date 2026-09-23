@@ -288,6 +288,8 @@ enum SelfTest {
             _ = try? await store.upsertRule(original)
             try? await store.reorderRules(((try? await store.rules()) ?? [])
                 .sorted { $0.priority > $1.priority }.map(\.id))
+
+            await ruleMatches(store: store, indexer: indexer, payslip: payslip)
         }
 
         print("\nFIELDS")
@@ -1529,6 +1531,84 @@ enum SelfTest {
         }
 
         Check.finish("pipeline self-test")
+    }
+
+    private static func ruleMatches(store: Store, indexer: Indexer, payslip: DocumentRow) async {
+        print("\nRULE MATCHES")
+        let rule = Rule(id: 0, name: "Outlier Check", priority: 1,
+                        conditions: [RuleCondition(field: .filename, pattern: "gehaltsabrechnung")],
+                        actions: [RuleAction(kind: .addTags, value: "outlier-check")])
+        guard let id = try? await store.upsertRule(rule) else {
+            Check.that("a rule to check matches with is saved", false)
+            return
+        }
+        var saved = rule
+        saved.id = id
+
+        func match() async -> RuleMatch? {
+            ((try? await store.ruleMatches()) ?? [:])[payslip.doc]?.first { $0.ruleID == id }
+        }
+        func tagged() async -> Bool {
+            ((try? await store.tags(for: payslip.doc)) ?? []).contains { $0.name == "outlier-check" }
+        }
+
+        let pending = await match()
+        Check.that("a matching rule that would change a document is pointed out on it",
+                   pending?.isPending == true && pending?.changes == [.addTags(["outlier-check"])],
+                   pending.map { $0.changes.map(\.label).joined(separator: "; ") } ?? "no match")
+
+        try? await store.setRuleSuppressed(true, rule: id, doc: payslip.doc)
+        let suppressed = await match()
+        Check.that("an outlier is still listed, but no longer pending",
+                   suppressed?.suppressed == true && suppressed?.isPending == false)
+        let counts = (try? await store.suppressionCounts()) ?? [:]
+        let listed = (try? await store.listDocuments(selection: .outliers(library: "", rule: id),
+                                                     query: SearchQuery(""), sort: .added,
+                                                     ascending: false)) ?? []
+        Check.that("a rule counts and lists its outliers",
+                   counts[id] == 1 && listed.map(\.doc) == [payslip.doc],
+                   "count \(counts[id] ?? 0), listed \(listed.count)")
+        let skipped = await indexer.applyRule(saved)
+        let skippedTagged = await tagged()
+        Check.that("Apply to Existing leaves an outlier alone",
+                   !skippedTagged, "matched \(skipped.matched)")
+
+        try? await store.setRuleSuppressed(false, rule: id, doc: payslip.doc)
+        let handedBack = await match()
+        Check.that("an outlier can be handed back to its rule", handedBack?.isPending == true)
+        let applied = await indexer.applyRule(saved, onlyTo: payslip.doc)
+        let appliedTagged = await tagged()
+        let after = await match()
+        Check.that("applying the rule to the one document settles the match",
+                   applied.matched == 1 && appliedTagged && after == nil)
+
+        let original = try? await store.detail(payslip.doc)
+        let tagsBefore = Set(((try? await store.tags()) ?? []).map(\.tagID))
+        try? await store.setDocumentApproved(payslip.doc, false)
+        saved.actions.append(RuleAction(kind: .moveFile, value: "Outlier Check/{year}"))
+        _ = try? await store.upsertRule(saved)
+        await indexer.reroute(applyingActions: true)
+        let followsRule = ((try? await store.pathSuggestions(for: payslip.doc)) ?? [])
+            .contains { $0.path.contains("/Outlier Check/") }
+        Check.that("a changed rule is re-applied to a document awaiting review", followsRule)
+        try? await store.setDocumentDate(payslip.doc, Date(timeIntervalSince1970: 1_560_000_000))
+        await indexer.reroute([payslip.doc], applyingActions: false)
+        let followsDate = ((try? await store.pathSuggestions(for: payslip.doc)) ?? [])
+            .contains { $0.path.hasSuffix("/Outlier Check/2019") }
+        Check.that("correcting the date moves the suggested folder with it", followsDate)
+        try? await store.setDocumentDate(payslip.doc, original?.row.docDate,
+                                         source: original?.dateSource ?? "fs")
+        try? await store.setDocumentApproved(payslip.doc, true)
+        // Re-routing applied the starter rules' tags too; later checks count tags.
+        for tag in (try? await store.tags()) ?? [] where !tagsBefore.contains(tag.tagID) {
+            try? await store.deleteTag(tag.tagID)
+        }
+
+        try? await store.setRuleSuppressed(true, rule: id, doc: payslip.doc)
+        try? await store.deleteRule(id)
+        let orphaned = ((try? await store.suppressions()) ?? [:])[payslip.doc]?.contains(id) == true
+        Check.that("deleting a rule forgets its outliers", !orphaned)
+        if let tag = try? await store.tagID(named: "outlier-check") { try? await store.deleteTag(tag) }
     }
 
     private static func ruleMigration() {

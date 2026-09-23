@@ -9,6 +9,9 @@ actor Store {
     let libraryID: LibraryID
     var fieldCache: [Field]?
 
+    // Store+RuleMatches
+    var ruleMatchCache = RuleMatchCache()
+
     private let rootPrefix: String
 
     init(directory: URL) throws {
