@@ -20,9 +20,8 @@ The keys are read while the drag is still in the air rather than once it has
 landed: by then they have come up with the mouse button. For as long as a drag
 is over a folder, that folder's document count gives way to what letting go
 would do — *File Here* or *Move Here* — so ⌘ is visible before it is committed
-to. The drag cursor cannot carry that distinction: an operation the drag's
-source never offered is refused outright, which would leave the drag nowhere to
-land.
+to. The cursor follows suit: a plain drag carries the copy badge, a ⌘ drag the
+plain arrow of a move.
 
 Dropping onto a tag, a Finder tag or a facet assigns it rather than filing
 anything.
