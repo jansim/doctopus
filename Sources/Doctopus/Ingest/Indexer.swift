@@ -59,7 +59,7 @@ actor Indexer {
         for facts in found {
             if cancelled { return nil }
             seen.insert(facts.path)
-            guard let result = try? await store.upsertDocument(facts) else { continue }
+            guard let result = try? await store.upsertDocument(facts, origin: .inLibrary) else { continue }
             if result.changed { toProcess.append((result.id, facts.path)) }
         }
         _ = try? await store.reconcileMissing(seenPaths: seen)
@@ -117,7 +117,7 @@ actor Indexer {
                 continue
             }
 
-            if let result = try? await store.upsertDocument(facts), result.changed {
+            if let result = try? await store.upsertDocument(facts, origin: .inLibrary), result.changed {
                 toProcess.append((result.id, path))
             }
             touched = true
@@ -133,7 +133,7 @@ actor Indexer {
         let found = FileScanner.scan(root: directory).map { Self.facts($0) }
         await relinkMoved(found)
         for facts in found {
-            if let r = try? await store.upsertDocument(facts), r.changed {
+            if let r = try? await store.upsertDocument(facts, origin: .inLibrary), r.changed {
                 toProcess.append((r.id, facts.path))
             }
         }
@@ -609,7 +609,7 @@ actor Indexer {
             let path = Store.canonical(url.standardizedFileURL.path)
             if path == rootPath || path.hasPrefix(rootPath + "/") {
                 guard let facts = Self.facts(URL(fileURLWithPath: path)),
-                      let r = try? await store.upsertDocument(facts) else { summary.failed += 1; continue }
+                      let r = try? await store.upsertDocument(facts, origin: .inLibrary) else { summary.failed += 1; continue }
                 summary.alreadyInLibrary += 1
                 if r.changed { inPlace.append((r.id, path)) }
                 continue
@@ -634,8 +634,9 @@ actor Indexer {
                 } else {
                     try FileManager.default.copyItem(at: url, to: target)
                 }
+                let origin: DocumentOrigin = movingSource ? .scanned : .imported(from: path)
                 guard let facts = Self.facts(target),
-                      let r = try? await store.upsertDocument(facts) else { summary.failed += 1; continue }
+                      let r = try? await store.upsertDocument(facts, origin: origin) else { summary.failed += 1; continue }
                 imported.append((r.id, target.path))
                 summary.imported += 1
             } catch {
