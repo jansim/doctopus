@@ -174,11 +174,7 @@ actor Store {
         return stale.count
     }
 
-    /// Takes a document along to where its file turned up, found by the file
-    /// system's ID for it rather than its bytes, so a file edited on the way
-    /// still counts as moved. Its old row need not have been marked missing
-    /// yet: it qualifies once its path no longer holds that same file. A hard
-    /// link, answering at both paths, is left with the row it has.
+    /// Moves a document to where its file turned up, matched by file-system ID rather than bytes.
     func relinkByFileID(_ f: FileFacts) throws -> Int64? {
         guard let fileID = f.fileID else { return nil }
         let relative = relPath(f.path)
@@ -189,8 +185,7 @@ actor Store {
         guard taken == nil else { return nil }
 
         let moved = rows.filter { _, path in
-            // Renamed only in case: on a case-insensitive volume the old path
-            // still finds the file, and it is still this one.
+            // A case-only rename still finds the same file at the old path.
             path.lowercased() == relative.lowercased()
                 || FileScanner.fileID(url(forRelative: path)) != fileID
         }

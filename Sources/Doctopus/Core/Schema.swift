@@ -41,8 +41,7 @@ enum Schema {
         try db.exec("ALTER TABLE \(table) ADD COLUMN \(column) \(declaration)")
     }
 
-    /// The file system's ID for each file, so a move is recognised even when
-    /// the bytes changed too. Filled in as files are next seen.
+    /// File-system IDs, so a move is recognised even when the bytes changed.
     private static func v20(_ db: Database) throws {
         try addColumn(db, table: "documents", column: "file_id", declaration: "INTEGER")
         try db.exec("CREATE INDEX IF NOT EXISTS idx_documents_file_id ON documents(file_id)")

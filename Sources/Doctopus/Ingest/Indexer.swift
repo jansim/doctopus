@@ -109,8 +109,7 @@ actor Indexer {
                   v.isAliasFile != true else { continue }
             let facts = Self.facts(path: path, v)
 
-            // A relink by file ID still runs the upsert below, which catches an
-            // edit made on the way; a relink by hash already knows the bytes.
+            // After a file-ID relink the upsert still runs, to catch an edit made on the way.
             if (try? await store.relinkByFileID(facts)) == nil,
                let hash = FileScanner.hash(url),
                (try? await store.relinkByHash(hash: hash, newPath: path)) != nil {
@@ -140,8 +139,7 @@ actor Indexer {
         }
     }
 
-    /// Runs before any of `found` is upserted, so a file that moved takes its
-    /// row along before a new file at its old path could claim it.
+    /// Before any upsert, so a new file at an old path cannot claim the moved row.
     private func relinkMoved(_ found: [Store.FileFacts]) async {
         for facts in found where facts.fileID != nil {
             _ = try? await store.relinkByFileID(facts)

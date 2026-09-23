@@ -1406,8 +1406,7 @@ enum SelfTest {
             let (edited, moved) = (present[0], present[1])
             Check.that("files carry the file system's ID for them", FileScanner.fileID(edited.url) != nil)
 
-            // Moved and then edited while nobody was watching, so its hash no
-            // longer finds it: only the file ID can.
+            // Edited after the move, so only the file ID can find it.
             let away = store.root.appendingPathComponent("Moved Away", isDirectory: true)
             let editedTarget = away.appendingPathComponent(edited.filename)
             try? fm.createDirectory(at: away, withIntermediateDirectories: true)

@@ -13,13 +13,9 @@ enum FileScanner {
         var fileID: Int64?
     }
 
-    /// What `fileID(_:)` needs from `resourceValues`.
     static let identityKeys: [URLResourceKey] = [.fileIdentifierKey, .volumeSupportsPersistentIDsKey]
 
-    /// The file system's own number for a file, which a rename or a move within
-    /// the volume keeps and an edit in place does not change. Only trusted where
-    /// the volume promises it persists: elsewhere it can be made up per mount
-    /// and handed to the next file.
+    /// Nil where the volume does not promise its file IDs persist.
     static func fileID(_ v: URLResourceValues) -> Int64? {
         guard v.volumeSupportsPersistentIDs == true, let id = v.fileIdentifier else { return nil }
         return Int64(bitPattern: id)
