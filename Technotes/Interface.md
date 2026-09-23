@@ -49,7 +49,10 @@ On the right, every candidate folder — where it is now, the router's
 suggestions with their confidence, where similar documents already live, any
 other folder in the library, or a new one — has two controls: *Lives here* (one
 folder; the file is moved there) and *Also here* (any number; filed as Finder
-aliases). One button applies, approves and moves on to the next document (⌘↩).
+aliases). *Lives here* always starts on where the file is now, however
+confident a suggestion is, so approving without touching it moves nothing. A
+file that was not optimized on the way in offers *Optimize when approving*,
+unticked. One button applies, approves and moves on to the next document (⌘↩).
 
 The same picker is available for any document as File In… in the context menu.
 

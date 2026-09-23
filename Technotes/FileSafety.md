@@ -1,17 +1,23 @@
 # Nothing moves uninvited
 
 The only thing Doctopus ever moves or rewrites on its own is a file it has just
-brought in itself — a scan, or the copy an import makes — and it only moves one
-when nobody chose a folder for it. Concretely:
+brought in itself from outside — a scan, or the copy an import makes — and it
+only moves one when nobody chose a folder for it.
+[From outside, or from inside](Ingestion.md#from-outside-or-from-inside) sets
+out what each gets. Concretely:
 
 - Files already in the library are never moved, renamed, optimized or deleted
   except by an explicit action, even when "imported" again by a drop, which
-  just indexes them in place.
+  just indexes them in place. One that is new to the index is read and waits
+  in Needs Review with suggested folders, but the review starts on the folder
+  it is in and leaves *Optimize when approving* unticked — nothing happens to
+  the file unless someone picks it there.
 - Importing or scanning into a chosen folder (the folder's context menu, or
-  with that folder selected) leaves the file there. Imports from outside the
-  library are copied; the original is never touched. A folder dropped in or
-  chosen to import brings in the PDFs and images inside it at any depth,
-  flattened into the destination; the folder itself is left as it was.
+  with that folder selected) leaves the file there; it still gets suggested
+  folders for the review. Imports from outside the library are copied; the
+  original is never touched. A folder dropped in or chosen to import brings in
+  the PDFs and images inside it at any depth, flattened into the destination;
+  the folder itself is left as it was.
 - Routing is skipped below the confidence threshold, when two candidates are
   about equally good, and for any destination outside the library. The document
   waits in Needs Review with its candidates kept in `path_suggestions`.

@@ -31,6 +31,7 @@ private struct DocumentReview: View {
     @Environment(AppModel.self) private var model
     let detail: DocumentDetail
     @State private var keepOriginal = false
+    @State private var optimize = false
     private var row: DocumentRow { detail.row }
 
     var body: some View {
@@ -38,10 +39,10 @@ private struct DocumentReview: View {
             header
             Divider()
             HStack(alignment: .top, spacing: 0) {
-                GeneratedInfoEditor(detail: detail, keepOriginal: $keepOriginal)
+                GeneratedInfoEditor(detail: detail, keepOriginal: $keepOriginal, optimize: $optimize)
                     .frame(minWidth: 250, idealWidth: 330, maxWidth: 400)
                 Divider()
-                FilingEditor(detail: detail, mode: .review, keepOriginal: keepOriginal)
+                FilingEditor(detail: detail, mode: .review, keepOriginal: keepOriginal, optimize: optimize)
                     .frame(maxWidth: .infinity)
             }
         }
@@ -80,6 +81,7 @@ private struct GeneratedInfoEditor: View {
     @Environment(AppModel.self) private var model
     let detail: DocumentDetail
     @Binding var keepOriginal: Bool
+    @Binding var optimize: Bool
     @State private var tagInput = ""
     @State private var confirmingDiscard = false
     private var row: DocumentRow { detail.row }
@@ -137,6 +139,9 @@ private struct GeneratedInfoEditor: View {
             if let originalURL = detail.originalFileURL {
                 Divider()
                 originalSection(originalURL)
+            } else if row.originalSize == nil {
+                Divider()
+                optimizeSection
             }
         }
         .confirmationDialog("Discard what was generated for “\(row.displayTitle)”?",
@@ -164,6 +169,15 @@ private struct GeneratedInfoEditor: View {
         }
         .padding(.horizontal, 12).padding(.vertical, 8)
         .help("Approving deletes the pre-optimization original unless this is checked")
+    }
+
+    private var optimizeSection: some View {
+        Toggle("Optimize when approving", isOn: $optimize)
+            .toggleStyle(.checkbox)
+            .font(.caption)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 12).padding(.vertical, 8)
+            .help("Compress the file when this is applied. The original is kept, so it can be reverted.")
     }
 
     private var hasGenerated: Bool {
@@ -249,15 +263,17 @@ struct FilingEditor: View {
     let detail: DocumentDetail
     let mode: Mode
     var keepOriginal: Bool
+    var optimize: Bool
 
     @State private var primary: String
     @State private var secondaries: Set<String>
     @State private var chosen: [FilingOption] = []
 
-    init(detail: DocumentDetail, mode: Mode, keepOriginal: Bool = true) {
+    init(detail: DocumentDetail, mode: Mode, keepOriginal: Bool = true, optimize: Bool = false) {
         self.detail = detail
         self.mode = mode
         self.keepOriginal = keepOriginal
+        self.optimize = optimize
         _primary = State(initialValue: detail.row.directory)
         _secondaries = State(initialValue: Set(detail.folderAliases.map {
             ($0 as NSString).deletingLastPathComponent }))
@@ -406,7 +422,7 @@ struct FilingEditor: View {
                 Button(reviewTitle) { apply(approve: true, advance: true) }
                     .keyboardShortcut(.return, modifiers: [.command])
                     .buttonStyle(.borderedProminent)
-                    .disabled(!changed && row.approved)
+                    .disabled(!changed && !optimize && row.approved)
                     .help("⌘↩")
             case .sheet(let dismiss):
                 Button("Cancel") { dismiss() }
@@ -425,6 +441,7 @@ struct FilingEditor: View {
         let moves = primary != row.directory
         let aliases = secondaries != existingSecondaries
         switch (moves, aliases, row.approved) {
+        case (false, false, true) where optimize: return "Optimize"
         case (false, false, _): return "Approve"
         case (true, _, false): return "Move & Approve"
         case (false, true, false): return "File & Approve"
@@ -434,7 +451,7 @@ struct FilingEditor: View {
 
     private func apply(approve: Bool, advance: Bool) {
         model.file(row, in: URL(fileURLWithPath: primary, isDirectory: true), alsoIn: secondaries,
-                   approve: approve, keepOriginal: keepOriginal,
+                   approve: approve, keepOriginal: keepOriginal, optimize: optimize,
                    advance: advance && model.selection.isQueueMode)
     }
 

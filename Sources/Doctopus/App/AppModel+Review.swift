@@ -36,7 +36,7 @@ extension AppModel {
     }
 
     func file(_ row: DocumentRow, in primary: URL, alsoIn secondaries: Set<String>,
-              approve: Bool, keepOriginal: Bool = true, advance: Bool = false) {
+              approve: Bool, keepOriginal: Bool = true, optimize: Bool = false, advance: Bool = false) {
         guard let lib = library(of: row) else { return }
         guard lib.owns(path: primary.path) else {
             errorMessage = "“\(primary.lastPathComponent)” is outside \(lib.displayName). A document can only be filed within its own library."
@@ -91,6 +91,9 @@ extension AppModel {
                 try? await lib.store.setDocumentApproved(row.doc, true)
                 if !keepOriginal { try? await lib.store.deleteOriginalFile(for: row.doc) }
             }
+            // After approval, so the original it saves is kept.
+            var optimized: (count: Int, saved: Int64) = (0, 0)
+            if optimize { optimized = await lib.indexer.optimize(ids: [row.doc]) }
             if let next { selectedIDs = [next] }
             refreshAll()
             reloadDetail()
@@ -98,6 +101,8 @@ extension AppModel {
             var parts: [String] = []
             if moved { parts.append("Moved to “\(primary.lastPathComponent)”") }
             if !added.isEmpty { parts.append("also filed in \(added.map { "“\($0)”" }.joined(separator: ", "))") }
+            if optimized.count > 0 { parts.append("optimized, saving \(ByteFormat.string(optimized.saved))") }
+            else if optimize { parts.append("already compact, so not optimized") }
             if parts.isEmpty { parts.append(approve ? "Approved" : "Nothing to change") }
             else if approve { parts.append("approved") }
             let text = parts.joined(separator: ", ")
