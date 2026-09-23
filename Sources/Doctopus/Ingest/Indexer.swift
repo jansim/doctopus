@@ -54,17 +54,16 @@ actor Indexer {
         let firstPass = ((try? await store.documentCount()) ?? 0) == 0
         var toProcess: [(Int64, String)] = []
         var fresh: Set<Int64> = []
-        let found = FileScanner.scan(root: store.root)
+        let found = FileScanner.scan(root: store.root).map { Self.facts($0) }
         var seen = Set<String>()
         seen.reserveCapacity(found.count)
 
-        for f in found {
+        await relinkMoved(found)
+        for facts in found {
             if cancelled { return nil }
-            seen.insert(f.url.path)
-            let facts = Store.FileFacts(path: f.url.path,
-                                        size: f.size, mtime: f.mtime, created: f.created)
+            seen.insert(facts.path)
             guard let result = try? await store.upsertDocument(facts) else { continue }
-            if result.changed { toProcess.append((result.id, f.url.path)) }
+            if result.changed { toProcess.append((result.id, facts.path)) }
             if result.isNew, !firstPass { fresh.insert(result.id) }
         }
         _ = try? await store.reconcileMissing(seenPaths: seen)
@@ -86,7 +85,7 @@ actor Indexer {
         let fm = FileManager.default
 
         var toProcess: [(Int64, String)] = []
-        var found: Set<Int64> = []
+        var fresh: Set<Int64> = []
         var touched = false
 
         for path in paths {
@@ -97,7 +96,7 @@ actor Indexer {
             let exists = fm.fileExists(atPath: path, isDirectory: &isDir)
 
             if isDir.boolValue {
-                await rescan(directory: URL(fileURLWithPath: path), into: &toProcess, found: &found)
+                await rescan(directory: URL(fileURLWithPath: path), into: &toProcess, fresh: &fresh)
                 touched = true
                 continue
             }
@@ -111,40 +110,47 @@ actor Indexer {
                 continue
             }
 
-            guard let v = try? url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey, .creationDateKey, .isAliasFileKey]),
+            guard let v = try? url.resourceValues(forKeys: Set(Self.factKeys + [.isAliasFileKey])),
                   v.isAliasFile != true else { continue }
+            let facts = Self.facts(path: path, v)
 
-            if let hash = FileScanner.hash(url),
+            // After a file-ID relink the upsert still runs, to catch an edit made on the way.
+            if (try? await store.relinkByFileID(facts)) == nil,
+               let hash = FileScanner.hash(url),
                (try? await store.relinkByHash(hash: hash, newPath: path)) != nil {
                 touched = true
                 continue
             }
 
-            let facts = Store.FileFacts(path: path, size: Int64(v.fileSize ?? 0),
-                                        mtime: v.contentModificationDate ?? Date(),
-                                        created: v.creationDate ?? Date())
             if let result = try? await store.upsertDocument(facts), result.changed {
                 toProcess.append((result.id, path))
-                if result.isNew { found.insert(result.id) }
+                if result.isNew { fresh.insert(result.id) }
             }
             touched = true
         }
 
         if touched { onDataChanged() }
         if !toProcess.isEmpty {
-            await process(documents: toProcess, phase: "Indexing", isImport: false, found: found)
+            await process(documents: toProcess, phase: "Indexing", isImport: false, found: fresh)
         }
     }
 
     private func rescan(directory: URL, into toProcess: inout [(Int64, String)],
-                        found: inout Set<Int64>) async {
-        for f in FileScanner.scan(root: directory) {
-            let facts = Store.FileFacts(path: f.url.path, size: f.size,
-                                        mtime: f.mtime, created: f.created)
+                        fresh: inout Set<Int64>) async {
+        let found = FileScanner.scan(root: directory).map { Self.facts($0) }
+        await relinkMoved(found)
+        for facts in found {
             if let r = try? await store.upsertDocument(facts), r.changed {
-                toProcess.append((r.id, f.url.path))
-                if r.isNew { found.insert(r.id) }
+                toProcess.append((r.id, facts.path))
+                if r.isNew { fresh.insert(r.id) }
             }
+        }
+    }
+
+    /// Before any upsert, so a new file at an old path cannot claim the moved row.
+    private func relinkMoved(_ found: [Store.FileFacts]) async {
+        for facts in found where facts.fileID != nil {
+            _ = try? await store.relinkByFileID(facts)
         }
     }
 
@@ -618,7 +624,7 @@ actor Indexer {
         var summary = ImportSummary()
         var imported: [(Int64, String)] = []
         var inPlace: [(Int64, String)] = []
-        var found: Set<Int64> = []
+        var fresh: Set<Int64> = []
         let rootPath = store.root.path
         var madeDestination = false
 
@@ -629,7 +635,7 @@ actor Indexer {
                       let r = try? await store.upsertDocument(facts) else { summary.failed += 1; continue }
                 summary.alreadyInLibrary += 1
                 if r.changed { inPlace.append((r.id, path)) }
-                if r.isNew { found.insert(r.id) }
+                if r.isNew { fresh.insert(r.id) }
                 continue
             }
             if let sourceHash = FileScanner.hash(url),
@@ -660,7 +666,7 @@ actor Indexer {
                 summary.failed += 1
             }
         }
-        await process(documents: inPlace, phase: "Indexing", isImport: false, found: found)
+        await process(documents: inPlace, phase: "Indexing", isImport: false, found: fresh)
         await process(documents: imported, phase: "Importing", isImport: true, route: route)
         if route {
             for (id, path) in imported {
@@ -670,12 +676,24 @@ actor Indexer {
         return summary
     }
 
+    private static let factKeys: [URLResourceKey] =
+        [.fileSizeKey, .contentModificationDateKey, .creationDateKey] + FileScanner.identityKeys
+
     private static func facts(_ url: URL) -> Store.FileFacts? {
-        guard let v = try? url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey, .creationDateKey])
-        else { return nil }
-        return Store.FileFacts(path: url.path, size: Int64(v.fileSize ?? 0),
-                               mtime: v.contentModificationDate ?? Date(),
-                               created: v.creationDate ?? Date())
+        guard let v = try? url.resourceValues(forKeys: Set(factKeys)) else { return nil }
+        return facts(path: url.path, v)
+    }
+
+    private static func facts(path: String, _ v: URLResourceValues) -> Store.FileFacts {
+        Store.FileFacts(path: path, size: Int64(v.fileSize ?? 0),
+                        mtime: v.contentModificationDate ?? Date(),
+                        created: v.creationDate ?? Date(),
+                        fileID: FileScanner.fileID(v))
+    }
+
+    private static func facts(_ f: FileScanner.Found) -> Store.FileFacts {
+        Store.FileFacts(path: f.url.path, size: f.size, mtime: f.mtime,
+                        created: f.created, fileID: f.fileID)
     }
 
     func rename(ids: [Int64], template: String) async -> Int {
