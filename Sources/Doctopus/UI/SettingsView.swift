@@ -65,7 +65,7 @@ private struct GeneralSettings: View {
             }
 
             if !model.libraries.isEmpty {
-                Section("Library Settings") {
+                Section("Library Settings", scope: .library) {
                     LibraryPicker()
                     TemplateField(title: "Default rename template",
                                   template: $model.settings.namingTemplate, kind: .filename)
@@ -77,7 +77,7 @@ private struct GeneralSettings: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
 
-                Section("Dates") {
+                Section("Dates", scope: .library) {
                     Picker("Read 03/04/2026 as", selection: $model.settings.dateOrder) {
                         ForEach(DateOrder.allCases, id: \.self) { order in
                             Text(order.label).tag(order)
@@ -93,7 +93,7 @@ private struct GeneralSettings: View {
                 }
             }
 
-            Section("Indexing") {
+            Section("Indexing", scope: .app) {
                 Picker("OCR concurrency", selection: $model.settings.ocrConcurrency) {
                     Text("Automatic (\(model.settings.effectiveConcurrency))").tag(0)
                     ForEach([1, 2, 4, 6, 8], id: \.self) { Text("\($0)").tag($0) }
@@ -126,6 +126,7 @@ private struct FieldSettings: View {
                 } header: {
                     HStack {
                         Text("Fields")
+                        ScopeBadge(scope: .openLibraries)
                         Spacer()
                         Text("Sidebar")
                             .font(.caption).foregroundStyle(.secondary).frame(width: 52)
@@ -302,7 +303,7 @@ private struct TagSettings: View {
                     }
                 }
             } header: {
-                Text("Tags")
+                ScopedHeader(title: "Tags", scope: .library)
             } footer: {
                 Text("Mirrored tags get a folder of Finder aliases inside the indexed root, so tag membership is visible from Finder without duplicating any file.")
                     .font(.caption).foregroundStyle(.secondary)
@@ -338,7 +339,7 @@ private struct RoutingSettings: View {
                 Text("Only new scans and imports with no folder chosen are routed. A derived folder is only used above the threshold, and when matching rules name different folders a file stays in the Inbox and waits in Needs Review with its suggestions. Files already in your library are never moved automatically, and nothing is ever routed outside it.")
                     .font(.caption).foregroundStyle(.secondary)
             } header: {
-                Text("Auto-Routing")
+                ScopedHeader(title: "Auto-Routing", scope: .library)
             } footer: {
                 Text("What a document is matched against, and where it goes, is in Rules.")
                     .font(.caption).foregroundStyle(.secondary)
@@ -354,13 +355,13 @@ private struct OptimizationSettings: View {
     var body: some View {
         @Bindable var model = model
         Form {
-            Section("When to Optimize") {
+            Section("When to Optimize", scope: .library) {
                 LibraryPicker()
                 Toggle("Optimize imports and scans", isOn: $model.settings.optimizeOnImport)
                 Text("Only files Doctopus brings in itself are optimized automatically. Files already in your library are yours, and are never rewritten unless you choose Optimize from the context menu.")
                     .font(.caption).foregroundStyle(.secondary)
             }
-            Section("Quality") {
+            Section("Quality", scope: .app) {
                 LabeledContent("Raster resolution") {
                     HStack {
                         Slider(value: $model.settings.targetDPI, in: 96...300, step: 6)
@@ -397,7 +398,7 @@ struct IntelligenceSettings: View {
     var body: some View {
         @Bindable var model = model
         Form {
-            Section("Model") {
+            Section("Model", scope: .app) {
                 Picker("Enrichment", selection: $model.settings.llmBackend) {
                     ForEach(LLMBackend.allCases) { Text($0.label).tag($0) }
                 }
@@ -432,18 +433,49 @@ struct IntelligenceSettings: View {
             }
 
             if model.settings.llmBackend != .off {
-                Section("What it extracts") {
-                    Label("A one or two sentence summary", systemImage: "text.alignleft")
-                    Label("Correspondent, category, language and intent", systemImage: "person.text.rectangle")
-                    Label("Proposed tags and a canonical title", systemImage: "tag")
-                }
-                .font(.callout)
-
-                Section("Tag Suggestions") {
-                    Text("Proposed tags appear in a document's inspector as suggestions you accept or dismiss individually — they never show up in the sidebar on their own.")
+                Section {
+                    ForEach(InsightField.allCases) { field in
+                        Toggle(field.label, isOn: Binding(
+                            get: { model.settings.predictedFields.contains(field) },
+                            set: { on in
+                                if on { model.settings.predictedFields.insert(field) }
+                                else { model.settings.predictedFields.remove(field) }
+                            }))
+                    }
+                } header: {
+                    ScopedHeader(title: "Suggestions", scope: .app)
+                } footer: {
+                    Text("Only the checked fields are asked of the model. The others are left to the built-in heuristics, and re-analyzing a document leaves them as they are.")
                         .font(.caption).foregroundStyle(.secondary)
-                    Toggle("Automatically accept suggestions that match an existing tag",
-                           isOn: $model.settings.autoAcceptMatchingTagSuggestions)
+                }
+
+                Section {
+                    TextEditor(text: promptTemplate)
+                        .font(.system(.caption, design: .monospaced))
+                        .frame(minHeight: 260)
+                    HStack {
+                        Text(model.settings.llmPromptTemplate.isEmpty
+                             ? "Using the default prompt." : "Using your own prompt.")
+                            .font(.caption).foregroundStyle(.secondary)
+                        Spacer()
+                        Button("Reset to Default") { model.settings.llmPromptTemplate = "" }
+                            .disabled(model.settings.llmPromptTemplate.isEmpty)
+                    }
+                } header: {
+                    ScopedHeader(title: "Prompt", scope: .app)
+                } footer: {
+                    Text(verbatim: "Text between {{#summary}} and {{/summary}} is only sent when Summary is checked above — likewise correspondent, documentType, language, intent, title and tags. {{#pageImage}}…{{/pageImage}} is only sent with a page image, {{^pageImage}}…{{/pageImage}} only without one. Keep asking for a JSON object with those keys; the document itself follows in a separate message.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+
+                if model.settings.predictedFields.contains(.tags) {
+                    Section("Tag Suggestions", scope: .library) {
+                        LibraryPicker()
+                        Text("Proposed tags appear in a document's inspector as suggestions you accept or dismiss individually — they never show up in the sidebar on their own.")
+                            .font(.caption).foregroundStyle(.secondary)
+                        Toggle("Automatically accept suggestions that match an existing tag",
+                               isOn: $model.settings.autoAcceptMatchingTagSuggestions)
+                    }
                 }
             }
 
@@ -473,10 +505,16 @@ struct IntelligenceSettings: View {
         }
     }
 
+    /// Stores "" while the text matches the default.
+    private var promptTemplate: Binding<String> {
+        Binding(get: { model.settings.llmPromptTemplate.nilIfBlank ?? LLMPrompt.defaultTemplate },
+                set: { model.settings.llmPromptTemplate = $0 == LLMPrompt.defaultTemplate ? "" : $0 })
+    }
+
     @ViewBuilder
     private var remoteSection: some View {
         @Bindable var model = model
-        Section("Endpoint") {
+        Section("Endpoint", scope: .app) {
             TextField("Address", text: $model.settings.remoteEndpoint,
                       prompt: Text("http://localhost:1234/v1"))
                 .font(.system(.body, design: .monospaced))
@@ -512,7 +550,7 @@ struct IntelligenceSettings: View {
             }
         }
 
-        Section("Requests") {
+        Section("Requests", scope: .app) {
             Picker("Text sent per document", selection: $model.settings.llmExcerptLimit) {
                 Text("3,000 characters").tag(3000)
                 Text("6,000 characters").tag(6000)
@@ -532,7 +570,7 @@ struct IntelligenceSettings: View {
                 .font(.caption).foregroundStyle(.secondary)
         }
 
-        Section("Page Image") {
+        Section("Page Image", scope: .app) {
             Toggle("Send the first page as an image", isOn: $model.settings.remoteVision)
             if model.settings.remoteVision {
                 Picker("Longest edge", selection: $model.settings.remoteVisionImageSize) {
