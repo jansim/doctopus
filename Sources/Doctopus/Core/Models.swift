@@ -81,9 +81,16 @@ struct QueueInfo: Hashable, Sendable {
     var icon: String { DocumentAction.icon(action) }
 }
 
+enum DocumentOrigin: Sendable {
+    case scanned
+    case imported(from: String)
+    case inLibrary
+}
+
 enum DocumentAction {
     static func icon(_ action: String) -> String {
         switch action {
+        case "added": return "plus.circle"
         case "routed": return "arrow.triangle.branch"
         case "optimized": return "arrow.down.circle"
         case "renamed": return "character.cursor.ibeam"
@@ -99,6 +106,7 @@ enum DocumentAction {
 
     static func label(_ action: String) -> String {
         switch action {
+        case "added": return "Added"
         case "routed": return "Filed"
         case "optimized": return "Optimized"
         case "renamed": return "Renamed"

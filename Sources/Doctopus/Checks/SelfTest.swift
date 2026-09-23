@@ -566,6 +566,18 @@ enum SelfTest {
             Check.that("importing copies and leaves the original alone",
                        FileManager.default.fileExists(atPath: outside.path) && copied != nil)
 
+            let source = Store.canonical(outside.standardizedFileURL.path)
+            let importedOrigin = try? await store.history(for: copied?.doc ?? 0, limit: 10_000)
+                .last { $0.action == "added" }
+            Check.that("an import records where it was imported from",
+                       importedOrigin?.fromPath == source,
+                       importedOrigin?.detail ?? "no origin")
+            let scannedOrigin = try? await store.history(for: sample.doc, limit: 10_000)
+                .last { $0.action == "added" }
+            Check.that("a file first seen in the library records where it was",
+                       scannedOrigin?.detail == "In library at \(store.relPath(sample.url.path))",
+                       scannedOrigin?.detail ?? "no origin")
+
             let dupResult = await indexer.importFiles([outside], into: root.appendingPathComponent("Inbox"))
             Check.that("re-importing a byte-identical document is skipped as duplicate",
                        dupResult.imported == 0 && dupResult.duplicates == 1)
@@ -669,6 +681,28 @@ enum SelfTest {
         print("  analyze with no backend: \(blocked.blocked ?? "ran anyway")")
         Check.that("a manual run with no model reports why", blocked.blocked != nil)
 
+        let trimmed = parsed?.keeping([.summary, .correspondent])
+        Check.that("only the fields asked for are kept from an answer",
+                   trimmed?.summary == "A gas bill." && trimmed?.correspondent == "Stadtwerke"
+                       && trimmed?.title == nil && trimmed?.docType == nil && trimmed?.language == nil
+                       && trimmed?.intent == nil && trimmed?.tags.isEmpty == true)
+
+        var nothingAsked = settings
+        nothingAsked.llmBackend = .onDevice
+        nothingAsked.predictedFields = []
+        Check.that("switched-off fields survive being stored",
+                   nothingAsked.appWide.unpredictedFields.count == InsightField.allCases.count
+                       && AppWideSettings.decoded(from: (try? JSONEncoder().encode(nothingAsked.appWide)) ?? Data())
+                           .predictedFields.isEmpty)
+        Check.that("a stored field name that no longer exists is ignored",
+                   AppWideSettings.decoded(from: Data(#"{"unpredictedFields": ["horoscope", "tags"]}"#.utf8))
+                       .predictedFields == Set(InsightField.allCases).subtracting([.tags]))
+        await indexer.update(settings: nothingAsked)
+        let nothingToAsk = await indexer.analyze(ids: rows.map(\.doc))
+        Check.that("a manual run with every field off reports why",
+                   nothingToAsk.blocked?.contains("switched off") == true)
+        await indexer.update(settings: noModel)
+
         let testPrompt = LLMPrompt.user(text: "Sample Document", filename: "invoice.pdf", limit: 1000, candidateTags: ["finances", "invoices"])
         Check.that("prompt includes untrusted user data marker", testPrompt.contains("untrusted user data"))
         Check.that("prompt includes candidate taxonomy tags", testPrompt.contains("finances, invoices"))
@@ -681,10 +715,31 @@ enum SelfTest {
         Check.that("prompt says the attached image is the document's first page",
                    visionPrompt.contains("first page of the document"))
         Check.that("the system message tells a vision model to read the page too",
-                   LLMPrompt.instructions(withPageImage: true).contains("page image")
-                       && !LLMPrompt.instructions().contains("page image"))
+                   LLMPrompt.Question().instructions(withPageImage: true).contains("page image")
+                       && !LLMPrompt.Question().instructions().contains("page image"))
         Check.that("the system message asks for the document's own language",
-                   LLMPrompt.instructions().contains("language the document"))
+                   LLMPrompt.Question().instructions().contains("language the document"))
+
+        let everything = LLMPrompt.Question().instructions()
+        let tagsOnly = LLMPrompt.Question(fields: [.tags]).instructions()
+        print("  tags-only prompt: \(tagsOnly.count) of \(everything.count) characters")
+        Check.that("the prompt only asks for the fields that are switched on",
+                   tagsOnly.contains("\"tags\":") && !tagsOnly.contains("\"summary\":")
+                       && !tagsOnly.contains("\"title\":") && everything.contains("\"summary\":"))
+        Check.that("a rendered prompt carries no template tags and no gaps where fields were",
+                   !tagsOnly.contains("{{") && !everything.contains("{{")
+                       && !tagsOnly.contains("\n\n\n") && everything.contains("Keys:\n\"summary\":"))
+        Check.that("a field left out does not leave its mention in the closing line",
+                   !LLMPrompt.Question(fields: [.title]).instructions().contains("[] for no tags"))
+        Check.that("a broken template still renders instead of failing",
+                   PromptTemplate.render("a {{#x}}b {{name}}", flags: ["x"]) == "a b {{name}}"
+                       && PromptTemplate.render("a {{^x}}b", flags: ["x"]) == "a ")
+        let schema = LLMPrompt.Question(fields: [.title, .tags]).jsonSchema
+        Check.that("the response schema holds exactly the fields asked for",
+                   (schema["required"] as? [String]) == ["title", "tags"]
+                       && (schema["properties"] as? [String: Any])?.count == 2)
+        Check.that("an answer to a tags-only question is not mistaken for an empty one",
+                   RemoteLLMService.parse(#"{"tags": ["gas"]}"#, fields: [.tags])?.tags == ["gas"])
 
         let pdfs = (try? await store.listDocuments(selection: .all, query: SearchQuery("ext:pdf"),
                                                    sort: .added, ascending: false)) ?? []
@@ -1432,6 +1487,43 @@ enum SelfTest {
                        found.contains(sample.doc))
             Check.that("a hash nothing carries matches nothing",
                        ((try? await store.documents(matchingHash: "0")) ?? []).isEmpty)
+        }
+
+        print("\nFILE IDS")
+        let fm = FileManager.default
+        let present = ((try? await store.listDocuments(selection: .all, query: SearchQuery(""),
+                                                       sort: .added, ascending: false)) ?? [])
+            .filter { $0.ext == "pdf" && fm.fileExists(atPath: $0.path) }
+        if present.count >= 2 {
+            let (edited, moved) = (present[0], present[1])
+            Check.that("files carry the file system's ID for them", FileScanner.fileID(edited.url) != nil)
+
+            // Edited after the move, so only the file ID can find it.
+            let away = store.root.appendingPathComponent("Moved Away", isDirectory: true)
+            let editedTarget = away.appendingPathComponent(edited.filename)
+            try? fm.createDirectory(at: away, withIntermediateDirectories: true)
+            try? fm.moveItem(at: edited.url, to: editedTarget)
+            if let handle = try? FileHandle(forWritingTo: editedTarget) {
+                _ = try? handle.seekToEnd()
+                try? handle.write(contentsOf: Data("\n% edited\n".utf8))
+                try? handle.close()
+            }
+            await indexer.indexAll()
+            let editedPath = try? await store.documentPath(edited.doc)
+            Check.that("a full scan takes a moved and edited file's document along",
+                       editedPath == editedTarget.path, editedPath ?? "gone")
+
+            // The watcher only hears about the folder the file landed in.
+            let into = store.root.appendingPathComponent("Picked Up", isDirectory: true)
+            let movedTarget = into.appendingPathComponent(moved.filename)
+            try? fm.createDirectory(at: into, withIntermediateDirectories: true)
+            try? fm.moveItem(at: moved.url, to: movedTarget)
+            await indexer.handleChanges(paths: [moved.path, into.path])
+            let movedPath = try? await store.documentPath(moved.doc)
+            Check.that("the watcher takes a moved file's document along",
+                       movedPath == movedTarget.path, movedPath ?? "gone")
+        } else {
+            Check.that("the fixtures have two PDFs to move", false)
         }
 
         Check.finish("pipeline self-test")
