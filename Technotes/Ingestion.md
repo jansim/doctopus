@@ -1,42 +1,40 @@
 # Ingestion
 
-## Three ways in
+## From outside, or from inside
 
-How a document reached the library decides what Doctopus may do to the file.
-What it may do to the index — read it, suggest metadata and folders, queue it
-for review — is the same for all three.
+What Doctopus may do to a file depends on one thing: whether the file came from
+outside the library or was already in it. What it does to the index — read it,
+suggest metadata and folders, queue it for review — is the same either way.
 
-| | Imported from outside | Found inside the library | Scanned |
-| --- | --- | --- | --- |
-| The file | Copied in; the original is never touched | Stays exactly where it is | Written into the library |
-| OCR, metadata, model pass | Yes | Yes | Yes |
-| Suggested folders | Yes | Yes | Yes |
-| Moved to a suggested folder | Only when no folder was chosen | Never | Only when no folder was chosen |
-| Renamed by a rule | Only when no folder was chosen | Never | Only when no folder was chosen |
-| Optimized | Yes, the copy | Only if ticked in the review | Yes |
-| Needs Review | Yes | Yes | Yes |
+| | From outside | Already inside |
+| --- | --- | --- |
+| Where it comes from | An import (drop, Import, a folder of files) or a scan | Put there in Finder, noticed by the watcher or a reindex, or dropped onto the app from within the library |
+| The file | A new file in the library: a copy of an import, the capture itself for a scan | Stays exactly where it is |
+| OCR, metadata, model pass | Yes | Yes |
+| Suggested folders | Yes | Yes |
+| Moved or renamed by the rules | Only when no folder was chosen | Never |
+| Optimized | Yes | Only if ticked in the review |
+| Needs Review | Yes | Yes |
 
-**Imported from outside.** A file dropped in or chosen with Import that lives
-outside the library is copied in, and only the copy is ever worked on. With a
-folder chosen — its context menu, or with it selected — the copy stays there;
-otherwise it lands in the Inbox and is routed (see [Routing](#routing)). Either
-way it is given suggested folders.
+**From outside.** Doctopus writes a new file into the library and owns it, so it
+gets the whole treatment: optimized, read, given suggested folders and — unless
+a folder was chosen (its context menu, or with it selected) — dropped in the
+Inbox and routed (see [Routing](#routing)). A scan is the same pathway as an
+import; the only difference is where the bytes start. An import is copied and
+its original, outside the library, is never touched. A scan's capture has no
+original: Doctopus writes it to a temporary file and moves that in. A file whose
+contents are already in the library is skipped as a duplicate either way.
 
-**Found inside the library.** A file that is already somewhere in the library
-folder — put there in Finder, noticed by the watcher or a reindex, or dropped
-onto the app from within the library — is new to the index but not new to the
-disk. It is read, analyzed and, if a model is configured, sent through it; it
-gets suggested folders and waits in Needs Review. Its path is never changed:
-not by routing, not by a rule's rename, and not by the review, which starts on
-the folder it is in. Optimization is a checkbox in the review, off until ticked.
+**Already inside.** A file that was already in the library folder is new to
+the index but not to the disk, and it is still the user's. It is read, analyzed and, if a model is
+configured, sent through it; it gets suggested folders and waits in Needs
+Review. Its path is never changed: not by routing, not by a rule's rename, and
+not by the review, which starts on the folder it is in. Optimization is a
+checkbox in the review, off until ticked.
 
 The very first pass over a newly opened library is the exception to Needs
 Review: that is the existing archive rather than something that just arrived,
 so it is indexed without queuing every document for a look.
-
-**Scanned.** A capture from an iPhone or iPad has no original anywhere else, so
-it gets the whole treatment: optimized, read, given suggested folders and — if
-it was not scanned into a chosen folder — routed.
 
 ## Getting documents in
 

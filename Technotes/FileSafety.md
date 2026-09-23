@@ -1,9 +1,10 @@
 # Nothing moves uninvited
 
 The only thing Doctopus ever moves or rewrites on its own is a file it has just
-brought in itself — a scan, or the copy an import makes — and it only moves one
-when nobody chose a folder for it. [Three ways in](Ingestion.md#three-ways-in)
-sets out what each kind of arrival gets. Concretely:
+brought in itself from outside — a scan, or the copy an import makes — and it
+only moves one when nobody chose a folder for it.
+[From outside, or from inside](Ingestion.md#from-outside-or-from-inside) sets
+out what each gets. Concretely:
 
 - Files already in the library are never moved, renamed, optimized or deleted
   except by an explicit action, even when "imported" again by a drop, which
