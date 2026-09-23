@@ -2,7 +2,7 @@ import Foundation
 
 /// Versioned schema. Migrations are append-only: bump `current` and add a case.
 enum Schema {
-    static let current = 20
+    static let current = 21
 
     static func migrate(_ db: Database) throws {
         let version = try db.first("PRAGMA user_version") { Int($0.int(0)) } ?? 0
@@ -26,6 +26,7 @@ enum Schema {
         if version < 18 { try v18(db) }
         if version < 19 { try v19(db) }
         if version < 20 { try v20(db) }
+        if version < 21 { try v21(db) }
         try db.exec("PRAGMA user_version=\(current)")
     }
 
@@ -42,7 +43,7 @@ enum Schema {
     }
 
     /// Documents marked as outliers for a rule, which it then leaves alone.
-    private static func v20(_ db: Database) throws {
+    private static func v21(_ db: Database) throws {
         try db.exec("""
         CREATE TABLE IF NOT EXISTS rule_suppressions (
             rule_id    INTEGER NOT NULL REFERENCES rules(id) ON DELETE CASCADE,
@@ -52,6 +53,12 @@ enum Schema {
         );
         CREATE INDEX IF NOT EXISTS idx_rule_suppressions_doc ON rule_suppressions(doc_id);
         """)
+    }
+
+    /// File-system IDs, so a move is recognised even when the bytes changed.
+    private static func v20(_ db: Database) throws {
+        try addColumn(db, table: "documents", column: "file_id", declaration: "INTEGER")
+        try db.exec("CREATE INDEX IF NOT EXISTS idx_documents_file_id ON documents(file_id)")
     }
 
     /// Word patterns used to match at the start of a word; the `*` keeps every

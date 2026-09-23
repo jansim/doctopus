@@ -44,6 +44,10 @@ PDFs are first-class; JPEG and PNG are supported alongside them.
 ## Reacting to the disk
 
 FSEvents drives a debounced reconcile. A file that disappears is marked missing
-rather than deleted, so when it reappears elsewhere it is relinked by SHA-256
-and keeps its tags, metadata and OCR text. Rows stay claimable for thirty days,
-and a row whose file is in the Trash is never forgotten at all.
+rather than deleted, so when it reappears elsewhere it is relinked and keeps its
+tags, metadata and OCR text. The watcher and a full scan both match on the file
+system's own ID for the file, so a file moved while Doctopus was closed, or
+edited on the way, is still recognised. The watcher falls back to the SHA-256,
+for volumes whose IDs do not persist and moves that got the file a new one.
+Rows stay claimable for thirty days, and a row whose file is in the Trash is
+never forgotten at all.

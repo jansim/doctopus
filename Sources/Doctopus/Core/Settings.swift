@@ -32,6 +32,10 @@ struct AppWideSettings: StoredSettings, Sendable, Equatable {
     var llmExcerptLimit = 6000
     var remoteVision = false
     var remoteVisionImageSize = 1024
+    /// Stored as switched-off raw values: new fields start on, and a stale name cannot fail the decode.
+    var unpredictedFields: [String] = []
+    /// Empty means `LLMPrompt.defaultTemplate`, so an untouched prompt follows the default.
+    var llmPromptTemplate = ""
     var ocrConcurrency = 0        // 0 = auto
     var viewMode: ViewMode = .list
     var galleryThumbnailSize: Double = 150
@@ -52,6 +56,11 @@ struct AppWideSettings: StoredSettings, Sendable, Equatable {
     }
 
     var sendsPageImage: Bool { llmBackend == .remote && remoteVision }
+
+    var predictedFields: Set<InsightField> {
+        get { Set(InsightField.allCases.filter { !unpredictedFields.contains($0.rawValue) }) }
+        set { unpredictedFields = InsightField.allCases.filter { !newValue.contains($0) }.map(\.rawValue) }
+    }
 
     var effectiveConcurrency: Int {
         if ocrConcurrency > 0 { return min(ocrConcurrency, 16) }
