@@ -7,7 +7,7 @@ enum Schema {
 
     private static let steps: [(Database) throws -> Void] = [
         v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19,
-        v20,
+        v20, v21,
     ]
     static var current: Int { steps.count }
 
@@ -35,6 +35,19 @@ enum Schema {
             [.text(table), .text(column)]) { $0.int(0) } ?? 0
         guard present == 0 else { return }
         try db.exec("ALTER TABLE \(table) ADD COLUMN \(column) \(declaration)")
+    }
+
+    /// Documents marked as outliers for a rule, which it then leaves alone.
+    private static func v21(_ db: Database) throws {
+        try db.exec("""
+        CREATE TABLE IF NOT EXISTS rule_suppressions (
+            rule_id    INTEGER NOT NULL REFERENCES rules(id) ON DELETE CASCADE,
+            doc_id     INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+            created_at REAL NOT NULL,
+            PRIMARY KEY (rule_id, doc_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_rule_suppressions_doc ON rule_suppressions(doc_id);
+        """)
     }
 
     /// v15: a pattern that compiled as a regex was being matched as one.

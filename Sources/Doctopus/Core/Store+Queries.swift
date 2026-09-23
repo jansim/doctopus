@@ -92,6 +92,9 @@ extension Store {
             wheres.append("d.id NOT IN (SELECT doc_id FROM document_tags)")
         case .needsReview:
             wheres.append("d.id IN (SELECT doc_id FROM processing WHERE status=0)")
+        case .outliers(_, let rule):
+            wheres.append("d.id IN (SELECT doc_id FROM rule_suppressions WHERE rule_id=?)")
+            args.append(.int(rule))
         }
 
         for t in query.tags {

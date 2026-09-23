@@ -128,6 +128,23 @@ Rules live in Settings › Rules, per library. The editor shows how many
 documents already in the library a rule catches, and where a document would
 land and what it would be called.
 
+A rule written after the fact, or a file moved by hand, leaves documents the
+rules would still change. These get a purple Rules badge, and the inspector
+names the rule and its changes with Apply and Suppress. Suppressing marks the
+document as an outlier: the rule stops pointing it out, Apply to Existing and
+reprocessing skip it, and the inspector keeps it listed, muted, so it can be
+undone. The Rules table counts each rule's outliers and lists them.
+
+Matching reads every document's text, so the store keeps each answer until the
+text, filename, correspondent, type or a rule's conditions change. What a
+match would change is compared against the index fresh on every pass.
+
+Documents awaiting review are routed again when a rule changes, re-applying
+its tags and metadata, and when a field or date is corrected by hand, so the
+suggested folders follow — a misread year fixed in review moves the suggested
+`Finances/Invoices/{year}` with it. A folder chosen when the document came in
+stays first. Neither moves a file; filing is still the review's decision.
+
 ## OCR
 
 PDFs are read through their embedded text layer first, which is nearly free;
