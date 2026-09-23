@@ -1062,7 +1062,7 @@ enum UITest {
 }
 
 @MainActor
-private final class SyntheticDrag: NSObject, NSDraggingInfo {
+private final class SyntheticDrag: NSObject, @MainActor NSDraggingInfo {
     let draggingPasteboard: NSPasteboard
     let draggingLocation: NSPoint
     private weak var window: NSWindow?
