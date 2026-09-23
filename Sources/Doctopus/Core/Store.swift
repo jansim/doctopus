@@ -119,9 +119,10 @@ actor Store {
         var size: Int64
         var mtime: Date
         var created: Date
+        var fileID: Int64? = nil
     }
 
-    func upsertDocument(_ f: FileFacts) throws -> (id: Int64, isNew: Bool, changed: Bool) {
+    func upsertDocument(_ f: FileFacts, origin: DocumentOrigin) throws -> (id: Int64, isNew: Bool, changed: Bool) {
         let url = URL(fileURLWithPath: f.path)
         let relative = relPath(f.path)
         let dir = relPath(url.deletingLastPathComponent().path)
@@ -136,10 +137,10 @@ actor Store {
             let changed = size != f.size || abs(mtime - f.mtime.timeIntervalSince1970) > 1
             try db.run("""
                 UPDATE documents SET size=?, mtime=?, missing=0, missing_since=NULL,
-                                     directory=?, filename=?, ext=?
+                                     directory=?, filename=?, ext=?, file_id=?
                 WHERE id=?
                 """, [.int(f.size), .double(f.mtime.timeIntervalSince1970),
-                      .text(dir), .text(name), .text(ext), .int(id)])
+                      .text(dir), .text(name), .text(ext), .int(f.fileID), .int(id)])
             if oldName != name { try refreshSearchIndex(id) }
             if changed {
                 try db.run("UPDATE documents SET hash=NULL, original_hash=NULL, ocr_state=0 WHERE id=?",
@@ -149,23 +150,41 @@ actor Store {
         }
 
         let id = try db.run("""
-            INSERT INTO documents(path, directory, filename, ext, size, mtime, created_at, ocr_state)
-            VALUES(?,?,?,?,?,?,?,0)
+            INSERT INTO documents(path, directory, filename, ext, size, mtime, created_at, ocr_state, file_id)
+            VALUES(?,?,?,?,?,?,?,0,?)
             """, [.text(relative), .text(dir), .text(name), .text(ext),
                   .int(f.size), .double(f.mtime.timeIntervalSince1970),
-                  .double(f.created.timeIntervalSince1970)])
+                  .double(f.created.timeIntervalSince1970), .int(f.fileID)])
         try refreshSearchIndex(id)
+        try logOrigin(docID: id, origin, path: relative)
         return (id, true, true)
     }
 
     /// A whole scan in one transaction: a commit per file is most of its cost.
-    func upsertDocuments(_ files: [FileFacts]) throws -> [(id: Int64, path: String, changed: Bool)] {
+    func upsertDocuments(_ files: [FileFacts]) throws -> [(id: Int64, path: String, isNew: Bool, changed: Bool)] {
         try db.transaction {
             try files.map { f in
-                let result = try upsertDocument(f)
-                return (result.id, f.path, result.changed)
+                let result = try upsertDocument(f, origin: .inLibrary)
+                return (result.id, f.path, result.isNew, result.changed)
             }
         }
+    }
+
+    private func logOrigin(docID: Int64, _ origin: DocumentOrigin, path: String) throws {
+        let detail: String
+        var source: String?
+        switch origin {
+        case .scanned:
+            detail = "Scanned"
+        case .imported(let from):
+            detail = "Imported from \(from)"
+            source = from
+        case .inLibrary:
+            detail = "In library at \(path)"
+        }
+        try db.run("INSERT INTO events(doc_id, at, action, detail, from_path) VALUES(?,?,?,?,?)",
+                   [.int(docID), .double(Date().timeIntervalSince1970),
+                    .text(EventAction.added.rawValue), .text(detail), .text(source)])
     }
 
     func reconcileMissing(seenPaths: Set<String>) throws -> Int {
@@ -182,6 +201,26 @@ actor Store {
             }
         }
         return stale.count
+    }
+
+    /// Moves a document to where its file turned up, matched by file-system ID rather than bytes.
+    func relinkByFileID(_ f: FileFacts) throws -> Int64? {
+        guard let fileID = f.fileID else { return nil }
+        let relative = relPath(f.path)
+        let rows = try db.map("SELECT id, path FROM documents WHERE file_id=? AND deleted_at IS NULL",
+                              [.int(fileID)]) { ($0.int(0), $0.string(1)) }
+        guard !rows.isEmpty, !rows.contains(where: { $0.1 == relative }) else { return nil }
+        let taken = try db.first("SELECT id FROM documents WHERE path=?", [.text(relative)]) { $0.int(0) }
+        guard taken == nil else { return nil }
+
+        let moved = rows.filter { _, path in
+            // A case-only rename still finds the same file at the old path.
+            path.lowercased() == relative.lowercased()
+                || FileScanner.fileID(url(forRelative: path)) != fileID
+        }
+        guard moved.count == 1, let id = moved.first?.0 else { return nil }
+        try updatePath(id, to: f.path)
+        return id
     }
 
     func relinkByHash(hash: String, newPath: String) throws -> Int64? {
@@ -202,6 +241,10 @@ actor Store {
     func markMissing(path: String) throws {
         try db.run("UPDATE documents SET missing=1, missing_since=COALESCE(missing_since,?) WHERE path=?",
                    [.double(Date().timeIntervalSince1970), .text(relPath(path))])
+    }
+
+    func documentCount() throws -> Int {
+        try db.first("SELECT COUNT(*) FROM documents") { Int($0.int(0)) } ?? 0
     }
 
     func setHash(_ id: Int64, _ hash: String, isOriginal: Bool = false) throws {

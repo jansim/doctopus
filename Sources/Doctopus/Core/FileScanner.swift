@@ -10,6 +10,19 @@ enum FileScanner {
         var size: Int64
         var mtime: Date
         var created: Date
+        var fileID: Int64?
+    }
+
+    static let identityKeys: [URLResourceKey] = [.fileIdentifierKey, .volumeSupportsPersistentIDsKey]
+
+    /// Nil where the volume does not promise its file IDs persist.
+    static func fileID(_ v: URLResourceValues) -> Int64? {
+        guard v.volumeSupportsPersistentIDs == true, let id = v.fileIdentifier else { return nil }
+        return Int64(bitPattern: id)
+    }
+
+    static func fileID(_ url: URL) -> Int64? {
+        (try? url.resourceValues(forKeys: Set(identityKeys))).flatMap(fileID)
     }
 
     /// A `library.doctopus` directory (or any `*.doctopus`) is Doctopus's own
@@ -22,7 +35,7 @@ enum FileScanner {
         let keys: [URLResourceKey] = [
             .isRegularFileKey, .isDirectoryKey, .isAliasFileKey, .isHiddenKey,
             .fileSizeKey, .contentModificationDateKey, .creationDateKey,
-        ]
+        ] + identityKeys
         guard let e = FileManager.default.enumerator(
             at: root, includingPropertiesForKeys: keys,
             options: [.skipsHiddenFiles, .skipsPackageDescendants]) else { return [] }
@@ -42,7 +55,8 @@ enum FileScanner {
             out.append(Found(url: url,
                              size: Int64(v.fileSize ?? 0),
                              mtime: v.contentModificationDate ?? .distantPast,
-                             created: v.creationDate ?? v.contentModificationDate ?? Date()))
+                             created: v.creationDate ?? v.contentModificationDate ?? Date(),
+                             fileID: fileID(v)))
         }
         return out
     }
