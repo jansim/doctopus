@@ -1650,7 +1650,8 @@ enum SelfTest {
             let row = await imported("doctopus-clear-chosen")
             Check.that("an import into a chosen folder is never routed away",
                        row?.directory == folder.path, row?.directory ?? "nowhere")
-            let offered = row.map { (try? await store.pathSuggestions(for: $0.doc)) ?? [] } ?? []
+            var offered: [PathSuggestion] = []
+            if let row { offered = (try? await store.pathSuggestions(for: row.doc)) ?? [] }
             Check.that("…but is still offered the folder the rules would pick",
                        offered.map(\.path).contains(root.appendingPathComponent("Filed/Clear").path))
             try? fm.removeItem(at: chosen)
@@ -1662,7 +1663,8 @@ enum SelfTest {
             let hash = FileScanner.hash(placed)
             await indexer.importFiles([placed], into: inbox, route: true)
             let row = await imported("doctopus-clear-found")
-            let offered = row.map { (try? await store.pathSuggestions(for: $0.doc)) ?? [] } ?? []
+            var offered: [PathSuggestion] = []
+            if let row { offered = (try? await store.pathSuggestions(for: row.doc)) ?? [] }
             let waiting = ((try? await store.listDocuments(selection: .needsReview, query: SearchQuery(""),
                                                            sort: .added, ascending: false)) ?? [])
                 .contains { $0.id == row?.id }
