@@ -1397,6 +1397,44 @@ enum SelfTest {
                        ((try? await store.documents(matchingHash: "0")) ?? []).isEmpty)
         }
 
+        print("\nFILE IDS")
+        let fm = FileManager.default
+        let present = ((try? await store.listDocuments(selection: .all, query: SearchQuery(""),
+                                                       sort: .added, ascending: false)) ?? [])
+            .filter { $0.ext == "pdf" && fm.fileExists(atPath: $0.path) }
+        if present.count >= 2 {
+            let (edited, moved) = (present[0], present[1])
+            Check.that("files carry the file system's ID for them", FileScanner.fileID(edited.url) != nil)
+
+            // Moved and then edited while nobody was watching, so its hash no
+            // longer finds it: only the file ID can.
+            let away = store.root.appendingPathComponent("Moved Away", isDirectory: true)
+            let editedTarget = away.appendingPathComponent(edited.filename)
+            try? fm.createDirectory(at: away, withIntermediateDirectories: true)
+            try? fm.moveItem(at: edited.url, to: editedTarget)
+            if let handle = try? FileHandle(forWritingTo: editedTarget) {
+                _ = try? handle.seekToEnd()
+                try? handle.write(contentsOf: Data("\n% edited\n".utf8))
+                try? handle.close()
+            }
+            await indexer.indexAll()
+            let editedPath = try? await store.documentPath(edited.doc)
+            Check.that("a full scan takes a moved and edited file's document along",
+                       editedPath == editedTarget.path, editedPath ?? "gone")
+
+            // The watcher only hears about the folder the file landed in.
+            let into = store.root.appendingPathComponent("Picked Up", isDirectory: true)
+            let movedTarget = into.appendingPathComponent(moved.filename)
+            try? fm.createDirectory(at: into, withIntermediateDirectories: true)
+            try? fm.moveItem(at: moved.url, to: movedTarget)
+            await indexer.handleChanges(paths: [moved.path, into.path])
+            let movedPath = try? await store.documentPath(moved.doc)
+            Check.that("the watcher takes a moved file's document along",
+                       movedPath == movedTarget.path, movedPath ?? "gone")
+        } else {
+            Check.that("the fixtures have two PDFs to move", false)
+        }
+
         Check.finish("pipeline self-test")
     }
 
