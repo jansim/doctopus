@@ -405,13 +405,13 @@ private struct DetailInspector: View {
         Section2("History") {
             ForEach(detail.history.prefix(showAllHistory ? detail.history.count : 6)) { event in
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Image(systemName: event.icon)
+                    Image(systemName: event.action.icon)
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                         .frame(width: 14)
                     VStack(alignment: .leading, spacing: 1) {
                         HStack(spacing: 5) {
-                            Text(event.label).font(.caption).fontWeight(.medium)
+                            Text(event.action.label).font(.caption).fontWeight(.medium)
                             Text(event.at.formatted(date: .abbreviated, time: .shortened))
                                 .font(.caption2).foregroundStyle(.tertiary)
                         }
@@ -419,7 +419,7 @@ private struct DetailInspector: View {
                             Text(move).font(.caption2).foregroundStyle(.secondary)
                         } else if let note = event.detail?.nilIfBlank {
                             Text(note).font(.caption2).foregroundStyle(.secondary)
-                                .lineLimit(event.action == "edited" ? 8 : 2)
+                                .lineLimit(event.action == .edited ? 8 : 2)
                         }
                     }
                     Spacer(minLength: 0)

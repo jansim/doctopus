@@ -194,9 +194,9 @@ extension AppModel {
     func undo() {
         guard let lib = activeLibrary else { return }
         Task {
-            if let undone = try? await lib.store.undoLastEvent() {
+            if let undone = await lib.indexer.undoLast() {
                 refreshAll()
-                notify("Undid \(undone.action) for “\(undone.filename)”.", .success)
+                notify("Undid the last file change to “\(undone.filename)”.", .success)
             } else {
                 notify("Nothing to undo.", .info)
             }

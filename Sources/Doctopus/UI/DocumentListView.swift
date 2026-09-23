@@ -155,7 +155,7 @@ private struct DocumentTableView: View {
                             .lineLimit(1)
                             .truncationMode(.middle)
                         if let queue = row.queue {
-                            Text(queue.detail ?? queue.action.capitalized)
+                            Text(queue.detail ?? queue.action.label)
                                 .font(.caption).foregroundStyle(.secondary).lineLimit(1)
                         } else if let snippet = row.snippet {
                             Text(snippet).font(.caption).foregroundStyle(.secondary).lineLimit(1)
@@ -288,8 +288,8 @@ private struct QueueCell: View {
             switch kind {
             case .action:
                 HStack(spacing: 5) {
-                    Image(systemName: queue.icon).font(.caption)
-                    Text(queue.action.capitalized)
+                    Image(systemName: queue.action.icon).font(.caption)
+                    Text(queue.action.label)
                     if let rule = queue.rule, rule != "none" {
                         Text(rule == "derived" ? "derived" : rule)
                             .font(.caption2).foregroundStyle(.secondary)

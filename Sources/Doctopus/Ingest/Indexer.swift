@@ -271,7 +271,7 @@ actor Indexer {
         await syncAliases(docID: id, target: url)
 
         if !isImport, optimized == nil {
-            try? await store.logProcessing(docID: id, action: "indexed",
+            try? await store.logProcessing(docID: id, action: .indexed,
                                            detail: summaryLine(extracted, findings, insight),
                                            confidence: findings.confidence, rule: nil,
                                            from: nil, to: nil, approved: true)
@@ -313,7 +313,10 @@ actor Indexer {
         let decision = router.evaluate(text: text, filename: url.lastPathComponent,
                                        findings: findings, insight: insight,
                                        currentDirectory: url.deletingLastPathComponent())
-        try? await store.setPathSuggestions(decision.candidates, for: id)
+        try? await store.setPathSuggestions(decision.candidates.map {
+            PathSuggestion(path: $0.destination.path, confidence: $0.confidence, source: $0.rule,
+                           explanation: $0.explanation)
+        }, for: id)
 
         if let corr = decision.setCorrespondent {
             try? await store.storeMetadata(Store.MetadataPatch(docID: id, correspondent: corr, source: "rule"))
@@ -340,20 +343,15 @@ actor Indexer {
                 docType: decision.setDocType ?? insight?.docType ?? findings.docType,
                 language: insight?.language, counter: nil,
                 originalStem: url.deletingPathExtension().lastPathComponent, ext: url.pathExtension))
-            if name != url.lastPathComponent {
-                let target = Naming.uniqueURL(in: url.deletingLastPathComponent(), filename: name)
-                if (try? FileManager.default.moveItem(at: url, to: target)) != nil {
-                    try? await store.updatePath(id, to: target.path)
-                    try? await store.logProcessing(docID: id, action: "renamed", detail: name,
-                                                   confidence: nil, rule: decision.rule,
-                                                   from: url.path, to: target.path, approved: true)
-                    url = target
-                }
+            if name != url.lastPathComponent,
+               let target = try? await relocate(id, from: url, into: url.deletingLastPathComponent(), named: name,
+                                                action: .renamed, detail: name, rule: decision.rule) {
+                url = target
             }
         }
 
         guard let destination = decision.destination else {
-            try? await store.logProcessing(docID: id, action: "imported", detail: decision.explanation,
+            try? await store.logProcessing(docID: id, action: .imported, detail: decision.explanation,
                                            confidence: decision.confidence, rule: decision.rule,
                                            from: nil, to: url.path, approved: false)
             return
@@ -361,21 +359,14 @@ actor Indexer {
 
         let from = url.path
         do {
-            try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
-            let target = Naming.uniqueURL(in: destination, filename: url.lastPathComponent)
-            try FileManager.default.moveItem(at: url, to: target)
-            try? await store.updatePath(id, to: target.path)
-            let oldDir = URL(fileURLWithPath: from).deletingLastPathComponent()
-            FileScanner.pruneEmptyDirectories(startingFrom: oldDir, upTo: store.root)
-            url = target
             // A rule's move is certain, but what was read off the document
             // still deserves a look, so it waits in Needs Review.
-            try? await store.logProcessing(docID: id, action: "routed", detail: decision.explanation,
-                                           confidence: decision.confidence, rule: decision.rule,
-                                           from: from, to: target.path,
-                                           approved: decision.rule == "derived" && decision.confidence >= 0.9)
+            url = try await relocate(id, from: url, into: destination, named: url.lastPathComponent,
+                                     action: .routed, detail: decision.explanation, rule: decision.rule,
+                                     confidence: decision.confidence,
+                                     approved: decision.rule == "derived" && decision.confidence >= 0.9)
         } catch {
-            try? await store.logProcessing(docID: id, action: "imported",
+            try? await store.logProcessing(docID: id, action: .imported,
                                            detail: "Could not move: \(error.localizedDescription)",
                                            confidence: decision.confidence, rule: decision.rule,
                                            from: from, to: from, approved: false)
@@ -451,19 +442,9 @@ actor Indexer {
             // file, and the placement is skipped for the next one along.
             guard AliasManager.removeAlias(at: alias.path, pointingTo: url) else { continue }
             try? await store.deleteAlias(id: alias.id)
-            let target = Naming.uniqueURL(in: folder, filename: url.lastPathComponent)
-            do { try FileManager.default.moveItem(at: url, to: target) }
-            catch {
-                return nil
-            }
-            try? await store.updatePath(docID, to: target.path)
-            FileScanner.pruneEmptyDirectories(startingFrom: home, upTo: store.root)
-            try? await store.logProcessing(
-                docID: docID, action: "promoted",
-                detail: "Deleted from \(home.lastPathComponent); kept where it was also filed",
-                confidence: nil, rule: nil, from: path, to: target.path, approved: true)
-            await syncAliases(docID: docID, target: target)
-            return target
+            return try? await relocate(docID, from: url, into: folder, named: url.lastPathComponent,
+                                       action: .promoted,
+                                       detail: "Deleted from \(home.lastPathComponent); kept where it was also filed")
         }
         return nil
     }
@@ -561,7 +542,7 @@ actor Indexer {
         for tag in insight.tags.prefix(4) {
             try? await store.suggestTag(tag, for: id, autoAcceptMatching: settings.autoAcceptMatchingTagSuggestions)
         }
-        try? await store.logProcessing(docID: id, action: "analyzed", detail: analysisLine(insight),
+        try? await store.logProcessing(docID: id, action: .analyzed, detail: analysisLine(insight),
                                        confidence: insight.confidence, rule: nil,
                                        from: nil, to: nil, approved: true)
         return .updated(name)
@@ -667,17 +648,10 @@ actor Indexer {
                                      ext: url.pathExtension)
             let newName = Naming.render(template, ctx)
             guard newName != url.lastPathComponent else { continue }
-            let target = Naming.uniqueURL(in: url.deletingLastPathComponent(), filename: newName)
-            do {
-                try FileManager.default.moveItem(at: url, to: target)
-                try? await store.updatePath(id, to: target.path)
-                FileScanner.pruneEmptyDirectories(startingFrom: url.deletingLastPathComponent(), upTo: store.root)
-                try? await store.logProcessing(docID: id, action: "renamed", detail: newName,
-                                               confidence: nil, rule: template,
-                                               from: url.path, to: target.path, approved: true)
-                await syncAliases(docID: id, target: target)
+            if (try? await relocate(id, from: url, into: url.deletingLastPathComponent(), named: newName,
+                                    action: .renamed, detail: newName, rule: template)) != nil {
                 renamed += 1
-            } catch { continue }
+            }
         }
         onDataChanged()
         return renamed
@@ -685,21 +659,14 @@ actor Indexer {
 
     func move(ids: [Int64], to destination: URL) async -> Int {
         var moved = 0
-        try? FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
         for id in ids {
             guard let path = try? await store.documentPath(id) else { continue }
             let url = URL(fileURLWithPath: path)
             guard url.deletingLastPathComponent().path != destination.path else { continue }
-            let target = Naming.uniqueURL(in: destination, filename: url.lastPathComponent)
-            do {
-                try FileManager.default.moveItem(at: url, to: target)
-                try? await store.updatePath(id, to: target.path)
-                FileScanner.pruneEmptyDirectories(startingFrom: url.deletingLastPathComponent(), upTo: store.root)
-                try? await store.logProcessing(docID: id, action: "moved", detail: destination.lastPathComponent,
-                                               confidence: nil, rule: nil, from: path, to: target.path, approved: true)
-                await syncAliases(docID: id, target: target)
+            if (try? await relocate(id, from: url, into: destination, named: url.lastPathComponent,
+                                    action: .moved, detail: destination.lastPathComponent)) != nil {
                 moved += 1
-            } catch { continue }
+            }
         }
         onDataChanged()
         return moved
@@ -730,7 +697,7 @@ actor Indexer {
         }
         try? await store.setSizes(id, size: result.newSize, originalSize: result.originalSize)
         try? await store.logProcessing(
-            docID: id, action: "optimized",
+            docID: id, action: .optimized,
             detail: String(format: "%.0f%% smaller (%d page%@ rasterized)",
                            result.savings * 100, result.pagesRasterized,
                            result.pagesRasterized == 1 ? "" : "s"),
@@ -740,13 +707,149 @@ actor Indexer {
     }
 
     func revertOptimization(ids: [Int64]) async -> Int {
+        let fm = FileManager.default
         var count = 0
         for id in ids {
-            if (try? await store.revertOptimization(id)) == true {
-                count += 1
+            guard let saved = try? await store.savedOriginal(id) else { continue }
+            // Staged beside the live file and swapped in, so a failing copy can
+            // never leave the row pointing at a file that no longer exists.
+            let staged = saved.current.deletingLastPathComponent()
+                .appendingPathComponent(".doctopus-revert-\(UUID().uuidString).\(saved.current.pathExtension)")
+            do {
+                try fm.copyItem(at: saved.file, to: staged)
+                if fm.fileExists(atPath: saved.current.path) {
+                    _ = try fm.replaceItemAt(saved.current, withItemAt: staged)
+                } else {
+                    try fm.moveItem(at: staged, to: saved.current)
+                }
+                try await store.markReverted(id, size: saved.size)
+            } catch {
+                try? fm.removeItem(at: staged)
+                continue
             }
+            try? await store.logProcessing(docID: id, action: .revertedOptimization,
+                                           detail: "Reverted to original pre-optimization file",
+                                           confidence: nil, rule: nil, from: nil, to: saved.current.path,
+                                           approved: true)
+            count += 1
         }
         if count > 0 { onDataChanged() }
         return count
+    }
+
+    /// Every move of a document's file ends here: the file, its row, the folder
+    /// it left, its event and its tag aliases.
+    @discardableResult
+    private func relocate(_ id: Int64, from url: URL, into folder: URL, named name: String,
+                          action: EventAction?, detail: String?, rule: String? = nil,
+                          confidence: Double? = nil, approved: Bool = true) async throws -> URL {
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let target = Naming.uniqueURL(in: folder, filename: name)
+        try FileManager.default.moveItem(at: url, to: target)
+        try? await store.updatePath(id, to: target.path)
+        FileScanner.pruneEmptyDirectories(startingFrom: url.deletingLastPathComponent(), upTo: store.root)
+        if let action {
+            try? await store.logProcessing(docID: id, action: action, detail: detail, confidence: confidence,
+                                           rule: rule, from: url.path, to: target.path, approved: approved)
+        }
+        await syncAliases(docID: id, target: target)
+        return target
+    }
+
+    /// Takes back the latest file change still on record. One whose file has
+    /// since moved outside Doctopus is dropped, so it cannot block older ones.
+    func undoLast() async -> (action: EventAction, filename: String)? {
+        while let event = try? await store.lastUndoableEvent() {
+            let moved = URL(fileURLWithPath: event.to)
+            if event.action == .unfiled {
+                try? await store.deleteEvent(event.id)
+                guard let current = try? await store.documentPath(event.docID),
+                      FileManager.default.fileExists(atPath: current),
+                      let alias = try? AliasManager.createAlias(to: URL(fileURLWithPath: current),
+                                                                 in: moved.deletingLastPathComponent())
+                else { continue }
+                try? await store.recordAlias(docID: event.docID, tagID: nil, path: alias.path)
+                return (event.action, URL(fileURLWithPath: current).lastPathComponent)
+            }
+            guard FileManager.default.fileExists(atPath: moved.path) else {
+                try? await store.deleteEvent(event.id)
+                continue
+            }
+            let original = URL(fileURLWithPath: event.from)
+            guard let target = try? await relocate(event.docID, from: moved,
+                                                   into: original.deletingLastPathComponent(),
+                                                   named: original.lastPathComponent, action: nil, detail: nil)
+            else { return nil }
+            try? await store.deleteEvent(event.id)
+            if event.action == .promoted,
+               let alias = try? AliasManager.createAlias(to: target, in: moved.deletingLastPathComponent()) {
+                try? await store.recordAlias(docID: event.docID, tagID: nil, path: alias.path)
+            }
+            return (event.action, target.lastPathComponent)
+        }
+        return nil
+    }
+
+    struct RuleApplyResult: Sendable {
+        var matched = 0
+        var moved = 0
+        var renamed = 0
+        var tagged = 0
+        var metadataUpdated = 0
+    }
+
+    /// A rule, saved or still a draft, applied to every document already in
+    /// the library. Only ever done on request.
+    func applyRule(_ rule: Rule) async -> RuleApplyResult {
+        var result = RuleApplyResult()
+        let router = Router(rules: [rule], threshold: 0, derivedTemplate: "", root: store.root,
+                            deriveWhenNoRule: false)
+        for doc in (try? await store.ruleTargets()) ?? [] where rule.matches(doc.subject) {
+            result.matched += 1
+            if !rule.tagNames.isEmpty {
+                for tag in rule.tagNames {
+                    if let tagID = try? await store.tagID(named: tag) {
+                        try? await store.assign(tag: tagID, to: doc.id, auto: true)
+                    }
+                }
+                result.tagged += 1
+            }
+            var patch = Store.MetadataPatch(docID: doc.id)
+            patch.correspondent = rule.setCorrespondent
+            patch.docType = rule.setDocType
+            if patch.correspondent != nil || patch.docType != nil,
+               (try? await store.storeMetadata(patch)) != nil {
+                result.metadataUpdated += 1
+            }
+
+            var url = URL(fileURLWithPath: doc.path)
+            let correspondent = rule.setCorrespondent ?? doc.subject.correspondent
+            let docType = rule.setDocType ?? doc.subject.docType
+            let date = doc.docDate ?? doc.created
+            if let template = rule.destination {
+                let folder = router.expand(template, correspondent: correspondent, docType: docType, date: date)
+                if router.isInsideLibrary(folder),
+                   url.deletingLastPathComponent().standardizedFileURL != folder.standardizedFileURL,
+                   let target = try? await relocate(doc.id, from: url, into: folder, named: url.lastPathComponent,
+                                                    action: .routed, detail: "Applied rule “\(rule.name)”",
+                                                    rule: rule.name, confidence: 1) {
+                    url = target
+                    result.moved += 1
+                }
+            }
+            if let template = rule.rename {
+                let name = Naming.render(template, Naming.Context(
+                    date: date, correspondent: correspondent, title: doc.title, docType: docType,
+                    language: doc.language, counter: nil,
+                    originalStem: url.deletingPathExtension().lastPathComponent, ext: url.pathExtension))
+                if name != url.lastPathComponent,
+                   (try? await relocate(doc.id, from: url, into: url.deletingLastPathComponent(), named: name,
+                                        action: .renamed, detail: name, rule: rule.name)) != nil {
+                    result.renamed += 1
+                }
+            }
+        }
+        onDataChanged()
+        return result
     }
 }

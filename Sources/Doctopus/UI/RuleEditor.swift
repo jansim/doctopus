@@ -234,7 +234,7 @@ struct RuleEditor: View {
         Task {
             // The draft, not a saved copy: the rule is only written to the
             // library when the user presses Add Rule / Save.
-            let res = (try? await library.store.applyRuleToExisting(tidied())) ?? Store.RuleApplyResult()
+            let res = await library.indexer.applyRule(tidied())
             applyStatus = "Applied to \(res.matched) document\(res.matched == 1 ? "" : "s") (\(res.moved) moved, \(res.renamed) renamed, \(res.tagged) tagged)."
             applying = false
         }

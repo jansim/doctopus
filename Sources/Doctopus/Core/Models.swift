@@ -72,44 +72,45 @@ struct DocumentRow: Identifiable, Hashable, Sendable {
 struct QueueInfo: Hashable, Sendable {
     var entryID: Int64
     var at: Date
-    var action: String
+    var action: EventAction
     var detail: String?
     var confidence: Double?
     var rule: String?
     var approved: Bool
-
-    var icon: String { DocumentAction.icon(action) }
 }
 
-enum DocumentAction {
-    static func icon(_ action: String) -> String {
-        switch action {
-        case "routed": return "arrow.triangle.branch"
-        case "optimized": return "arrow.down.circle"
-        case "renamed": return "character.cursor.ibeam"
-        case "moved": return "folder"
-        case "promoted": return "arrow.up.doc"
-        case "unfiled": return "folder.badge.minus"
-        case "imported": return "tray.and.arrow.down"
-        case "analyzed": return "sparkles"
-        case "edited": return "pencil"
-        default: return "doc.text.magnifyingglass"
+/// What an `events` row records. The raw values are what the index stores.
+enum EventAction: String, Sendable {
+    case imported, indexed, analyzed, optimized, aliased, unfiled, moved, renamed, routed, promoted, edited
+    case revertedOptimization = "reverted_optimization"
+
+    init(stored: String) { self = EventAction(rawValue: stored) ?? .indexed }
+
+    /// What Undo File Change can take back.
+    static let undoable: [EventAction] = [.moved, .renamed, .routed, .promoted, .unfiled]
+
+    var icon: String {
+        switch self {
+        case .routed: return "arrow.triangle.branch"
+        case .optimized: return "arrow.down.circle"
+        case .renamed: return "character.cursor.ibeam"
+        case .moved: return "folder"
+        case .promoted: return "arrow.up.doc"
+        case .unfiled: return "folder.badge.minus"
+        case .imported: return "tray.and.arrow.down"
+        case .analyzed: return "sparkles"
+        case .edited: return "pencil"
+        case .indexed, .aliased, .revertedOptimization: return "doc.text.magnifyingglass"
         }
     }
 
-    static func label(_ action: String) -> String {
-        switch action {
-        case "routed": return "Filed"
-        case "optimized": return "Optimized"
-        case "renamed": return "Renamed"
-        case "moved": return "Moved"
-        case "promoted": return "Kept elsewhere"
-        case "unfiled": return "Unfiled"
-        case "imported": return "Imported"
-        case "analyzed": return "Analyzed"
-        case "indexed": return "Indexed"
-        case "edited": return "Edited by hand"
-        default: return action.capitalized
+    var label: String {
+        switch self {
+        case .routed: return "Filed"
+        case .promoted: return "Kept elsewhere"
+        case .edited: return "Edited by hand"
+        case .revertedOptimization: return "Reverted"
+        default: return rawValue.capitalized
         }
     }
 }
@@ -241,7 +242,7 @@ struct ProcessingEntry: Identifiable, Hashable, Sendable {
     var id: Int64
     var docID: Int64
     var at: Date
-    var action: String
+    var action: EventAction
     var detail: String?
     var confidence: Double?
     var rule: String?
@@ -264,15 +265,12 @@ struct Note: Identifiable, Hashable, Sendable {
 struct HistoryEvent: Identifiable, Hashable, Sendable {
     var id: Int64
     var at: Date
-    var action: String
+    var action: EventAction
     var detail: String?
     var confidence: Double?
     var rule: String?
     var fromPath: String?
     var toPath: String?
-
-    var icon: String { DocumentAction.icon(action) }
-    var label: String { DocumentAction.label(action) }
 
     func move(relativeTo root: String) -> String? {
         guard let fromPath, let toPath, fromPath != toPath else { return nil }
@@ -387,4 +385,70 @@ extension String {
         let t = trimmingCharacters(in: .whitespacesAndNewlines)
         return t.isEmpty ? nil : t
     }
+}
+
+/// `metadata.source` is written as `backend[:model][:vN]`. Read it back only
+/// through here, so adding a component never breaks a prefix match elsewhere.
+enum MetadataSource: Equatable {
+    /// Bump whenever the question the models are asked changes, so
+    /// `is:stale-analysis` can find the documents answered under an older one.
+    static let promptVersion = 4
+
+    case onDevice(model: String?)
+    case remote(model: String?, vision: Bool)
+    case heuristics
+
+    init(_ raw: String) {
+        var parts = raw.split(separator: ":").map(String.init)
+        let backend = parts.isEmpty ? "" : parts.removeFirst()
+        if let last = parts.last, last.hasPrefix("v"), last.dropFirst().allSatisfy(\.isNumber) {
+            parts.removeLast()
+        }
+        let model = parts.joined(separator: ":").nilIfBlank
+        switch backend {
+        case "llm": self = .onDevice(model: model)
+        case "remote": self = .remote(model: model, vision: false)
+        case "vlm": self = .remote(model: model, vision: true)
+        default: self = .heuristics
+        }
+    }
+
+    var model: String? {
+        switch self {
+        case .onDevice(let m), .remote(let m, _): return m
+        case .heuristics: return nil
+        }
+    }
+
+    var label: String {
+        switch self {
+        case .onDevice: return "On-device model"
+        case .remote(_, let vision): return vision ? "API vision model" : "API model"
+        case .heuristics: return "Heuristics"
+        }
+    }
+
+    var inlineLabel: String {
+        switch self {
+        case .onDevice: return "on-device model"
+        case .remote(_, let vision): return vision ? "API vision model" : "API model"
+        case .heuristics: return "heuristics"
+        }
+    }
+
+    var detailedLabel: String {
+        guard let model else { return label }
+        return "\(label) (\(model))"
+    }
+}
+
+/// Shared by both backends: asking them different questions would make their
+/// answers incomparable.
+
+struct TrainingDoc: Sendable {
+    var id: Int64
+    var text: String
+    var correspondent: String?
+    var docType: String?
+    var tags: [String]
 }

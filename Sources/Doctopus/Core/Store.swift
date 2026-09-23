@@ -679,12 +679,12 @@ actor Store {
 
     static let queueLength = 500
 
-    func logProcessing(docID: Int64, action: String, detail: String?, confidence: Double?,
+    func logProcessing(docID: Int64, action: EventAction, detail: String?, confidence: Double?,
                        rule: String?, from: String?, to: String?, approved: Bool) throws {
         let eventID = try db.run("""
             INSERT INTO events(doc_id, at, action, detail, confidence, rule, from_path, to_path)
             VALUES(?,?,?,?,?,?,?,?)
-            """, [.int(docID), .double(Date().timeIntervalSince1970), .text(action), .text(detail),
+            """, [.int(docID), .double(Date().timeIntervalSince1970), .text(action.rawValue), .text(detail),
                   .double(confidence), .text(rule), .text(from), .text(to)])
         try db.run("INSERT INTO processing(event_id, doc_id, status) VALUES(?,?,?)",
                    [.int(eventID), .int(docID), .bool(approved)])
@@ -709,7 +709,7 @@ actor Store {
             WHERE doc_id=? ORDER BY at DESC, id DESC LIMIT 1
             """, [.int(docID)], { (id: $0.int(0), at: $0.double(1),
                                    action: $0.string(2), detail: $0.stringOrNil(3)) }),
-           last.action == "edited",
+           last.action == EventAction.edited.rawValue,
            now.timeIntervalSince1970 - last.at < Store.editGroupingWindow {
             try db.run("UPDATE events SET at=?, detail=? WHERE id=?",
                        [.double(now.timeIntervalSince1970),
@@ -718,7 +718,7 @@ actor Store {
         }
         try db.run("INSERT INTO events(doc_id, at, action, detail) VALUES(?,?,?,?)",
                    [.int(docID), .double(now.timeIntervalSince1970),
-                    .text("edited"), .text(detail)])
+                    .text(EventAction.edited.rawValue), .text(detail)])
     }
 
     static func mergedEditDetail(_ existing: String?, _ addition: String) -> String {
@@ -744,7 +744,7 @@ actor Store {
             ORDER BY e.at DESC LIMIT ?
             """, [.int(limit)]) {
             ProcessingEntry(id: $0.int(0), docID: $0.int(1),
-                            at: Date(timeIntervalSince1970: $0.double(2)), action: $0.string(3),
+                            at: Date(timeIntervalSince1970: $0.double(2)), action: EventAction(stored: $0.string(3)),
                             detail: $0.stringOrNil(4), confidence: $0.doubleOrNil(5),
                             rule: $0.stringOrNil(6), fromPath: $0.stringOrNil(7),
                             toPath: $0.stringOrNil(8), approved: $0.bool(9),
@@ -758,7 +758,7 @@ actor Store {
             FROM events WHERE doc_id=? ORDER BY at DESC, id DESC LIMIT ?
             """, [.int(docID), .int(limit)]) {
             HistoryEvent(id: $0.int(0), at: Date(timeIntervalSince1970: $0.double(1)),
-                         action: $0.string(2), detail: $0.stringOrNil(3),
+                         action: EventAction(stored: $0.string(2)), detail: $0.stringOrNil(3),
                          confidence: $0.doubleOrNil(4), rule: $0.stringOrNil(5),
                          fromPath: $0.stringOrNil(6).map { absPath($0) },
                          toPath: $0.stringOrNil(7).map { absPath($0) })
@@ -811,7 +811,7 @@ actor Store {
     }
 
     struct ClassifierTrainingData: Sendable {
-        var docs: [DocumentClassifier.TrainingDoc]
+        var docs: [TrainingDoc]
         var fingerprint: String
     }
 
@@ -842,11 +842,11 @@ actor Store {
         let docIDs = docs.map(\.id)
         let tagMap = (try? tags(forDocuments: docIDs).own) ?? [:]
 
-        var trainingDocs: [DocumentClassifier.TrainingDoc] = []
+        var trainingDocs: [TrainingDoc] = []
         var maxMtime: Double = 0
         for doc in docs {
             let tNames = (tagMap[doc.id] ?? []).map(\.name)
-            trainingDocs.append(DocumentClassifier.TrainingDoc(
+            trainingDocs.append(TrainingDoc(
                 id: doc.id, text: doc.text,
                 correspondent: doc.correspondent, docType: doc.docType,
                 tags: tNames
@@ -862,13 +862,19 @@ actor Store {
         containerURL.appendingPathComponent("originals", isDirectory: true)
     }
 
+    /// The saved original a document can be put back to, where it goes, and its size.
+    func savedOriginal(_ docID: Int64) throws -> (file: URL, current: URL, size: Int64)? {
+        guard let (path, size, hash) = try db.first("""
+            SELECT path, original_size, original_hash FROM documents
+            WHERE id=? AND original_size IS NOT NULL AND original_hash IS NOT NULL
+            """, [.int(docID)], { ($0.string(0), $0.int(1), $0.string(2)) }) else { return nil }
+        let current = URL(fileURLWithPath: absPath(path))
+        let file = originalsDirectory.appendingPathComponent("\(hash).\(current.pathExtension)")
+        return FileManager.default.fileExists(atPath: file.path) ? (file, current, size) : nil
+    }
+
     func originalFileURL(for docID: Int64) throws -> URL? {
-        guard let (path, originalHash) = try db.first(
-            "SELECT path, original_hash FROM documents WHERE id=? AND original_size IS NOT NULL AND original_hash IS NOT NULL",
-            [.int(docID)], { ($0.string(0), $0.string(1)) }) else { return nil }
-        let ext = URL(fileURLWithPath: path).pathExtension
-        let file = originalsDirectory.appendingPathComponent("\(originalHash).\(ext)")
-        return FileManager.default.fileExists(atPath: file.path) ? file : nil
+        try savedOriginal(docID)?.file
     }
 
     @discardableResult
@@ -900,43 +906,9 @@ actor Store {
         try? FileManager.default.removeItem(at: originalsDirectory.appendingPathComponent("\(originalHash).\(ext)"))
     }
 
-    func revertOptimization(_ docID: Int64) throws -> Bool {
-        guard let (relPath, originalSize, originalHash) = try db.first("""
-            SELECT path, original_size, original_hash
-            FROM documents
-            WHERE id=? AND original_size IS NOT NULL AND original_hash IS NOT NULL
-            """, [.int(docID)], { ($0.string(0), $0.int(1), $0.string(2)) }) else { return false }
-
-        let currentURL = URL(fileURLWithPath: absPath(relPath))
-        let ext = currentURL.pathExtension
-        let originalURL = originalsDirectory.appendingPathComponent("\(originalHash).\(ext)")
-        guard FileManager.default.fileExists(atPath: originalURL.path) else { return false }
-
-        let fm = FileManager.default
-        // Stage the restore beside the live file and swap it in, so a failing
-        // copy can never leave the row pointing at a file that no longer exists.
-        let staged = currentURL.deletingLastPathComponent()
-            .appendingPathComponent(".doctopus-revert-\(UUID().uuidString).\(ext)")
-        try fm.copyItem(at: originalURL, to: staged)
-        do {
-            if fm.fileExists(atPath: currentURL.path) {
-                _ = try fm.replaceItemAt(currentURL, withItemAt: staged)
-            } else {
-                try fm.moveItem(at: staged, to: currentURL)
-            }
-        } catch {
-            try? fm.removeItem(at: staged)
-            throw error
-        }
-
-        try db.run("""
-            UPDATE documents SET size=?, original_size=NULL, hash=original_hash
-            WHERE id=?
-            """, [.int(originalSize), .int(docID)])
-        try logProcessing(docID: docID, action: "reverted_optimization",
-                          detail: "Reverted to original pre-optimization file",
-                          confidence: nil, rule: nil, from: nil, to: currentURL.path, approved: true)
-        return true
+    func markReverted(_ docID: Int64, size: Int64) throws {
+        try db.run("UPDATE documents SET size=?, original_size=NULL, hash=original_hash WHERE id=?",
+                   [.int(size), .int(docID)])
     }
 
     struct VerificationDocInfo: Sendable {
@@ -980,63 +952,28 @@ actor Store {
         } ?? 0
     }
 
-    func undoLastEvent() async throws -> (action: String, filename: String)? {
-        let fm = FileManager.default
-        // Skips (and discards) events whose target file has since moved
-        // outside Doctopus, so one stale event can't permanently block undo
-        // of everything older than it.
-        while true {
-            guard let last = try db.first("""
-                SELECT id, doc_id, action, from_path, to_path, detail
-                FROM events
-                WHERE action IN ('moved', 'renamed', 'routed', 'promoted', 'unfiled')
-                  AND from_path IS NOT NULL AND to_path IS NOT NULL
-                ORDER BY at DESC, id DESC LIMIT 1
-                """, [], { (id: $0.int(0), docID: $0.int(1), action: $0.string(2),
-                            from: absPath($0.string(3)), to: absPath($0.string(4)), detail: $0.stringOrNil(5)) }) else {
-                return nil
-            }
+    struct UndoableEvent: Sendable {
+        var id: Int64
+        var docID: Int64
+        var action: EventAction
+        var from: String
+        var to: String
+    }
 
-            if last.action == "unfiled" {
-                try db.run("DELETE FROM events WHERE id=?", [.int(last.id)])
-                guard let current = try documentPath(last.docID),
-                      fm.fileExists(atPath: current),
-                      let alias = try? AliasManager.createAlias(
-                          to: URL(fileURLWithPath: current),
-                          in: URL(fileURLWithPath: last.to).deletingLastPathComponent())
-                else { continue }
-                try recordAlias(docID: last.docID, tagID: nil, path: alias.path)
-                return (last.action, URL(fileURLWithPath: current).lastPathComponent)
-            }
-
-            guard fm.fileExists(atPath: last.to) else {
-                try db.run("DELETE FROM events WHERE id=?", [.int(last.id)])
-                continue
-            }
-
-            let targetDir = URL(fileURLWithPath: last.from).deletingLastPathComponent()
-            try fm.createDirectory(at: targetDir, withIntermediateDirectories: true)
-            let targetURL = Naming.uniqueURL(in: targetDir, filename: URL(fileURLWithPath: last.from).lastPathComponent)
-
-            try fm.moveItem(at: URL(fileURLWithPath: last.to), to: targetURL)
-            try updatePath(last.docID, to: targetURL.path)
-
-            // Before pruning: an alias put back here is exactly what keeps the
-            // folder from being read as empty and swept away.
-            if last.action == "promoted",
-               let alias = try? AliasManager.createAlias(
-                   to: targetURL,
-                   in: URL(fileURLWithPath: last.to).deletingLastPathComponent()) {
-                try recordAlias(docID: last.docID, tagID: nil, path: alias.path)
-            }
-
-            FileScanner.pruneEmptyDirectories(startingFrom: URL(fileURLWithPath: last.to).deletingLastPathComponent(), upTo: root)
-
-            try db.run("DELETE FROM events WHERE id=?", [.int(last.id)])
-
-            let filename = targetURL.lastPathComponent
-            return (last.action, filename)
+    func lastUndoableEvent() throws -> UndoableEvent? {
+        let actions = EventAction.undoable.map { "'\($0.rawValue)'" }.joined(separator: ", ")
+        return try db.first("""
+            SELECT id, doc_id, action, from_path, to_path FROM events
+            WHERE action IN (\(actions)) AND from_path IS NOT NULL AND to_path IS NOT NULL
+            ORDER BY at DESC, id DESC LIMIT 1
+            """) {
+            UndoableEvent(id: $0.int(0), docID: $0.int(1), action: EventAction(stored: $0.string(2)),
+                          from: absPath($0.string(3)), to: absPath($0.string(4)))
         }
+    }
+
+    func deleteEvent(_ id: Int64) throws {
+        try db.run("DELETE FROM events WHERE id=?", [.int(id)])
     }
 
     func savedViews() throws -> [SavedView] {
@@ -1159,22 +1096,18 @@ actor Store {
         }
     }
 
-    struct RuleApplyResult: Sendable {
-        var matched: Int = 0
-        var moved: Int = 0
-        var renamed: Int = 0
-        var tagged: Int = 0
-        var metadataUpdated: Int = 0
+    struct RuleTarget: Sendable {
+        var id: Int64
+        var path: String
+        var created: Date
+        var docDate: Date?
+        var title: String?
+        var language: String?
+        var subject: Rule.Subject
     }
 
-    func applyRuleToExisting(ruleID: Int64) async throws -> RuleApplyResult {
-        let allRules = try rules()
-        guard let rule = allRules.first(where: { $0.id == ruleID }) else { return RuleApplyResult() }
-        return try await applyRuleToExisting(rule)
-    }
-
-    func applyRuleToExisting(_ rule: Rule) async throws -> RuleApplyResult {
-        let docs = try db.map("""
+    func ruleTargets() throws -> [RuleTarget] {
+        try db.map("""
             SELECT d.id, d.path, d.filename, d.created_at, m.doc_date, ec.name, et.name,
                    (SELECT f.body FROM doc_fts f WHERE f.rowid = d.id), m.title, m.language
             FROM documents d
@@ -1183,90 +1116,12 @@ actor Store {
             LEFT JOIN entities et ON et.id = m.doc_type_id
             WHERE d.missing=0 AND d.deleted_at IS NULL
             """) {
-            (id: $0.int(0), path: absPath($0.string(1)), filename: $0.string(2),
-             created: Date(timeIntervalSince1970: $0.double(3)),
-             docDate: $0.date(4), correspondent: $0.stringOrNil(5),
-             docType: $0.stringOrNil(6), text: $0.stringOrNil(7) ?? "",
-             title: $0.stringOrNil(8), language: $0.stringOrNil(9))
+            RuleTarget(id: $0.int(0), path: absPath($0.string(1)),
+                       created: Date(timeIntervalSince1970: $0.double(3)), docDate: $0.date(4),
+                       title: $0.stringOrNil(8), language: $0.stringOrNil(9),
+                       subject: Rule.Subject(text: $0.stringOrNil(7) ?? "", filename: $0.string(2),
+                                             correspondent: $0.stringOrNil(5), docType: $0.stringOrNil(6)))
         }
-
-        var result = RuleApplyResult()
-        let router = Router(rules: [rule], threshold: 0.0, derivedTemplate: "", root: root, deriveWhenNoRule: false)
-
-        for doc in docs {
-            let subject = Rule.Subject(text: doc.text, filename: doc.filename,
-                                       correspondent: doc.correspondent, docType: doc.docType)
-            guard rule.matches(subject) else { continue }
-            result.matched += 1
-
-            do {
-                let tags = rule.tagNames
-                for tag in tags {
-                    let tid = try tagID(named: tag)
-                    try assign(tag: tid, to: doc.id, auto: true)
-                }
-                if !tags.isEmpty { result.tagged += 1 }
-
-                var patch = Store.MetadataPatch(docID: doc.id)
-                var updatedMeta = false
-                if let corr = rule.setCorrespondent {
-                    patch.correspondent = corr
-                    updatedMeta = true
-                }
-                if let dtype = rule.setDocType {
-                    patch.docType = dtype
-                    updatedMeta = true
-                }
-                if updatedMeta {
-                    try storeMetadata(patch)
-                    result.metadataUpdated += 1
-                }
-
-                var path = doc.path
-                let correspondent = patch.correspondent ?? doc.correspondent
-                let docType = patch.docType ?? doc.docType
-                let date = doc.docDate ?? doc.created
-                if let template = rule.destination {
-                    let folder = router.expand(template, correspondent: correspondent,
-                                               docType: docType, date: date)
-                    let current = URL(fileURLWithPath: path).deletingLastPathComponent()
-                    if router.isInsideLibrary(folder),
-                       current.standardizedFileURL != folder.standardizedFileURL {
-                        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-                        let target = Naming.uniqueURL(in: folder, filename: URL(fileURLWithPath: path).lastPathComponent)
-                        if (try? FileManager.default.moveItem(at: URL(fileURLWithPath: path), to: target)) != nil {
-                            try updatePath(doc.id, to: target.path)
-                            FileScanner.pruneEmptyDirectories(startingFrom: current, upTo: root)
-                            try logProcessing(docID: doc.id, action: "routed", detail: "Applied rule “\(rule.name)”",
-                                              confidence: 1, rule: rule.name,
-                                              from: path, to: target.path, approved: true)
-                            path = target.path
-                            result.moved += 1
-                        }
-                    }
-                }
-                if let template = rule.rename {
-                    let url = URL(fileURLWithPath: path)
-                    let name = Naming.render(template, Naming.Context(
-                        date: date, correspondent: correspondent, title: doc.title, docType: docType,
-                        language: doc.language, counter: nil,
-                        originalStem: url.deletingPathExtension().lastPathComponent, ext: url.pathExtension))
-                    if name != url.lastPathComponent {
-                        let target = Naming.uniqueURL(in: url.deletingLastPathComponent(), filename: name)
-                        if (try? FileManager.default.moveItem(at: url, to: target)) != nil {
-                            try updatePath(doc.id, to: target.path)
-                            try logProcessing(docID: doc.id, action: "renamed", detail: target.lastPathComponent,
-                                              confidence: nil, rule: rule.name,
-                                              from: url.path, to: target.path, approved: true)
-                            result.renamed += 1
-                        }
-                    }
-                }
-            } catch {
-                continue
-            }
-        }
-        return result
     }
 
     func ruleSamples(limit: Int = 5000) throws -> [Rule.Subject] {

@@ -132,7 +132,7 @@ extension Store {
             case "missing":              wheres.append("d.missing=1")
             case "trashed", "deleted":   wheres.append("d.deleted_at IS NOT NULL")
             case "stale-analysis", "stale":
-                wheres.append("(m.source = 'heuristic' OR m.source IS NULL OR m.source NOT LIKE '%:v\(LLMPrompt.promptVersion)')")
+                wheres.append("(m.source = 'heuristic' OR m.source IS NULL OR m.source NOT LIKE '%:v\(MetadataSource.promptVersion)')")
             default: break
             }
         }
@@ -257,7 +257,7 @@ extension Store {
             var row = documentRow(r)
             row.snippet = r.stringOrNil(19)?.nilIfBlank
             row.queue = r.intOrNil(20).map { id in
-                QueueInfo(entryID: id, at: r.date(21) ?? .now, action: r.string(22),
+                QueueInfo(entryID: id, at: r.date(21) ?? .now, action: EventAction(stored: r.string(22)),
                           detail: r.stringOrNil(23), confidence: r.doubleOrNil(24),
                           rule: r.stringOrNil(25), approved: r.bool(26))
             }

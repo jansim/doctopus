@@ -32,15 +32,15 @@ extension Store {
         try db.first("SELECT id FROM tags WHERE name=? COLLATE NOCASE", [.text(name)]) { $0.int(0) }
     }
 
-    func setPathSuggestions(_ candidates: [Router.Candidate], for docID: Int64) throws {
+    func setPathSuggestions(_ candidates: [PathSuggestion], for docID: Int64) throws {
         try db.transaction {
             try db.run("DELETE FROM path_suggestions WHERE doc_id=?", [.int(docID)])
             for (rank, c) in candidates.enumerated() {
                 try db.run("""
                     INSERT OR IGNORE INTO path_suggestions(doc_id, path, confidence, source, explanation, rank)
                     VALUES(?,?,?,?,?,?)
-                    """, [.int(docID), .text(relPath(c.destination.path)), .double(c.confidence),
-                          .text(c.rule), .text(c.explanation), .int(Int64(rank))])
+                    """, [.int(docID), .text(relPath(c.path)), .double(c.confidence),
+                          .text(c.source), .text(c.explanation), .int(Int64(rank))])
             }
         }
     }

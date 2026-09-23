@@ -276,7 +276,7 @@ enum SelfTest {
                                             RuleAction(kind: .setCorrespondent, value: "Acme HR"),
                                             RuleAction(kind: .setDocType, value: "Payslip")])
             let savedAssignID = (try? await store.upsertRule(assignRule)) ?? 0
-            let applyResult = (try? await store.applyRuleToExisting(ruleID: savedAssignID)) ?? Store.RuleApplyResult()
+            let applyResult = await indexer.applyRule(assignRule)
             Check.that("rule can assign metadata and tags to existing documents",
                        applyResult.matched > 0 && applyResult.tagged > 0)
             try? await store.deleteRule(savedAssignID)
@@ -477,13 +477,13 @@ enum SelfTest {
                        !((try? await store.aliases(for: source.doc)) ?? [])
                            .contains(where: { $0.path == created.path }))
 
-            let undone = try? await store.undoLastEvent()
+            let undone = await indexer.undoLast()
             let restored = (try? await store.documentPath(source.doc)) ?? ""
             let placements = ((try? await store.aliases(for: source.doc)) ?? [])
                 .filter { $0.tagID == nil }
             Check.that("undo returns a promoted document to the folder it was deleted from",
-                       undone?.action == "promoted" && restored == source.path,
-                       undone?.action ?? "nothing to undo")
+                       undone?.action == .promoted && restored == source.path,
+                       undone?.action.rawValue ?? "nothing to undo")
             Check.that("…and writes the alias it stood in for again",
                        placements.contains(where: { alias in
                            let at = URL(fileURLWithPath: alias.path)
@@ -512,20 +512,20 @@ enum SelfTest {
             AliasManager.removeAlias(at: created.path, pointingTo: doc.url)
             if let record { try? await store.deleteAlias(id: record.id) }
             try? await store.logProcessing(
-                docID: doc.doc, action: "unfiled",
+                docID: doc.doc, action: .unfiled,
                 detail: "No longer filed under \(elsewhere.lastPathComponent)",
                 confidence: nil, rule: nil, from: doc.path, to: created.path, approved: true)
 
-            let undone = try? await store.undoLastEvent()
+            let undone = await indexer.undoLast()
             let back = ((try? await store.aliases(for: doc.doc)) ?? []).filter { $0.tagID == nil }
             // `&&` takes its right side as a non-async autoclosure, so anything
             // awaited has to be in hand before the check, not inside it.
             let stillHome = (try? await store.documentPath(doc.doc)) ?? ""
             Check.that("undoing a deleted alias writes the alias again, and nothing else",
-                       undone?.action == "unfiled"
+                       undone?.action == .unfiled
                            && back.contains(where: { AliasManager.isAlias(URL(fileURLWithPath: $0.path)) })
                            && stillHome == doc.path,
-                       undone?.action ?? "nothing to undo")
+                       undone?.action.rawValue ?? "nothing to undo")
 
             for alias in back {
                 AliasManager.removeAlias(at: alias.path, pointingTo: doc.url)
@@ -540,13 +540,13 @@ enum SelfTest {
                    queued.count == rows.count && queued.allSatisfy { $0.queue != nil })
         for row in queued.prefix(4) {
             guard let q = row.queue else { continue }
-            print("  \(row.filename.padded(36)) \(q.action.padded(10)) "
+            print("  \(row.filename.padded(36)) \(q.action.rawValue.padded(10)) "
                   + "\(q.approved ? "approved    " : "needs review") \(q.detail ?? "")")
         }
 
         print("\nQUEUE")
         for entry in ((try? await store.processingQueue(limit: 8)) ?? []) {
-            print("  \(entry.action.padded(10)) \(entry.filename.padded(34)) \(entry.detail ?? "")")
+            print("  \(entry.action.rawValue.padded(10)) \(entry.filename.padded(34)) \(entry.detail ?? "")")
         }
         print("\nIMPORT (a file from outside the library)")
         let outside = FileManager.default.temporaryDirectory
@@ -718,12 +718,12 @@ enum SelfTest {
 
         let visionSource = RemoteLLMService.parse(#"{"title": "T"}"#, model: "qwen2.5-vl", vision: true)?.source
         Check.that("what a vision model answered is stored as its own source",
-                   visionSource == "vlm:qwen2.5-vl:v\(LLMPrompt.promptVersion)", visionSource ?? "—")
+                   visionSource == "vlm:qwen2.5-vl:v\(MetadataSource.promptVersion)", visionSource ?? "—")
         Check.that("a vision answer reads back as an API model that saw the page",
                    MetadataSource(visionSource ?? "") == .remote(model: "qwen2.5-vl", vision: true))
         Check.that("a vision answer is not stale under the current prompt",
                    !(visionSource ?? "").isEmpty
-                       && (visionSource ?? "").hasSuffix(":v\(LLMPrompt.promptVersion)"))
+                       && (visionSource ?? "").hasSuffix(":v\(MetadataSource.promptVersion)"))
 
         let staleHits = (try? await store.listDocuments(selection: .all, query: SearchQuery("is:stale-analysis"), sort: .added, ascending: false)) ?? []
         Check.that("is:stale-analysis returns heuristic documents needing model analysis", !staleHits.isEmpty)
@@ -1090,7 +1090,7 @@ enum SelfTest {
                 try? await store.setSizes(targetDoc.doc, size: origSize / 2, originalSize: origSize)
                 let origURL = try? await store.originalFileURL(for: targetDoc.doc)
                 Check.that("pre-optimization original file is preserved", origURL != nil && FileManager.default.fileExists(atPath: origURL!.path))
-                let reverted = (try? await store.revertOptimization(targetDoc.doc)) ?? false
+                let reverted = await indexer.revertOptimization(ids: [targetDoc.doc]) == 1
                 Check.that("revert optimization restores document size and removes original_size", reverted)
             }
         }
@@ -1238,7 +1238,7 @@ enum SelfTest {
             let firstEvents = (try? await store.history(for: subject.doc, limit: 10_000)) ?? []
             let oldest = firstEvents.last
             for n in 0...Store.queueLength {
-                try? await store.logProcessing(docID: subject.doc, action: "indexed",
+                try? await store.logProcessing(docID: subject.doc, action: .indexed,
                                                detail: "filler \(n)", confidence: nil, rule: nil,
                                                from: nil, to: nil, approved: true)
             }
@@ -1264,7 +1264,7 @@ enum SelfTest {
             let edited = (try? await store.history(for: subject.doc, limit: 10_000)) ?? []
             let queueAfterEdit = (try? await store.processingQueue(limit: 10_000)) ?? []
             Check.that("a hand edit is recorded in the history",
-                       edited.contains { $0.action == "edited"
+                       edited.contains { $0.action == .edited
                                          && $0.detail == "Title → Typed by hand" })
             Check.that("a hand edit stays out of the review queue",
                        queueAfterEdit.count == queue.count,
@@ -1296,9 +1296,9 @@ enum SelfTest {
             let movedTarget = root.appendingPathComponent("Work/undotest-\(subject.filename)")
             if (try? FileManager.default.moveItem(at: subject.url, to: movedTarget)) != nil {
                 try? await store.updatePath(subject.doc, to: movedTarget.path)
-                try? await store.logProcessing(docID: subject.doc, action: "moved", detail: "test move",
+                try? await store.logProcessing(docID: subject.doc, action: .moved, detail: "test move",
                                                confidence: nil, rule: nil, from: origPath, to: movedTarget.path, approved: true)
-                let undone = try? await store.undoLastEvent()
+                let undone = await indexer.undoLast()
                 Check.that("undo restores moved file to previous path",
                            undone != nil && FileManager.default.fileExists(atPath: origPath))
             }
@@ -1312,10 +1312,10 @@ enum SelfTest {
         print("\nLOCAL CLASSIFIER")
         let classifier = DocumentClassifier(confidenceThreshold: 0.5)
         let sampleDocs = [
-            DocumentClassifier.TrainingDoc(id: 1, text: "Rechnung Stadtwerke München Gas Strom Energie Abrechnung", correspondent: "Stadtwerke München", docType: "Invoice", tags: ["utilities", "bills"]),
-            DocumentClassifier.TrainingDoc(id: 2, text: "Stadtwerke München Jahresabrechnung Strom Erdgas", correspondent: "Stadtwerke München", docType: "Invoice", tags: ["utilities", "bills"]),
-            DocumentClassifier.TrainingDoc(id: 3, text: "Deutsche Bank Kontoauszug Finanzstatus Saldo Überweisung", correspondent: "Deutsche Bank AG", docType: "Bank Statement", tags: ["finance"]),
-            DocumentClassifier.TrainingDoc(id: 4, text: "Kontoauszug Deutsche Bank Girokonto Buchung", correspondent: "Deutsche Bank AG", docType: "Bank Statement", tags: ["finance"])
+            TrainingDoc(id: 1, text: "Rechnung Stadtwerke München Gas Strom Energie Abrechnung", correspondent: "Stadtwerke München", docType: "Invoice", tags: ["utilities", "bills"]),
+            TrainingDoc(id: 2, text: "Stadtwerke München Jahresabrechnung Strom Erdgas", correspondent: "Stadtwerke München", docType: "Invoice", tags: ["utilities", "bills"]),
+            TrainingDoc(id: 3, text: "Deutsche Bank Kontoauszug Finanzstatus Saldo Überweisung", correspondent: "Deutsche Bank AG", docType: "Bank Statement", tags: ["finance"]),
+            TrainingDoc(id: 4, text: "Kontoauszug Deutsche Bank Girokonto Buchung", correspondent: "Deutsche Bank AG", docType: "Bank Statement", tags: ["finance"])
         ]
         await classifier.train(docs: sampleDocs)
         let predCorr = await classifier.predictCorrespondent(text: "Stadtwerke München Abschlagszahlung Gas")
@@ -1735,7 +1735,7 @@ enum SelfTest {
             let again = Rule(id: 0, name: "Again",
                              conditions: [RuleCondition(field: .filename, pattern: "*doctopus-rename")],
                              actions: [RuleAction(kind: .renameFile, value: "again-{original}")])
-            let applied = (try? await store.applyRuleToExisting(again)) ?? Store.RuleApplyResult()
+            let applied = await indexer.applyRule(again)
             let after = await imported("doctopus-rename")
             Check.that("applying a rule to existing documents renames them in place",
                        applied.renamed == 1 && after?.filename.hasPrefix("again-renamed-") == true
@@ -1792,7 +1792,7 @@ enum SelfTest {
 
         print("\nMETADATA SOURCE")
         Check.that("an on-device analysis is labelled as one",
-                   MetadataSource("llm:v\(LLMPrompt.promptVersion)").label == "On-device model")
+                   MetadataSource("llm:v\(MetadataSource.promptVersion)").label == "On-device model")
         Check.that("an API analysis is labelled as one, whatever its version",
                    MetadataSource("remote:v9").label == "API model")
         Check.that("a model name is read back out of the source",

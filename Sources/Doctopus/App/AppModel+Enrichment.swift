@@ -223,7 +223,7 @@ extension AppModel {
                         try FileManager.default.moveItem(at: URL(fileURLWithPath: trashed), to: target)
                         try? await lib.store.restore(row.doc, at: target.path)
                         try? await lib.store.logProcessing(
-                            docID: row.doc, action: "moved", detail: "Restored from the Trash",
+                            docID: row.doc, action: .moved, detail: "Restored from the Trash",
                             confidence: nil, rule: nil, from: trashed, to: target.path, approved: true)
                         restored += 1
                     } catch {
@@ -263,7 +263,7 @@ extension AppModel {
                     guard row.url.deletingLastPathComponent().path != folder.path else { continue }
                     guard let created = try? AliasManager.createAlias(to: row.url, in: folder) else { continue }
                     try? await lib.store.recordAlias(docID: row.doc, tagID: nil, path: created.path)
-                    try? await lib.store.logProcessing(docID: row.doc, action: "aliased",
+                    try? await lib.store.logProcessing(docID: row.doc, action: .aliased,
                                                        detail: "Also filed under \(folder.lastPathComponent)",
                                                        confidence: nil, rule: nil, from: row.path,
                                                        to: created.path, approved: true)
@@ -286,7 +286,7 @@ extension AppModel {
             AliasManager.removeAlias(at: alias.path, pointingTo: row.url)
             try? await lib.store.deleteAlias(id: alias.id)
             try? await lib.store.logProcessing(
-                docID: row.doc, action: "unfiled",
+                docID: row.doc, action: .unfiled,
                 detail: "No longer filed under \((folder as NSString).lastPathComponent)",
                 confidence: nil, rule: nil, from: row.path, to: alias.path, approved: true)
             removed += 1

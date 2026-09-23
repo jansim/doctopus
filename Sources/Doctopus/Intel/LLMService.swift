@@ -100,7 +100,7 @@ actor LLMService {
                         .map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
                         .filter { !$0.isEmpty && $0.count < 32 },
                     confidence: 0.9,
-                    source: "llm:v\(LLMPrompt.promptVersion)")
+                    source: "llm:v\(MetadataSource.promptVersion)")
             } catch {
                 // A single failure (context overflow, guardrail, model unloaded)
                 // must not poison the rest of the batch.

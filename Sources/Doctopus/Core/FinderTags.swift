@@ -1,6 +1,4 @@
 import Foundation
-import AppKit
-import SwiftUI
 
 /// The xattr is read and written directly: `URLResourceValues.tagNames` carries
 /// names only, and writing through it strips the colour off every other tag.
@@ -79,14 +77,6 @@ enum FinderTags {
         let kept = entries(url).filter { $0.name.caseInsensitiveCompare(name) != .orderedSame }
         return write(kept, to: url)
     }
-
-    static let labelColors: [Color?] = [nil, .gray, .green, .purple, .blue, .yellow, .red, .orange]
-
-    static func color(label: Int) -> Color? {
-        labelColors.indices.contains(label) ? labelColors[label] : nil
-    }
-
-    static func color(for name: String) -> Color? { color(label: label(for: name)) }
 
     static func label(for name: String) -> Int {
         Registry.shared.label(for: name) ?? systemLabels[name.lowercased()] ?? 0

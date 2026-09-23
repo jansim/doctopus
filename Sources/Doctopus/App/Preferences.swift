@@ -40,3 +40,24 @@ enum Preferences {
     static func uiState(_ key: String) -> String? { defaults.string(forKey: "ui.\(key)") }
     static func setUIState(_ key: String, _ value: String) { defaults.set(value, forKey: "ui.\(key)") }
 }
+
+extension AppSettings {
+    static let storageKey = "app_settings_v1"
+
+    @MainActor
+    static func load(from store: Store) async -> AppSettings {
+        let raw = (try? await store.setting(storageKey)) ?? ""
+        return AppSettings(library: LibrarySettings.decoded(from: Data(raw.utf8)),
+                           appWide: Preferences.appWide)
+    }
+
+    /// Each half goes where it belongs. Only the library's own settings reach
+    /// the blob, so no library ends up holding somebody's API key.
+    @MainActor
+    func save(to store: Store) async {
+        Preferences.appWide = appWide
+        guard let data = try? JSONEncoder().encode(library),
+              let raw = String(data: data, encoding: .utf8) else { return }
+        try? await store.setSetting(Self.storageKey, raw)
+    }
+}

@@ -127,3 +127,12 @@ enum Optimizer {
         (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize).flatMap(Int64.init) ?? 0
     }
 }
+
+extension AppSettings {
+    var optimizerOptions: Optimizer.Options {
+        var o = Optimizer.Options()
+        o.jpegQuality = CGFloat(jpegQuality)
+        o.targetDPI = CGFloat(targetDPI)
+        return o
+    }
+}

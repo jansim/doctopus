@@ -5,9 +5,9 @@ each directory only knows about the ones below it.
 
 | Directory | What lives there |
 | --- | --- |
-| `Sources/Doctopus/Core` | The library format, the SQLite store, the models, search |
-| `Sources/Doctopus/Ingest` | Scanning, OCR, optimization, routing, indexing, the file watcher |
-| `Sources/Doctopus/Intel` | The two model backends and the deterministic analyzer behind them |
+| `Sources/Doctopus/Core` | The library format, the SQLite store, the models, search, naming |
+| `Sources/Doctopus/Intel` | The two model backends and the local classifier |
+| `Sources/Doctopus/Ingest` | Scanning, OCR, the deterministic analyzer, optimization, routing, indexing, the file watcher |
 | `Sources/Doctopus/UI` | The SwiftUI panes |
 | `Sources/Doctopus/App` | The entry point and `AppModel`, which is what the panes talk to |
 | `Sources/Doctopus/Checks` | The headless check suites — see [Testing](Testing.md) |
@@ -23,6 +23,11 @@ above `Store` deals in relative paths and nothing below it in absolute ones.
 actors. Views only ever read it; every mutation funnels through an action on it,
 so there is exactly one place where "disk changed" becomes "UI changed". It
 aggregates the open libraries — a `Library` never talks to the UI directly.
+
+`Store` only reads and writes the index and its own container. Moving,
+renaming or restoring a document's file is the `Indexer`'s, and every such
+move goes through one place there, which updates the row, prunes the folder
+left behind, logs the event and keeps the tag aliases in step.
 
 Both types are split by subject rather than kept in one file: `Store+Queries`,
 `AppModel+Import`, and so on.

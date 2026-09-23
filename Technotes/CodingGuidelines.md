@@ -27,9 +27,9 @@ file it is split by subject into extensions — `Store+Queries`, `AppModel+Impor
 Swift keeps stored properties in the class body, so a type split this way keeps
 its state in the main file, labelled with the extension that drives each group.
 
-Layer directories only depend downward: `UI` and `App` may use `Core`, `Ingest`
-and `Intel`; `Core` uses nothing above it. Nothing in the app depends on
-`Checks`.
+Layer directories only depend downward — `Core`, then `Intel`, then `Ingest`,
+then `App` and `UI`. The one exception is a typed-in date field, which `Core`
+reads with the analyzer's date reader. Nothing in the app depends on `Checks`.
 
 ## Concurrency
 

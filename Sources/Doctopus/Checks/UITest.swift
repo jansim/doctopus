@@ -618,7 +618,7 @@ enum UITest {
 
         func recorded(_ needle: String) -> Bool {
             model.detail?.history.contains {
-                $0.action == "edited" && $0.detail?.contains(needle) == true
+                $0.action == .edited && $0.detail?.contains(needle) == true
             } == true
         }
 

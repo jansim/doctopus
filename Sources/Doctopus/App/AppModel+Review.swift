@@ -80,7 +80,7 @@ extension AppModel {
                 guard let created = try? AliasManager.createAlias(to: target, in: URL(fileURLWithPath: folder))
                 else { continue }
                 try? await lib.store.recordAlias(docID: row.doc, tagID: nil, path: created.path)
-                try? await lib.store.logProcessing(docID: row.doc, action: "aliased",
+                try? await lib.store.logProcessing(docID: row.doc, action: .aliased,
                                                    detail: "Also filed under \((folder as NSString).lastPathComponent)",
                                                    confidence: nil, rule: nil, from: target.path,
                                                    to: created.path, approved: true)

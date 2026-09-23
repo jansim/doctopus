@@ -28,14 +28,6 @@ actor DocumentClassifier {
         self.confidenceThreshold = confidenceThreshold
     }
 
-    struct TrainingDoc: Sendable {
-        var id: Int64
-        var text: String
-        var correspondent: String?
-        var docType: String?
-        var tags: [String]
-    }
-
     func needsTraining(fingerprint: String) -> Bool { fingerprint != lastFingerprint }
 
     func trainIfNeeded(docs: [TrainingDoc], fingerprint: String) {
