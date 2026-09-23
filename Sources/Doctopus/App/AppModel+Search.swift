@@ -102,7 +102,7 @@ extension AppModel {
     }
 
     func saveCurrentSearchAsSmartFolder(name: String, icon: String = "line.3.horizontal.decrease.circle") {
-        guard let lib = activeLibrary else { return }
+        guard let lib = library else { return }
         Task {
             let sv = SavedView(id: 0, name: name, icon: icon, query: searchText,
                                sortKey: sort.storageKey, ascending: sortAscending,
@@ -114,7 +114,7 @@ extension AppModel {
     }
 
     func deleteSavedView(_ sv: SavedView) {
-        guard let lib = library(sv.library) ?? activeLibrary else { return }
+        guard let lib = library else { return }
         Task {
             try? await lib.store.deleteSavedView(sv.id)
             if case .savedView(let id, _) = selection, id == sv.id {
@@ -152,7 +152,7 @@ extension AppModel {
             searchText = q
         case .open(let docID):
             selection = .all
-            if let lib = activeLibrary {
+            if let lib = library {
                 selectedIDs = [DocumentRef(library: lib.id, doc: docID)]
             }
         case .verify:

@@ -11,10 +11,7 @@ struct BulkReview: View {
 
     private enum Preset: Hashable { case defaults, allNew, allInLibrary, custom }
 
-    private var library: Library? {
-        let ids = Set(rows.map(\.library))
-        return ids.count == 1 ? ids.first.flatMap(model.library) : nil
-    }
+    private var library: Library? { model.library }
 
     private func rows(_ arrival: Arrival) -> [DocumentRow] { rows.filter { Arrival($0) == arrival } }
     private var present: [Arrival] { Arrival.allCases.filter { !rows($0).isEmpty } }

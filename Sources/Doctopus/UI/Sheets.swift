@@ -80,7 +80,7 @@ struct RenameSheet: View {
                                  docType: row.docType, language: row.language, counter: counter,
                                  originalStem: url.deletingPathExtension().lastPathComponent,
                                  ext: url.pathExtension,
-                                 options: (model.library(of: row)?.settings ?? model.settings).namingOptions)
+                                 options: model.settings.namingOptions)
         return Naming.render(template, ctx)
     }
 }

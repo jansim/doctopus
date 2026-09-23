@@ -7,8 +7,21 @@ A native AppKit/SwiftUI three-pane layout.
 The physical directory tree, the Recent Processing queue — recently filed items
 with their confidence badges, the rules or models that were applied, and an
 Approved / Needs Review toggle — and Paperless-ngx-style smart views: Tags,
-Correspondents, Languages, Document Types. With more than one library open, folders and tags
-are grouped under the library that owns them; the smart views span all of them.
+Correspondents, Languages, Document Types.
+
+## Windows
+
+Each library has a window of its own, and a window shows one library. Opening
+another library opens another window — unless the front one is still empty, at
+the welcome screen, in which case it takes the library — and opening one that
+is already open brings its window forward, however it was reached. Closing a
+window closes its library; File › Close Library does the same but, in the last
+window, leaves it open at the welcome screen. Whatever was open at quit is
+reopened at launch.
+
+The menus, Settings, Quick Look and ⌥ act on the front window. Settings shows
+the front window's library, next to the app-wide settings every window shares.
+A Continuity Camera scan goes to the library of the folder it was sent into.
 
 ### Drag and drop
 

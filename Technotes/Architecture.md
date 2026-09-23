@@ -21,8 +21,13 @@ above `Store` deals in relative paths and nothing below it in absolute ones.
 
 `AppModel` is the main-actor coordinator between the panes and the background
 actors. Views only ever read it; every mutation funnels through an action on it,
-so there is exactly one place where "disk changed" becomes "UI changed". It
-aggregates the open libraries — a `Library` never talks to the UI directly.
+so there is exactly one place where "disk changed" becomes "UI changed". There
+is one per window, and a window shows at most one library, so every action acts
+on that `Library` — a `Library` never talks to the UI directly.
+
+`Workspace` is the one thing the windows share: the model backends, the
+app-wide settings, and which window shows which library. It is what keeps a
+library to a single window, and so to a single `Store`.
 
 `Store` only reads and writes the index and its own container. Moving,
 renaming or restoring a document's file is the `Indexer`'s, and every such

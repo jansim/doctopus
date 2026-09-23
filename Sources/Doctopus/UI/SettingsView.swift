@@ -19,54 +19,34 @@ struct SettingsView: View {
     }
 }
 
-struct LibraryPicker: View {
-    @Environment(AppModel.self) private var model
-
-    var body: some View {
-        @Bindable var model = model
-        if model.libraries.count > 1 {
-            Picker("Library", selection: Binding(
-                get: { model.settingsLibrary?.id ?? "" },
-                set: { model.settingsLibraryID = $0.isEmpty ? nil : $0 })) {
-                ForEach(model.libraries) { library in
-                    Text(library.displayName).tag(library.id)
-                }
-            }
-        }
-    }
-}
-
 private struct GeneralSettings: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
         @Bindable var model = model
         Form {
-            Section("Libraries") {
-                if model.libraries.isEmpty {
-                    Text("No library open yet.").foregroundStyle(.secondary)
-                } else {
-                    ForEach(model.libraries) { library in
-                        HStack {
-                            Text(shorten(library.root.path)).lineLimit(1).truncationMode(.middle)
-                            Spacer()
-                            Button("Reveal", systemImage: "folder") {
-                                NSWorkspace.shared.activateFileViewerSelecting([library.container])
-                            }
-                            .labelStyle(.iconOnly)
-                            .buttonStyle(.borderless)
-                            Button("Close", role: .destructive) { model.closeLibrary(library) }
-                                .buttonStyle(.borderless)
+            Section("Library") {
+                if let library = model.library {
+                    HStack {
+                        Text(shorten(library.root.path)).lineLimit(1).truncationMode(.middle)
+                        Spacer()
+                        Button("Reveal", systemImage: "folder") {
+                            NSWorkspace.shared.activateFileViewerSelecting([library.container])
                         }
+                        .labelStyle(.iconOnly)
+                        .buttonStyle(.borderless)
+                        Button("Close", role: .destructive) { model.closeLibrary() }
+                            .buttonStyle(.borderless)
                     }
+                } else {
+                    Text("No library open in the front window.").foregroundStyle(.secondary)
                 }
                 Button("New Library from Folder…") { model.addLibrary() }
                 Button("Open Library…") { model.openLibraryPicker() }
             }
 
-            if !model.libraries.isEmpty {
+            if model.library != nil {
                 Section("Library Settings", scope: .library) {
-                    LibraryPicker()
                     TemplateField(title: "Default rename template",
                                   template: $model.settings.namingTemplate, kind: .filename,
                                   naming: model.settings.namingOptions)
@@ -133,7 +113,7 @@ private struct FieldSettings: View {
                 } header: {
                     HStack {
                         Text("Fields")
-                        ScopeBadge(scope: .openLibraries)
+                        ScopeBadge(scope: .library)
                         Spacer()
                         Text("Sidebar")
                             .font(.caption).foregroundStyle(.secondary).frame(width: 52)
@@ -161,7 +141,7 @@ private struct FieldSettings: View {
                     }
                     Text("A field's type is what makes it sortable: amounts compare as numbers rather than as text, so €90 comes before €1,200, and a Yes / No field stops being three spellings of the same answer.")
                         .font(.caption).foregroundStyle(.secondary)
-                    Text("Custom fields are yours to fill in — the extraction pipeline populates the built-in ones only. Fields are shared by every open library, so the list shows one column per field however many libraries fill it.")
+                    Text("Custom fields are yours to fill in — the extraction pipeline populates the built-in ones only.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
@@ -258,12 +238,11 @@ private struct FieldRow: View {
 private struct TagSettings: View {
     @Environment(AppModel.self) private var model
 
-    private var tags: [Tag] { model.settingsLibrary?.tags ?? [] }
+    private var tags: [Tag] { model.tags }
 
     var body: some View {
         Form {
             Section {
-                LibraryPicker()
                 if tags.isEmpty {
                     Text("No tags yet. Add one from a document's inspector or context menu.")
                         .foregroundStyle(.secondary)
@@ -327,13 +306,12 @@ private struct RoutingSettings: View {
         @Bindable var model = model
         Form {
             Section {
-                LibraryPicker()
                 Toggle("Auto-route imports and scans", isOn: $model.settings.autoRouteImports)
                 Toggle("Derive a folder when no rule matches", isOn: $model.settings.deriveWhenNoRule)
                     .disabled(!model.settings.autoRouteImports)
                 TemplateField(title: "Derived path template",
                               template: $model.settings.derivedTemplate, kind: .path,
-                              library: model.settingsLibrary)
+                              library: model.library)
                     .disabled(!model.settings.deriveWhenNoRule)
                 LabeledContent("Confidence threshold") {
                     HStack {
@@ -363,7 +341,6 @@ private struct OptimizationSettings: View {
         @Bindable var model = model
         Form {
             Section("When to Optimize", scope: .library) {
-                LibraryPicker()
                 Toggle("Optimize imports and scans", isOn: $model.settings.optimizeOnImport)
                 Text("Only files Doctopus brings in itself are optimized automatically. Files already in your library are yours, and are never rewritten unless you choose Optimize from the context menu.")
                     .font(.caption).foregroundStyle(.secondary)
@@ -477,7 +454,6 @@ struct IntelligenceSettings: View {
 
                 if model.settings.predictedFields.contains(.tags) {
                     Section("Tag Suggestions", scope: .library) {
-                        LibraryPicker()
                         Text("Proposed tags appear in a document's inspector as suggestions you accept or dismiss individually — they never show up in the sidebar on their own.")
                             .font(.caption).foregroundStyle(.secondary)
                         Toggle("Automatically accept suggestions that match an existing tag",

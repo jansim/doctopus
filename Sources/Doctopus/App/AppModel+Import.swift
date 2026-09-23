@@ -5,7 +5,7 @@ import os
 extension AppModel {
 
     var defaultImportDirectory: URL? {
-        guard let lib = activeLibrary else { return nil }
+        guard let lib = library else { return nil }
         return lib.root.appendingPathComponent(lib.settings.scanDestination, isDirectory: true)
     }
 
@@ -26,8 +26,12 @@ extension AppModel {
             errorMessage = "Open a library before importing."
             return
         }
-        guard let lib = libraries.first(where: { $0.owns(path: dest.path) }) ?? activeLibrary else {
+        guard let lib = library else {
             errorMessage = "Open a library before importing."
+            return
+        }
+        guard lib.owns(path: dest.path) else {
+            errorMessage = "“\(dest.lastPathComponent)” is outside \(lib.displayName). Import into a folder of the library in this window."
             return
         }
         Task {

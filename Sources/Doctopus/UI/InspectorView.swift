@@ -257,10 +257,6 @@ private struct DetailInspector: View {
     private var fileSection: some View {
         Section2("File") {
             InfoGrid {
-                if model.libraries.count > 1,
-                   let library = model.library(row.library) {
-                    InfoRow("Library", library.displayName)
-                }
                 InfoRow("Where") {
                     Button { model.reveal([row]) } label: {
                         Text(shortPath).lineLimit(3).multilineTextAlignment(.leading)
@@ -416,7 +412,7 @@ private struct DetailInspector: View {
                             Text(event.at.formatted(date: .abbreviated, time: .shortened))
                                 .font(.caption2).foregroundStyle(.tertiary)
                         }
-                        if let move = event.move(relativeTo: model.library(row.library)?.root.path ?? "") {
+                        if let move = event.move(relativeTo: model.library?.root.path ?? "") {
                             Text(move).font(.caption2).foregroundStyle(.secondary)
                         } else if let note = event.detail?.nilIfBlank {
                             Text(note).font(.caption2).foregroundStyle(.secondary)

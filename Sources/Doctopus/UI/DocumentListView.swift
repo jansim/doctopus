@@ -203,15 +203,6 @@ private struct DocumentTableView: View {
                 .defaultVisibility(field.showInList ? .visible : .hidden)
             }
 
-            TableColumn("Library") { (row: DocumentRow) in
-                Text(model.library(row.library)?.displayName ?? "—")
-                    .lineLimit(1)
-                    .foregroundStyle(.secondary)
-            }
-            .width(min: 70, ideal: 120)
-            .customizationID("library")
-            .defaultVisibility(model.libraries.count > 1 ? .visible : .hidden)
-
             TableColumn("Date", sortUsing: DocumentSort(field: .docDate)) { row in
                 // A document date is a stored day; showing it through the local
                 // calendar is how it slips to the day before.

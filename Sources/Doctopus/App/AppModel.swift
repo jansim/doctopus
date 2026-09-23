@@ -21,37 +21,23 @@ enum DocumentSheet: Identifiable {
     }
 }
 
+/// One per window, and so one per library: a window starts empty, at the
+/// welcome screen, and shows at most one library until it closes.
 @MainActor
 @Observable
 final class AppModel {
-    let intelligence = Intelligence()
+    let intelligence: Intelligence
 
-    var libraries: [Library] = []
-    func library(_ id: LibraryID) -> Library? { libraries.first { $0.id == id } }
-
-    var activeLibrary: Library? {
-        switch selection {
-        case .tag(let ref): return library(ref.library) ?? libraries.first
-        case .outliers(let id, _): return library(id) ?? libraries.first
-        case .folder(let path): return libraries.first { $0.owns(path: path) } ?? libraries.first
-        default: return libraries.first
-        }
-    }
-
-    var settingsLibraryID: LibraryID? {
-        didSet {
-            guard settingsLibraryID != oldValue else { return }
-            adoptSettings(of: settingsLibrary)
-        }
-    }
-    var settingsLibrary: Library? {
-        settingsLibraryID.flatMap(library) ?? activeLibrary
-    }
+    var library: Library?
+    /// While a library is on its way into this window.
+    var isOpening = false
+    /// Free to take a library.
+    var isEmpty: Bool { library == nil && !isOpening }
 
     var settings = AppSettings() {
         didSet {
             guard settings != oldValue, !applyingSettings else { return }
-            settingsLibrary?.settings = settings
+            library?.settings = settings
             saveSettings()
         }
     }
@@ -61,7 +47,7 @@ final class AppModel {
     private var savedSettings: AppSettings?
 
     func adoptSettings(of lib: Library?) {
-        let next = lib?.settings ?? AppSettings()
+        let next = lib?.settings ?? AppSettings(appWide: Preferences.appWide)
         guard next != settings else { return }
         applyingSettings = true
         settings = next
@@ -73,30 +59,41 @@ final class AppModel {
     /// changes — the thumbnail slider does dozens — cannot reach the store out
     /// of order.
     private func saveSettings() {
-        guard let lib = settingsLibrary else { return }
+        guard let lib = library else { return }
         let previous = settingsSave
         settingsSave = Task { @MainActor [weak self] in
             _ = await previous?.value
-            guard let self, self.settingsLibrary === lib, self.settings != self.savedSettings else { return }
+            guard let self, self.library === lib, self.settings != self.savedSettings else { return }
             let current = self.settings
             let renamesChanged = current.namingOptions != self.savedSettings?.namingOptions
+            let appWideChanged = current.appWide != self.savedSettings?.appWide
             self.savedSettings = current
             lib.settings = current
             await current.save(to: lib.store)
             await lib.indexer.update(settings: current)
             if renamesChanged { self.refreshRuleMatches() }
-            for other in self.libraries where other !== lib {
-                other.settings.appWide = current.appWide
-                await other.indexer?.update(settings: other.settings)
-            }
+            if appWideChanged { await Workspace.shared.share(current.appWide, from: self) }
         }
     }
 
-    var folders: [FolderNode] = []
-    var tags: [Tag] = []
-    var savedViews: [SavedView] = []
-    var finderTags: [Facet] = []
-    var fields: [Field] = []
+    /// Another window's change to the app-wide half, which that window has
+    /// already saved.
+    func adoptAppWide(_ appWide: AppWideSettings) async {
+        guard settings.appWide != appWide else { return }
+        applyingSettings = true
+        settings.appWide = appWide
+        applyingSettings = false
+        savedSettings?.appWide = appWide
+        guard let lib = library else { return }
+        lib.settings.appWide = appWide
+        await lib.indexer?.update(settings: lib.settings)
+    }
+
+    var folders: [FolderNode] { library?.folders ?? [] }
+    var tags: [Tag] { library?.tags ?? [] }
+    var savedViews: [SavedView] { library?.savedViews ?? [] }
+    var finderTags: [Facet] { library?.finderTags ?? [] }
+    var fields: [Field] { library?.fields ?? [] }
     var distinctTags: [Tag] {
         var seen = Set<String>()
         return tags
@@ -104,15 +101,14 @@ final class AppModel {
             .filter { seen.insert($0.name.lowercased()).inserted }
     }
     var tagNames: [String] { distinctTags.map(\.name) }
-    var facets: [String: [Facet]] = [:]
-    var queue: [ProcessingEntry] = []
-    var stats = Store.Stats()
+    var facets: [String: [Facet]] { library?.facets ?? [:] }
+    var queue: [ProcessingEntry] { library?.queue ?? [] }
+    var stats: Store.Stats { library?.stats ?? Store.Stats() }
 
     var documents: [DocumentRow] = []
     var selection: Selection = .all {
         didSet {
             guard selection != oldValue else { return }
-            if settingsLibraryID == nil { adoptSettings(of: activeLibrary) }
             // A smart folder *is* its query, and the sidebar's List binding
             // assigns `selection` directly, so adopting the query has to happen
             // here — anywhere else and only the callers that remember to route
@@ -164,12 +160,11 @@ final class AppModel {
             guard visibility != .automatic else { continue }
             let shown = visibility == .visible
             guard shown != field.showInList else { continue }
+            guard let lib = library else { continue }
+            var updated = field
+            updated.showInList = shown
             Task {
-                for (lib, owned) in librariesDefining(field) {
-                    var updated = owned
-                    updated.showInList = shown
-                    try? await lib.store.updateField(updated)
-                }
+                try? await lib.store.updateField(updated)
                 refreshAll()
             }
         }
@@ -260,6 +255,8 @@ final class AppModel {
     // AppModel+Libraries, undo
     /// The window's, so a file change can be taken back with Edit › Undo.
     @ObservationIgnored weak var undoManager: UndoManager?
+    /// Kept to bring the window forward and to close it; see `WindowReader`.
+    @ObservationIgnored weak var window: NSWindow?
 
     // AppModel+Rules
     var ruleMatchTask: Task<Void, Never>?
@@ -277,8 +274,11 @@ final class AppModel {
 
     private let explicitLibrary: URL?
 
+    /// `url` is for the headless checks, which host panes without a window.
     init(openingLibraryAt url: URL? = nil) {
+        self.intelligence = Workspace.shared.intelligence
         self.explicitLibrary = url
+        self.settings = AppSettings(appWide: Preferences.appWide)
     }
 
     func bootstrap() async {
@@ -296,38 +296,8 @@ final class AppModel {
             batchingSort = false
         }
 
-        restoring = true
         if let explicit = explicitLibrary {
-            await openLibrary(container: explicit, persist: false)
-        } else {
-            for bookmark in Preferences.libraryBookmarks {
-                var stale = false
-                guard let root = try? URL(resolvingBookmarkData: bookmark,
-                                          relativeTo: nil, bookmarkDataIsStale: &stale),
-                      FileManager.default.fileExists(atPath: root.path) else { continue }
-                // Someone who deleted a folder's `library.doctopus` meant to stop
-                // indexing it; quietly writing a new one at launch would undo
-                // that. The library is dropped from the list instead.
-                guard let container = existingContainer(in: root) else { continue }
-                await openLibrary(container: container, rootBookmark: bookmark, persist: false)
-            }
+            await openLibrary(container: explicit, quietly: true)
         }
-        restoring = false
-        persistOpenLibraries()
-    }
-
-    var restoring = false
-    var opening: Set<LibraryID> = []
-
-    func library(of row: DocumentRow) -> Library? { library(row.library) }
-
-    func grouped(_ rows: [DocumentRow]) -> [(library: Library, rows: [DocumentRow])] {
-        var order: [LibraryID] = []
-        var byLibrary: [LibraryID: [DocumentRow]] = [:]
-        for row in rows {
-            if byLibrary[row.library] == nil { order.append(row.library) }
-            byLibrary[row.library, default: []].append(row)
-        }
-        return order.compactMap { id in library(id).map { ($0, byLibrary[id] ?? []) } }
     }
 }
