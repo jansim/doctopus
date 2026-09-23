@@ -50,6 +50,8 @@ struct AppWideSettings: StoredSettings, Sendable, Equatable {
 
 struct LibrarySettings: StoredSettings, Sendable, Equatable {
     var namingTemplate: String = Naming.defaultTemplate
+    var filenameUnderscoresForSpaces = false
+    var filenameASCIIOnly = false
     var derivedTemplate: String = "{correspondent}/{year}"
     var routingThreshold: Double = 0.75
     var autoRouteImports = true
@@ -63,6 +65,10 @@ struct LibrarySettings: StoredSettings, Sendable, Equatable {
     var scanDestination = "Inbox"
     var dateOrder: DateOrder = .automatic
     var ignoredDates = ""
+
+    var namingOptions: Naming.Options {
+        Naming.Options(underscoresForSpaces: filenameUnderscoresForSpaces, asciiOnly: filenameASCIIOnly)
+    }
 
     var ignoredDays: Set<String> {
         Set(ignoredDates.split(separator: ",")
@@ -87,6 +93,7 @@ struct AppSettings: Sendable, Equatable {
     }
 
     var ignoredDays: Set<String> { library.ignoredDays }
+    var namingOptions: Naming.Options { library.namingOptions }
     var effectiveConcurrency: Int { appWide.effectiveConcurrency }
 }
 

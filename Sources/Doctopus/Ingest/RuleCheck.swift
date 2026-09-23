@@ -14,6 +14,7 @@ struct RuleCheck: Sendable {
     }
 
     var root: URL
+    var naming = Naming.Options()
 
     func changes(_ rule: Rule, for doc: Document) -> [RuleMatch.Change] {
         let router = Router(rules: [], threshold: 1, derivedTemplate: "",
@@ -36,7 +37,8 @@ struct RuleCheck: Sendable {
             let name = Naming.render(template, Naming.Context(
                 date: doc.date, correspondent: correspondent, title: doc.title, docType: docType,
                 language: doc.language, counter: nil,
-                originalStem: url.deletingPathExtension().lastPathComponent, ext: url.pathExtension))
+                originalStem: url.deletingPathExtension().lastPathComponent, ext: url.pathExtension,
+                options: naming))
             if name != url.lastPathComponent { changes.append(.rename(to: name)) }
         }
 

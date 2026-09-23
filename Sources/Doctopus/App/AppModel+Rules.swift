@@ -17,7 +17,7 @@ extension AppModel {
         ruleMatchTask = Task {
             try? await Task.sleep(for: .milliseconds(400))
             for lib in libs {
-                guard let matches = try? await lib.store.ruleMatches() else { continue }
+                guard let matches = try? await lib.store.ruleMatches(naming: lib.settings.namingOptions) else { continue }
                 guard !Task.isCancelled else { return }
                 if lib.ruleMatches != matches { lib.ruleMatches = matches }
             }

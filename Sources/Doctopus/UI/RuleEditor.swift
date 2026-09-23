@@ -210,7 +210,7 @@ struct RuleEditor: View {
 
     private var example: String? {
         let folder = destinationURL.map(describe)
-        let name = draft.rename.map { TemplateFieldKind.filename.preview($0) }
+        let name = draft.rename.map { TemplateFieldKind.filename.preview($0, naming: library.settings.namingOptions) }
         switch (folder, name) {
         case let (folder?, name?): return folder + "/" + name
         case let (folder?, nil): return folder + "/"

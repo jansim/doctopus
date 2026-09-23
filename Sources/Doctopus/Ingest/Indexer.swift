@@ -408,7 +408,8 @@ actor Indexer {
                 title: insight?.title ?? findings.title,
                 docType: decision.setDocType ?? insight?.docType ?? findings.docType,
                 language: insight?.language, counter: nil,
-                originalStem: url.deletingPathExtension().lastPathComponent, ext: url.pathExtension))
+                originalStem: url.deletingPathExtension().lastPathComponent, ext: url.pathExtension,
+                options: settings.namingOptions))
             if name != url.lastPathComponent,
                let target = try? await relocate(id, from: url, into: url.deletingLastPathComponent(), named: name,
                                                 action: .renamed, detail: name, rule: decision.rule) {
@@ -729,7 +730,8 @@ actor Indexer {
                                      language: detail.row.language,
                                      counter: renamed + 1,
                                      originalStem: url.deletingPathExtension().lastPathComponent,
-                                     ext: url.pathExtension)
+                                     ext: url.pathExtension,
+                                     options: settings.namingOptions)
             let newName = Naming.render(template, ctx)
             guard newName != url.lastPathComponent else { continue }
             if (try? await relocate(id, from: url, into: url.deletingLastPathComponent(), named: newName,
@@ -828,7 +830,8 @@ actor Indexer {
                           action: EventAction?, detail: String?, rule: String? = nil,
                           confidence: Double? = nil, approved: Bool = true) async throws -> URL {
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        let target = Naming.uniqueURL(in: folder, filename: name)
+        let target = Naming.uniqueURL(in: folder, filename: name,
+                                      separator: settings.filenameUnderscoresForSpaces ? "_" : " ")
         try FileManager.default.moveItem(at: url, to: target)
         try? await store.updatePath(id, to: target.path)
         FileScanner.pruneEmptyDirectories(startingFrom: url.deletingLastPathComponent(), upTo: store.root)
@@ -939,7 +942,8 @@ actor Indexer {
                 let name = Naming.render(template, Naming.Context(
                     date: date, correspondent: correspondent, title: doc.title, docType: docType,
                     language: doc.language, counter: nil,
-                    originalStem: url.deletingPathExtension().lastPathComponent, ext: url.pathExtension))
+                    originalStem: url.deletingPathExtension().lastPathComponent, ext: url.pathExtension,
+                    options: settings.namingOptions))
                 if name != url.lastPathComponent,
                    (try? await relocate(doc.id, from: url, into: url.deletingLastPathComponent(), named: name,
                                         action: .renamed, detail: name, rule: rule.name)) != nil {

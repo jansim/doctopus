@@ -10,7 +10,7 @@ extension Store {
         var entries: [Int64: (key: String, rules: [Int64])] = [:]
     }
 
-    func ruleMatches() throws -> [Int64: [RuleMatch]] {
+    func ruleMatches(naming: Naming.Options = Naming.Options()) throws -> [Int64: [RuleMatch]] {
         let all = try rules()
         let live = all.filter { $0.enabled && $0.hasEffect && !$0.liveConditions.isEmpty }
         let signature = live.map(Self.conditionSignature).joined(separator: "\u{1e}")
@@ -61,7 +61,7 @@ extension Store {
         }
 
         let outliers = try suppressions()
-        let check = RuleCheck(root: root)
+        let check = RuleCheck(root: root, naming: naming)
         var result: [Int64: [RuleMatch]] = [:]
         for doc in docs {
             let matched = live.isEmpty ? Set<Int64>() : Set(ruleMatchCache.entries[doc.id]?.rules ?? [])

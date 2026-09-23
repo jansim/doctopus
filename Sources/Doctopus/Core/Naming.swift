@@ -3,6 +3,12 @@ import Foundation
 enum Naming {
     static let defaultTemplate = "{date}_{correspondent}_{title}"
 
+    /// Clean-ups applied to a rendered filename, never to folder names.
+    struct Options: Sendable, Equatable {
+        var underscoresForSpaces = false
+        var asciiOnly = false
+    }
+
     struct Context: Sendable {
         var date: Date?
         var correspondent: String?
@@ -12,6 +18,7 @@ enum Naming {
         var counter: Int?
         var originalStem: String
         var ext: String
+        var options = Options()
     }
 
     /// A document date is a day, stored as the UTC start of it, so every token
@@ -38,7 +45,7 @@ enum Naming {
             } else if inToken { token.append(ch) }
             else { out.append(ch) }
         }
-        return tidy(out, ext: ctx.ext, fallback: ctx.originalStem)
+        return tidy(out, ext: ctx.ext, fallback: ctx.originalStem, options: ctx.options)
     }
 
     private static func resolveToken(_ token: String, _ ctx: Context) -> String {
@@ -82,8 +89,9 @@ enum Naming {
         }
     }
 
+    private static let illegal = CharacterSet(charactersIn: "/\\:*?\"<>|\n\r\t")
+
     private static func sanitize(_ s: String) -> String {
-        let illegal = CharacterSet(charactersIn: "/\\:*?\"<>|\n\r\t")
         var out = s.components(separatedBy: illegal).joined(separator: " ")
         out = out.replacingOccurrences(of: "  ", with: " ").trimmingCharacters(in: .whitespaces)
         while out.hasPrefix(".") {
@@ -93,8 +101,39 @@ enum Naming {
         return String(out.prefix(80))
     }
 
-    private static func tidy(_ s: String, ext: String, fallback: String) -> String {
+    /// German umlauts spell out their vowel; `Latin-ASCII` alone would drop it.
+    private static let spelledOut: [Character: String] = [
+        "ä": "ae", "ö": "oe", "ü": "ue", "Ä": "Ae", "Ö": "Oe", "Ü": "Ue", "ß": "ss",
+    ]
+
+    /// ä → ae, å → a, á → a, æ → ae, ø → o; anything with no ASCII spelling is dropped.
+    static func asciiFolded(_ s: String) -> String {
+        // Character comparison is canonical, so a decomposed "a\u{308}" from
+        // a filename matches "ä" here too.
+        var out = ""
+        for ch in s {
+            if let spelled = spelledOut[ch] { out += spelled } else { out.append(ch) }
+        }
+        out = out.applyingTransform(StringTransform("Any-Latin; Latin-ASCII"), reverse: false) ?? out
+        out = String(String.UnicodeScalarView(out.unicodeScalars.filter(\.isASCII)))
+        // Latin-ASCII spells ½ as "1/2", which must not become a folder.
+        return out.components(separatedBy: illegal).joined(separator: " ")
+    }
+
+    private static func applying(_ options: Options, to s: String) -> String {
         var out = s
+        if options.asciiOnly {
+            out = asciiFolded(out)
+            while out.contains("  ") { out = out.replacingOccurrences(of: "  ", with: " ") }
+        }
+        if options.underscoresForSpaces {
+            out = out.components(separatedBy: .whitespaces).joined(separator: "_")
+        }
+        return out
+    }
+
+    private static func tidy(_ s: String, ext: String, fallback: String, options: Options) -> String {
+        var out = applying(options, to: s)
         while out.contains("__") { out = out.replacingOccurrences(of: "__", with: "_") }
         while out.contains("--") { out = out.replacingOccurrences(of: "--", with: "-") }
         out = out.trimmingCharacters(in: CharacterSet(charactersIn: " _-."))
@@ -103,7 +142,7 @@ enum Naming {
             out = String(out.dropFirst()).trimmingCharacters(in: CharacterSet(charactersIn: " _-."))
         }
         if out.isEmpty || out == "." || out == ".." {
-            out = sanitize(fallback).trimmingCharacters(in: CharacterSet(charactersIn: " _-."))
+            out = applying(options, to: sanitize(fallback)).trimmingCharacters(in: CharacterSet(charactersIn: " _-."))
         }
         if out.isEmpty || out == "." || out == ".." {
             out = "Document"
@@ -120,7 +159,8 @@ enum Naming {
             .filter { !$0.isEmpty && $0 != ctx.originalStem }
     }
 
-    static func uniqueURL(in directory: URL, filename: String) -> URL {
+    /// `separator` goes between the stem and the number that tells a copy apart.
+    static func uniqueURL(in directory: URL, filename: String, separator: String = " ") -> URL {
         let fm = FileManager.default
         var candidate = directory.appendingPathComponent(filename)
         guard fm.fileExists(atPath: candidate.path) else { return candidate }
@@ -128,13 +168,13 @@ enum Naming {
         let ext = candidate.pathExtension
         var n = 2
         while fm.fileExists(atPath: candidate.path) && n < 1000 {
-            let name = ext.isEmpty ? "\(stem) \(n)" : "\(stem) \(n).\(ext)"
+            let name = ext.isEmpty ? "\(stem)\(separator)\(n)" : "\(stem)\(separator)\(n).\(ext)"
             candidate = directory.appendingPathComponent(name)
             n += 1
         }
         if fm.fileExists(atPath: candidate.path) {
             let suffix = UUID().uuidString.prefix(8)
-            let name = ext.isEmpty ? "\(stem) \(suffix)" : "\(stem) \(suffix).\(ext)"
+            let name = ext.isEmpty ? "\(stem)\(separator)\(suffix)" : "\(stem)\(separator)\(suffix).\(ext)"
             candidate = directory.appendingPathComponent(name)
         }
         return candidate
