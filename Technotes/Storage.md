@@ -33,6 +33,9 @@ folder travels with the folder.
 Keeping the second group out of the library is also what keeps an API key out
 of a folder somebody might share.
 
+Settings badges every section with its side of this split (`ScopeBadge`);
+fields, stored per library but edited in every open one, get a third badge.
+
 ## The index
 
 The system SQLite C API directly (`import SQLite3`), WAL, cached prepared
