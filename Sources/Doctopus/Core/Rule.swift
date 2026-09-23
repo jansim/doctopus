@@ -211,6 +211,14 @@ struct RuleMatch: Identifiable, Hashable, Sendable {
 
     var isPending: Bool { !suppressed && !changes.isEmpty }
 
+    /// The folder the rule would move the document to, relative to the library.
+    var moveTarget: String? {
+        changes.lazy.compactMap { change -> String? in
+            if case .move(let folder) = change { return folder }
+            return nil
+        }.first
+    }
+
     enum Change: Hashable, Sendable {
         case move(to: String)
         case rename(to: String)

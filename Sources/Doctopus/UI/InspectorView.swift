@@ -37,7 +37,8 @@ private struct DetailInspector: View {
             VStack(alignment: .leading, spacing: 14) {
                 header
                 Divider()
-                RuleMatchSection(row: row)
+                // In review the panel below the list decides on rule matches.
+                if !model.selection.isQueueMode { RuleMatchSection(row: row) }
                 summarySection
                 metadataSection
                 tagsSection
