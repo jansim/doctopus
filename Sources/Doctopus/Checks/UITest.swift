@@ -1061,6 +1061,7 @@ enum UITest {
     }
 }
 
+@MainActor
 private final class SyntheticDrag: NSObject, NSDraggingInfo {
     let draggingPasteboard: NSPasteboard
     let draggingLocation: NSPoint
