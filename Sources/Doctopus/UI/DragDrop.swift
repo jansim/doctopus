@@ -136,10 +136,9 @@ struct FolderDropDelegate: DropDelegate {
 
     func dropUpdated(info: DropInfo) -> DropProposal? {
         note(.held)
-        // Always copy, whichever way the drop will go: an operation the drag's
-        // source did not offer is refused, and a refused drop is a drag that
-        // cannot be let go at all. Which of the two it is, the row says.
-        return DropProposal(operation: .copy)
+        // A move shows the plain arrow; copy would badge a ⌘ drag with the
+        // green plus, which says the opposite of what letting go will do.
+        return DropProposal(operation: state.intent == .move ? .move : .copy)
     }
 
     func dropExited(info: DropInfo) { hovering = nil }
