@@ -84,20 +84,21 @@ documents already in the library a rule catches, and where a document would
 land and what it would be called.
 
 A rule written after the fact, or a file moved by hand, leaves documents the
-rules would still change. Those carry a purple Rules badge in the list, and
-the inspector says which rule matched and what it would do, with two ways to
-settle it: apply that rule to that document, or suppress it, marking the
-document as an outlier. An outlier stays listed in the inspector, muted, until
-the suppression is undone there; the rule no longer points it out, Apply to
-Existing skips it, and reprocessing the document leaves that rule out. The
-Rules table counts each rule's outliers, and the count opens the list.
+rules would still change. These get a purple Rules badge, and the inspector
+names the rule and its changes with Apply and Suppress. Suppressing marks the
+document as an outlier: the rule stops pointing it out, Apply to Existing and
+reprocessing skip it, and the inspector keeps it listed, muted, so it can be
+undone. The Rules table counts each rule's outliers and lists them.
 
-Finding these runs over the whole library after each refresh, but only the
-first pass reads every document's text. Which rules match depends on the text,
-the filename, the correspondent, the type and the conditions, so the store
-keeps each document's answer until one of those changes; what applying a
-matching rule would change — folder, name, tags, correspondent, type — is a
-comparison against the index and is worked out fresh each time.
+Matching reads every document's text, so the store keeps each answer until the
+text, filename, correspondent, type or a rule's conditions change. What a
+match would change is compared against the index fresh on every pass.
+
+Documents awaiting review are routed again when a rule changes, re-applying
+its tags and metadata, and when a field or date is corrected by hand, so the
+suggested folders follow — a misread year fixed in review moves the suggested
+`Finances/Invoices/{year}` with it. Neither moves a file; filing is still the
+review's decision.
 
 ## OCR
 

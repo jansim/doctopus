@@ -119,4 +119,33 @@ extension Store {
             absPath($0.string(0))
         }
     }
+
+    func reviewDocumentIDs() throws -> [Int64] {
+        try db.map("SELECT DISTINCT doc_id FROM processing WHERE status=0") { $0.int(0) }
+    }
+
+    struct RoutingInput: Sendable {
+        var url: URL
+        var text: String
+        var correspondent: String?
+        var docType: String?
+        var date: Date?
+        var confidence: Double
+    }
+
+    func routingInput(for docID: Int64) throws -> RoutingInput? {
+        try db.first("""
+            SELECT d.path, (SELECT f.body FROM doc_fts f WHERE f.rowid = d.id),
+                   ec.name, et.name, m.doc_date, m.confidence
+            FROM documents d
+            LEFT JOIN metadata m ON m.doc_id = d.id
+            LEFT JOIN entities ec ON ec.id = m.correspondent_id
+            LEFT JOIN entities et ON et.id = m.doc_type_id
+            WHERE d.id=? AND d.missing=0 AND d.deleted_at IS NULL
+            """, [.int(docID)]) {
+            RoutingInput(url: URL(fileURLWithPath: absPath($0.string(0))), text: $0.stringOrNil(1) ?? "",
+                         correspondent: $0.stringOrNil(2), docType: $0.stringOrNil(3),
+                         date: $0.date(4), confidence: $0.doubleOrNil(5) ?? 0)
+        }
+    }
 }

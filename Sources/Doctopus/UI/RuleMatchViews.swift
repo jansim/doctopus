@@ -1,7 +1,5 @@
 import SwiftUI
 
-/// The mark on a document a rule would still change: the Rules icon in a
-/// purple circle, grey once the document is an outlier for it.
 struct RuleMatchBadge: View {
     var size: CGFloat = 14
     var muted = false
@@ -19,9 +17,6 @@ struct RuleMatchBadge: View {
     }
 }
 
-/// The inspector's account of the rules that match a document but have not
-/// been applied to it, with the two ways to settle each: apply it, or mark the
-/// document as an outlier the rule should leave alone.
 struct RuleMatchSection: View {
     @Environment(AppModel.self) private var model
     let row: DocumentRow

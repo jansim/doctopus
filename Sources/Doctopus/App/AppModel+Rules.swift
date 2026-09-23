@@ -10,31 +10,32 @@ extension AppModel {
         ruleMatches(for: row).filter(\.isPending)
     }
 
-    /// Debounced, because a refresh arrives for every document the indexer
-    /// finishes; the store remembers what it matched, so a pass after the
-    /// first only reads the text of documents that changed.
+    /// Debounced: the indexer triggers a refresh per document.
     func refreshRuleMatches() {
         ruleMatchTask?.cancel()
         let libs = libraries
-        ruleMatchTask = Task { [weak self] in
+        ruleMatchTask = Task {
             try? await Task.sleep(for: .milliseconds(400))
             for lib in libs {
-                guard !Task.isCancelled else { return }
                 guard let matches = try? await lib.store.ruleMatches() else { continue }
-                guard !Task.isCancelled, self != nil else { return }
+                guard !Task.isCancelled else { return }
                 if lib.ruleMatches != matches { lib.ruleMatches = matches }
             }
+        }
+    }
+
+    func rulesChanged(in lib: Library) {
+        Task {
+            await lib.indexer.reroute(applyingActions: true)
+            refreshAll()
+            reloadDetail()
         }
     }
 
     func applyRule(_ match: RuleMatch, to row: DocumentRow) {
         guard let lib = library(of: row) else { return }
         Task {
-            guard let rule = try? await lib.store.rules().first(where: { $0.id == match.ruleID }) else {
-                notify("That rule no longer exists.", .info)
-                refreshRuleMatches()
-                return
-            }
+            guard let rule = try? await lib.store.rules().first(where: { $0.id == match.ruleID }) else { return }
             let result = (try? await lib.store.applyRuleToExisting(rule, onlyTo: row.doc))
                 ?? Store.RuleApplyResult()
             if result.matched > 0,
@@ -49,9 +50,6 @@ extension AppModel {
         }
     }
 
-    /// An outlier keeps matching the rule, but is no longer pointed out, nor
-    /// filed by it when the rule is applied to existing documents or the
-    /// document is reprocessed.
     func setRuleSuppressed(_ suppressed: Bool, _ match: RuleMatch, for row: DocumentRow) {
         guard let lib = library(of: row) else { return }
         Task {
@@ -65,7 +63,7 @@ extension AppModel {
                            doc: Int64, in lib: Library) async {
         try? await lib.store.setRuleSuppressed(suppressed, rule: ruleID, doc: doc)
         lib.outlierRevision += 1
-        // Ahead of the debounced pass, so the badge goes the moment it is asked to.
+        // Update now rather than after the debounced pass.
         if var matches = lib.ruleMatches[doc],
            let index = matches.firstIndex(where: { $0.ruleID == ruleID }) {
             matches[index].suppressed = suppressed

@@ -80,7 +80,6 @@ struct RulesSettings: View {
         }
         .task { await load() }
         .task(id: model.settingsLibrary?.id) { await load() }
-        // Documents are marked as outliers from the main window while this is open.
         .onChange(of: model.settingsLibrary?.outlierRevision) { Task { await load() } }
         .sheet(item: $editing) { rule in
             if let library = model.settingsLibrary {
@@ -142,8 +141,12 @@ struct RulesSettings: View {
             let id = (try? await store.upsertRule(rule)) ?? rule.id
             await load()
             selected = id
-            model.refreshRuleMatches()
+            rulesChanged()
         }
+    }
+
+    private func rulesChanged() {
+        if let library = model.settingsLibrary { model.rulesChanged(in: library) }
     }
 
     private func addRule() {
@@ -165,7 +168,7 @@ struct RulesSettings: View {
             try? await store.deleteRule(id)
             if selected == id { selected = nil }
             await load()
-            model.refreshRuleMatches()
+            rulesChanged()
         }
     }
 
@@ -180,12 +183,11 @@ struct RulesSettings: View {
             try? await store.reorderRules(ordered)
             await load()
             selected = id
+            rulesChanged()
         }
     }
 }
 
-/// A rule's outliers, each of which can be handed back to the rule, and the
-/// way to see them all in the main window.
 private struct OutlierList: View {
     @Environment(AppModel.self) private var model
     @Environment(\.openWindow) private var openWindow

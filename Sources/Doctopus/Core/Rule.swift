@@ -192,8 +192,7 @@ extension Rule {
     }
 }
 
-/// A rule that matches a document and would still change something about it,
-/// or one the document has been marked as an outlier for.
+/// A rule that would still change a document, or one it is an outlier for.
 struct RuleMatch: Identifiable, Hashable, Sendable {
     var ruleID: Int64
     var ruleName: String
@@ -202,8 +201,6 @@ struct RuleMatch: Identifiable, Hashable, Sendable {
 
     var id: Int64 { ruleID }
 
-    /// Pending is what the list points out: something to do, and nobody has
-    /// said the document is an exception.
     var isPending: Bool { !suppressed && !changes.isEmpty }
 
     enum Change: Hashable, Sendable {

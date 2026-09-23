@@ -1,12 +1,8 @@
 import Foundation
 
-/// Works out what applying a rule to a document that is already filed would
-/// change — the steps Apply to Existing takes, without taking them. A rule that
-/// matches but would leave everything as it is has nothing to point out.
+/// What Apply to Existing would change about a document, without doing it.
 struct RuleCheck: Sendable {
 
-    /// What the actions compare against. The text is left out on purpose: it
-    /// only decides whether a rule matches, never what matching would change.
     struct Document: Sendable {
         var path: String
         var correspondent: String?
@@ -44,8 +40,7 @@ struct RuleCheck: Sendable {
             if name != url.lastPathComponent { changes.append(.rename(to: name)) }
         }
 
-        // A nested tag is assigned by its last segment, so that is what the
-        // document already carrying it looks like.
+        // A nested tag "a/b" is assigned as "b".
         let have = Set(doc.tags.map { $0.lowercased() })
         let missing = rule.tagNames.filter { name in
             let leaf = name.split(separator: "/").last

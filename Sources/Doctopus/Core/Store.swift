@@ -1177,9 +1177,7 @@ actor Store {
         return try await applyRuleToExisting(rule)
     }
 
-    /// Across the library the rule's outliers are skipped; given one document,
-    /// it is applied to that one whether or not it was marked as one, because
-    /// then someone asked for exactly that.
+    /// Skips the rule's outliers, unless applied to one document explicitly.
     func applyRuleToExisting(_ rule: Rule, onlyTo docID: Int64? = nil) async throws -> RuleApplyResult {
         let scope = docID == nil
             ? "AND d.id NOT IN (SELECT doc_id FROM rule_suppressions WHERE rule_id=?)"

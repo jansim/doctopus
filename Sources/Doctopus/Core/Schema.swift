@@ -41,8 +41,7 @@ enum Schema {
         try db.exec("ALTER TABLE \(table) ADD COLUMN \(column) \(declaration)")
     }
 
-    /// A document marked as an outlier for a rule: the rule still matches it,
-    /// but is no longer applied to it or pointed out on it.
+    /// Documents marked as outliers for a rule, which it then leaves alone.
     private static func v20(_ db: Database) throws {
         try db.exec("""
         CREATE TABLE IF NOT EXISTS rule_suppressions (

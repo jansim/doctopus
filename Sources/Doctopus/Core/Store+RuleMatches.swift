@@ -2,18 +2,14 @@ import Foundation
 
 extension Store {
 
-    /// Which rules match which documents, kept between passes. Matching reads
-    /// every document's full text, which is the part of a pass worth skipping,
-    /// and its answer only depends on the text, the filename, the correspondent,
-    /// the type and the rules' conditions. A document none of those changed for
-    /// keeps its answer; a change to any rule's conditions starts over.
+    /// Matched rule IDs per document. Matching reads the full text, so answers
+    /// are kept until the document's text, filename, correspondent or type
+    /// changes, or any rule's conditions do.
     struct RuleMatchCache {
         var signature = ""
         var entries: [Int64: (key: String, rules: [Int64])] = [:]
     }
 
-    /// Documents a rule would still change, and documents marked as outliers
-    /// for one, keyed by document. Missing and deleted documents are left out.
     func ruleMatches() throws -> [Int64: [RuleMatch]] {
         let all = try rules()
         let live = all.filter { $0.enabled && $0.hasEffect && !$0.liveConditions.isEmpty }
@@ -84,8 +80,6 @@ extension Store {
         return result
     }
 
-    /// Everything a match depends on, and nothing it doesn't: a rename or a
-    /// new folder leaves every document's answer standing.
     private static func conditionSignature(_ rule: Rule) -> String {
         "\(rule.id)|\(rule.requiresAll)|" + rule.liveConditions.map {
             "\($0.field.rawValue)\u{1f}\($0.pattern)\u{1f}\($0.mode.rawValue)\u{1f}\($0.caseInsensitive)\u{1f}\($0.negated)"
@@ -132,7 +126,6 @@ extension Store {
         }
     }
 
-    /// Outliers per rule, counting only documents that are still in the library.
     func suppressionCounts() throws -> [Int64: Int] {
         var out: [Int64: Int] = [:]
         try db.query("""
