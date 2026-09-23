@@ -174,7 +174,8 @@ enum SelfTest {
             var rescan: (id: Int64, isNew: Bool, changed: Bool)?
             if let f = FileScanner.scan(root: URL(fileURLWithPath: renamed)).first(where: { $0.url.lastPathComponent == name }) {
                 rescan = try? await store.upsertDocument(
-                    Store.FileFacts(path: f.url.path, size: f.size, mtime: f.mtime, created: f.created))
+                    Store.FileFacts(path: f.url.path, size: f.size, mtime: f.mtime, created: f.created,
+                                    fileID: f.fileID), origin: .inLibrary)
             }
             Check.that("a renamed folder takes its documents' index entries along",
                        followed == movedFile && rescan?.isNew == false, followed ?? "gone")
