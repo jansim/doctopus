@@ -33,10 +33,8 @@ folder travels with the folder.
 Keeping the second group out of the library is also what keeps an API key out
 of a folder somebody might share.
 
-Settings shows the same split: every section carries a badge naming either the
-library it belongs to or "All libraries" (`ScopeBadge`), so a pane that mixes
-the two, like Intelligence, says which is which. Fields are the one in between —
-stored per library but edited in every open one — and are badged as such.
+Settings badges every section with its side of this split (`ScopeBadge`);
+fields, stored per library but edited in every open one, get a third badge.
 
 ## The index
 
