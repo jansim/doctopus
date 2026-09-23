@@ -6,8 +6,6 @@ struct RootView: View {
     @Environment(\.undoManager) private var undoManager
     @State private var columnVisibility = NavigationSplitViewVisibility.all
     @SceneStorage("showInspector") private var showInspector = true
-    @State private var renameSheet = false
-    @State private var showQuickSwitcher = false
 
     var body: some View {
         @Bindable var model = model
@@ -40,13 +38,13 @@ struct RootView: View {
         // Each column is its own hosting view and needs its own; this one
         // covers focus outside them, such as the toolbar.
         .acceptsScans()
-        .sheet(isPresented: $renameSheet) { RenameSheet(isPresented: $renameSheet) }
-        .sheet(isPresented: $showQuickSwitcher) { QuickSwitcherSheet() }
-        .onReceive(NotificationCenter.default.publisher(for: .showRenameSheet)) { _ in
-            if !model.selectedIDs.isEmpty { renameSheet = true }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .showQuickSwitcher)) { _ in
-            showQuickSwitcher = true
+        .sheet(item: $model.sheet) { sheet in
+            switch sheet {
+            case .rename: RenameSheet()
+            case .addTag: AddTagSheet()
+            case .quickOpen: QuickSwitcherSheet()
+            case .file(let row): FilingSheet(row: row)
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in
             model.appResignedActive()

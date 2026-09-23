@@ -2,7 +2,7 @@ import SwiftUI
 
 struct RenameSheet: View {
     @Environment(AppModel.self) private var model
-    @Binding var isPresented: Bool
+    @Environment(\.dismiss) private var dismiss
     @State private var template = Naming.defaultTemplate
 
     private var rows: [DocumentRow] { model.selectedRows }
@@ -58,11 +58,11 @@ struct RenameSheet: View {
                     model.settings.namingTemplate = template
                 }
                 Spacer()
-                Button("Cancel") { isPresented = false }
+                Button("Cancel") { dismiss() }
                     .keyboardShortcut(.cancelAction)
                 Button("Rename") {
                     model.rename(rows, template: template)
-                    isPresented = false
+                    dismiss()
                 }
                 .keyboardShortcut(.defaultAction)
                 .disabled(rows.isEmpty || template.nilIfBlank == nil)
@@ -86,7 +86,7 @@ struct RenameSheet: View {
 
 struct AddTagSheet: View {
     @Environment(AppModel.self) private var model
-    @Binding var isPresented: Bool
+    @Environment(\.dismiss) private var dismiss
     @State private var name = ""
 
     var body: some View {
@@ -108,7 +108,7 @@ struct AddTagSheet: View {
             }
             HStack {
                 Spacer()
-                Button("Cancel") { isPresented = false }.keyboardShortcut(.cancelAction)
+                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
                 Button("Add", action: commit).keyboardShortcut(.defaultAction)
                     .disabled(name.nilIfBlank == nil)
             }
@@ -120,6 +120,6 @@ struct AddTagSheet: View {
     private func commit() {
         guard let clean = name.nilIfBlank else { return }
         model.addTag(clean, to: model.selectedRows)
-        isPresented = false
+        dismiss()
     }
 }

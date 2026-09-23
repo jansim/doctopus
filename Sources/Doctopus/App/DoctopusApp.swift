@@ -165,7 +165,7 @@ struct DoctopusCommands: Commands {
                 Button("Clear Menu") { NSDocumentController.shared.clearRecentDocuments(nil) }
                     .disabled(recent.isEmpty)
             }
-            Button("Quick Open…") { NotificationCenter.default.post(name: .showQuickSwitcher, object: nil) }
+            Button("Quick Open…") { model.sheet = .quickOpen }
                 .keyboardShortcut("o", modifiers: [.command, .shift])
             Button("Import Files…") { importPanel() }
                 .keyboardShortcut("i", modifiers: [.command])
@@ -198,7 +198,7 @@ struct DoctopusCommands: Commands {
                 .keyboardShortcut("r", modifiers: [.command, .shift])
                 .disabled(model.selectedIDs.isEmpty)
             Divider()
-            Button("Rename with Template…") { NotificationCenter.default.post(name: .showRenameSheet, object: nil) }
+            Button("Rename with Template…") { model.sheet = .rename }
                 .disabled(model.selectedIDs.isEmpty)
             Button("Move to Folder…") { model.moveToFolderPicker(model.selectedRows) }
                 .disabled(model.selectedIDs.isEmpty)
@@ -223,9 +223,4 @@ struct DoctopusCommands: Commands {
         guard let urls = ImportPanel.choose() else { return }
         model.importFiles(urls, into: nil)
     }
-}
-
-extension Notification.Name {
-    static let showRenameSheet = Notification.Name("io.doctopus.showRenameSheet")
-    static let showQuickSwitcher = Notification.Name("io.doctopus.showQuickSwitcher")
 }

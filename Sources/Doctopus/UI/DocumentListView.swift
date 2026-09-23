@@ -5,9 +5,6 @@ import AppKit
 /// presentations: selection, context menus, Quick Look, drag-and-drop.
 struct DocumentListView: View {
     @Environment(AppModel.self) private var model
-    @State private var renameSheet = false
-    @State private var tagSheet = false
-    @State private var filingRow: DocumentRow?
     @State private var dropTargeted = false
 
     var body: some View {
@@ -23,16 +20,13 @@ struct DocumentListView: View {
                 browser
             }
         }
-        .sheet(isPresented: $renameSheet) { RenameSheet(isPresented: $renameSheet) }
-        .sheet(isPresented: $tagSheet) { AddTagSheet(isPresented: $tagSheet) }
-        .sheet(item: $filingRow) { row in FilingSheet(row: row) }
     }
 
     private var browser: some View {
         Group {
             switch model.viewMode {
-            case .list: DocumentTableView(renameSheet: $renameSheet, tagSheet: $tagSheet, filingRow: $filingRow)
-            case .gallery: DocumentGalleryView(renameSheet: $renameSheet, tagSheet: $tagSheet, filingRow: $filingRow)
+            case .list: DocumentTableView()
+            case .gallery: DocumentGalleryView()
             }
         }
         .overlay(alignment: .center) { emptyState }
@@ -114,9 +108,6 @@ private struct QueueBar: View {
 
 private struct DocumentTableView: View {
     @Environment(AppModel.self) private var model
-    @Binding var renameSheet: Bool
-    @Binding var tagSheet: Bool
-    @Binding var filingRow: DocumentRow?
 
     private var sortOrder: Binding<[DocumentSort]> {
         Binding(
@@ -260,8 +251,7 @@ private struct DocumentTableView: View {
         }
         .tableStyle(.inset(alternatesRowBackgrounds: true))
         .contextMenu(forSelectionType: DocumentRef.self) { ids in
-            DocumentMenu(rows: model.documents.filter { ids.contains($0.id) },
-                         renameSheet: $renameSheet, tagSheet: $tagSheet, filingRow: $filingRow)
+            DocumentMenu(rows: model.documents.filter { ids.contains($0.id) })
         } primaryAction: { ids in
             model.open(model.documents.filter { ids.contains($0.id) })
         }
@@ -342,9 +332,6 @@ struct AliasBadgedThumbnail: View {
 
 private struct DocumentGalleryView: View {
     @Environment(AppModel.self) private var model
-    @Binding var renameSheet: Bool
-    @Binding var tagSheet: Bool
-    @Binding var filingRow: DocumentRow?
     @State private var selectionAnchor: DocumentRef?
 
     private var cell: CGFloat { CGFloat(model.settings.galleryThumbnailSize) }
@@ -362,8 +349,7 @@ private struct DocumentGalleryView: View {
                         // makes SwiftUI hold every single click back.
                         .onTapGesture { click(row) }
                         .contextMenu {
-                            DocumentMenu(rows: model.selectedIDs.contains(row.id) ? model.selectedRows : [row],
-                                         renameSheet: $renameSheet, tagSheet: $tagSheet, filingRow: $filingRow)
+                            DocumentMenu(rows: model.selectedIDs.contains(row.id) ? model.selectedRows : [row])
                         }
                 }
             }
@@ -475,9 +461,6 @@ private struct GalleryCell: View {
 private struct DocumentMenu: View {
     @Environment(AppModel.self) private var model
     let rows: [DocumentRow]
-    @Binding var renameSheet: Bool
-    @Binding var tagSheet: Bool
-    @Binding var filingRow: DocumentRow?
 
     var body: some View {
         if rows.isEmpty {
@@ -494,7 +477,7 @@ private struct DocumentMenu: View {
             }
             Divider()
             Menu("Tags") {
-                Button("Add Tag…") { tagSheet = true }
+                Button("Add Tag…") { model.sheet = .addTag }
                 if !model.tagNames.isEmpty {
                     Divider()
                     ForEach(model.tagNames, id: \.self) { name in
@@ -525,9 +508,9 @@ private struct DocumentMenu: View {
                 }
             }
             Divider()
-            Button(rows.count == 1 ? "Rename…" : "Rename \(rows.count) Files…") { renameSheet = true }
+            Button(rows.count == 1 ? "Rename…" : "Rename \(rows.count) Files…") { model.sheet = .rename }
             if rows.count == 1 {
-                Button("File In…") { filingRow = rows[0] }
+                Button("File In…") { model.sheet = .file(rows[0]) }
             }
             Button("Move to Folder…") { model.moveToFolderPicker(rows) }
             Divider()
