@@ -1452,6 +1452,7 @@ enum SelfTest {
                    applied.matched == 1 && appliedTagged && after == nil)
 
         let original = try? await store.detail(payslip.doc)
+        let tagsBefore = Set(((try? await store.tags()) ?? []).map(\.tagID))
         try? await store.setDocumentApproved(payslip.doc, false)
         saved.actions.append(RuleAction(kind: .moveFile, value: "Outlier Check/{year}"))
         _ = try? await store.upsertRule(saved)
@@ -1467,6 +1468,10 @@ enum SelfTest {
         try? await store.setDocumentDate(payslip.doc, original?.row.docDate,
                                          source: original?.dateSource ?? "fs")
         try? await store.setDocumentApproved(payslip.doc, true)
+        // Re-routing applied the starter rules' tags too; later checks count tags.
+        for tag in (try? await store.tags()) ?? [] where !tagsBefore.contains(tag.tagID) {
+            try? await store.deleteTag(tag.tagID)
+        }
 
         try? await store.setRuleSuppressed(true, rule: id, doc: payslip.doc)
         try? await store.deleteRule(id)
