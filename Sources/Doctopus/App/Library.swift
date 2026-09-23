@@ -28,6 +28,13 @@ final class Library: Identifiable {
 
     var displayName: String { root.lastPathComponent }
 
+    /// Documents a rule would still change, which wait in Needs Review.
+    var ruleMatchedDocs: Set<Int64> { Self.ruleMatchedDocs(in: ruleMatches) }
+
+    static func ruleMatchedDocs(in matches: [Int64: [RuleMatch]]) -> Set<Int64> {
+        Set(matches.lazy.filter { $0.value.contains(where: \.isPending) }.map { $0.key })
+    }
+
     init(store: Store, bookmark: Data?) {
         self.store = store
         self.id = store.libraryID

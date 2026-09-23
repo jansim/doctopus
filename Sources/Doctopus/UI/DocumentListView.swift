@@ -66,7 +66,7 @@ struct DocumentListView: View {
             return "Try fewer words, or a token filter like tag:invoice or type:Receipt."
         }
         switch model.selection {
-        case .needsReview: return "Everything the pipeline filed has been reviewed."
+        case .needsReview: return "Everything the pipeline filed has been reviewed, and no rule has anything left to change."
         case .queue: return "Imports, scans, moves and optimizations show up here as they happen."
         case .deleted: return "Documents you move to the Trash wait here, so putting one back brings its tags and history with it."
         case .outliers: return "No document is marked as an outlier for this rule."
@@ -79,6 +79,9 @@ private struct QueueBar: View {
     @Environment(AppModel.self) private var model
 
     private var pending: Int { model.documents.filter { $0.queue?.approved == false }.count }
+    private var ruleMatched: Int {
+        model.documents.filter { !model.pendingRuleMatches(for: $0).isEmpty }.count
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -86,7 +89,12 @@ private struct QueueBar: View {
                 if pending > 0 {
                     Label("\(pending) awaiting review", systemImage: "exclamationmark.triangle.fill")
                         .foregroundStyle(.orange)
-                } else {
+                }
+                if model.selection == .needsReview, ruleMatched > 0 {
+                    Label("\(ruleMatched) with new rule matches", systemImage: "line.3.horizontal.decrease.circle.fill")
+                        .foregroundStyle(.purple)
+                }
+                if pending == 0 && (model.selection != .needsReview || ruleMatched == 0) {
                     Label("All caught up", systemImage: "checkmark.circle.fill")
                         .foregroundStyle(.green)
                 }
