@@ -27,15 +27,6 @@ enum MatchMode: Int64, CaseIterable, Sendable, Codable {
         }
     }
 
-    static func inferred(from pattern: String) -> MatchMode {
-        let p = pattern.trimmingCharacters(in: .whitespaces)
-        guard !p.isEmpty else { return .anyWord }
-        guard p.rangeOfCharacter(from: CharacterSet(charactersIn: "^$*+?[]()|\\")) != nil else {
-            return .anyWord
-        }
-        return (try? NSRegularExpression(pattern: p, options: [])) != nil ? .regex : .anyWord
-    }
-
     static let fuzzyThreshold = 0.9
 
     /// Edits forgiven outright. A flat 90% ratio rejects one misread letter in an
@@ -116,16 +107,6 @@ enum PatternMatcher {
                 ? $0.trimmingCharacters(in: .whitespaces).lowercased()
                 : $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }
-    }
-
-    /// The pre-`*` meaning of a word pattern, for migrating old ones.
-    static func openingEnds(_ pattern: String) -> String {
-        pattern.split(separator: ",", omittingEmptySubsequences: false)
-            .map { part -> String in
-                let t = part.trimmingCharacters(in: .whitespaces)
-                return t.isEmpty || t.hasSuffix("*") ? t : t + "*"
-            }
-            .joined(separator: ", ")
     }
 
     static func phraseRegex(_ phrase: String, insensitive: Bool) -> NSRegularExpression? {

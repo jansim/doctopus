@@ -149,6 +149,10 @@ private struct DocumentTableView: View {
                             .toggleStyle(.checkbox)
                             .labelsHidden()
                             .help(row.queue?.approved == true ? "Approved" : "Needs review")
+                        RoundedRectangle(cornerRadius: 1.5)
+                            .fill(Arrival(row).tint)
+                            .frame(width: 3, height: 22)
+                            .help(Arrival(row).label)
                     }
                     AliasBadgedThumbnail(row: row, width: 20, height: 26)
                     VStack(alignment: .leading, spacing: 1) {

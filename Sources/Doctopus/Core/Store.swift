@@ -21,9 +21,20 @@ actor Store {
         self.containerURL = container
         self.root = container.deletingLastPathComponent()
         self.rootPrefix = container.deletingLastPathComponent().path + "/"
-        self.libraryID = try Store.loadOrCreateMeta(in: container)
+        var meta = try Store.loadOrCreateMeta(in: container)
+        self.libraryID = meta.id
         db = try Database(path: container.appendingPathComponent("index.sqlite").path)
-        try Schema.migrate(db)
+        do { try Schema.migrate(db) } catch is Schema.TooNew {
+            throw OpenError.newer(writtenBy: meta.appVersion)
+        }
+        // Stamped only once the index is known to be readable, so a refused
+        // library keeps naming the build that can open it.
+        if meta.formatVersion != Store.formatVersion || meta.appVersion != Store.appVersion {
+            meta.formatVersion = Store.formatVersion
+            meta.appVersion = Store.appVersion
+            try? JSONEncoder().encode(meta).write(to: container.appendingPathComponent("meta.json"),
+                                                  options: .atomic)
+        }
     }
 
     // Paths are stored relative to `root` so the library is portable. Nothing
@@ -54,20 +65,21 @@ actor Store {
     }
 
     static let formatVersion = 2
+    /// Where tags mirror as aliases unless a tag names its own folder.
+    static let tagMirrorFolder = "Tags"
 
     static var appVersion: String {
         (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "unknown"
     }
 
     enum OpenError: Swift.Error, CustomStringConvertible {
-        case futureFormat(found: Int, supported: Int, writtenBy: String?)
+        case newer(writtenBy: String?)
 
         var description: String {
             switch self {
-            case .futureFormat(let found, let supported, let writtenBy):
-                let by = writtenBy.map { " (last written by Doctopus \($0))" } ?? ""
-                return "This library uses format version \(found)\(by), but this "
-                    + "version of Doctopus only understands \(supported). Update Doctopus to open it."
+            case .newer(let writtenBy):
+                let by = writtenBy.map { " (Doctopus \($0))" } ?? ""
+                return "This library was written by a newer version of Doctopus\(by). Update Doctopus to open it."
             }
         }
     }
@@ -79,34 +91,21 @@ actor Store {
         var appVersion: String?
     }
 
-    private static func loadOrCreateMeta(in container: URL) throws -> LibraryID {
+    private static func loadOrCreateMeta(in container: URL) throws -> Meta {
         let metaURL = container.appendingPathComponent("meta.json")
         if let data = try? Data(contentsOf: metaURL),
-           var meta = try? JSONDecoder().decode(Meta.self, from: data),
+           let meta = try? JSONDecoder().decode(Meta.self, from: data),
            !meta.id.isEmpty {
-            // Refuse a library from the future rather than silently misreading
-            // it: a newer app may have written columns and tables this build
-            // would drop on the first write.
-            guard meta.formatVersion <= formatVersion else {
-                throw OpenError.futureFormat(found: meta.formatVersion,
-                                             supported: formatVersion,
-                                             writtenBy: meta.appVersion)
-            }
-            if meta.formatVersion < formatVersion || meta.appVersion != appVersion {
-                meta.formatVersion = formatVersion
-                meta.appVersion = appVersion
-                if let updated = try? JSONEncoder().encode(meta) {
-                    try? updated.write(to: metaURL, options: .atomic)
-                }
-            }
-            return meta.id
+            // A newer app may have written columns and tables this build would
+            // drop on the first write.
+            guard meta.formatVersion <= formatVersion else { throw OpenError.newer(writtenBy: meta.appVersion) }
+            return meta
         }
         let meta = Meta(id: UUID().uuidString, formatVersion: formatVersion,
                         name: container.deletingLastPathComponent().lastPathComponent,
                         appVersion: appVersion)
-        let data = try JSONEncoder().encode(meta)
-        try? data.write(to: metaURL, options: .atomic)
-        return meta.id
+        try? JSONEncoder().encode(meta).write(to: metaURL, options: .atomic)
+        return meta
     }
 
     func setting(_ key: String) throws -> String? {
@@ -126,7 +125,7 @@ actor Store {
         var fileID: Int64? = nil
     }
 
-    func upsertDocument(_ f: FileFacts) throws -> (id: Int64, isNew: Bool, changed: Bool) {
+    func upsertDocument(_ f: FileFacts, origin: DocumentOrigin) throws -> (id: Int64, isNew: Bool, changed: Bool) {
         let url = URL(fileURLWithPath: f.path)
         let relative = relPath(f.path)
         let dir = relPath(url.deletingLastPathComponent().path)
@@ -160,7 +159,25 @@ actor Store {
                   .int(f.size), .double(f.mtime.timeIntervalSince1970),
                   .double(f.created.timeIntervalSince1970), .int(f.fileID)])
         try refreshSearchIndex(id)
+        try logOrigin(docID: id, origin, path: relative)
         return (id, true, true)
+    }
+
+    private func logOrigin(docID: Int64, _ origin: DocumentOrigin, path: String) throws {
+        let detail: String
+        var source: String?
+        switch origin {
+        case .scanned:
+            detail = "Scanned"
+        case .imported(let from):
+            detail = "Imported from \(from)"
+            source = from
+        case .inLibrary:
+            detail = "In library at \(path)"
+        }
+        try db.run("INSERT INTO events(doc_id, at, action, detail, from_path) VALUES(?,?,?,?,?)",
+                   [.int(docID), .double(Date().timeIntervalSince1970),
+                    .text("added"), .text(detail), .text(source)])
     }
 
     func reconcileMissing(seenPaths: Set<String>) throws -> Int {
@@ -287,6 +304,10 @@ actor Store {
             [.double(cutoff)]) { $0.int(0) }
         for id in doomed { try deleteDocument(id) }
         return doomed.count
+    }
+
+    func documentCount() throws -> Int {
+        try db.first("SELECT COUNT(*) FROM documents") { Int($0.int(0)) } ?? 0
     }
 
     func deletedCount() throws -> Int {
@@ -1320,6 +1341,25 @@ actor Store {
             """, [.text(relPath(newPath)), .text(relPath(url.deletingLastPathComponent().path)),
                   .text(url.lastPathComponent), .text(url.pathExtension.lowercased()), .int(docID)])
         try refreshSearchIndex(docID)
+    }
+
+    /// A folder renamed as a whole: every path under it follows, rather than
+    /// each document going missing and being found again by its hash.
+    func moveFolder(from old: String, to new: String) throws {
+        let columns = [("documents", "path"), ("documents", "directory"), ("aliases", "path")]
+        // Events keep the absolute paths they were logged with.
+        let absolute = [("events", "from_path"), ("events", "to_path")]
+        try db.transaction {
+            for (table, column) in columns + absolute {
+                let isAbsolute = table == "events"
+                let (from, to) = isAbsolute ? (Store.canonical(old), Store.canonical(new))
+                                            : (relPath(old), relPath(new))
+                try db.run("""
+                    UPDATE \(table) SET \(column) = ?2 || substr(\(column), length(?1) + 1)
+                    WHERE \(column) = ?1 OR substr(\(column), 1, length(?1) + 1) = ?1 || '/'
+                    """, [.text(from), .text(to)])
+            }
+        }
     }
 
     func setSizes(_ docID: Int64, size: Int64, originalSize: Int64?) throws {

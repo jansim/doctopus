@@ -1,5 +1,50 @@
 import Foundation
 
+enum KeptVersion: Hashable, Sendable {
+    case original, optimized
+}
+
+/// What a batch approval does to one kind of document; a nil version leaves the bytes alone.
+struct ReviewTreatment: Hashable, Sendable {
+    var move: Bool
+    var version: KeptVersion?
+
+    static func `default`(fromOutside: Bool) -> ReviewTreatment {
+        ReviewTreatment(move: fromOutside, version: fromOutside ? .optimized : nil)
+    }
+}
+
+struct OptimizationPreview: Sendable {
+    var url: URL
+    var newSize: Int64
+
+    func discard() { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+}
+
+extension DocumentDetail {
+    /// New arrivals start on their best suggestion; anything already in the library stays put.
+    var defaultFolder: String {
+        row.fromOutside ? pathSuggestions.first?.path ?? row.directory : row.directory
+    }
+
+    var isOptimized: Bool { row.originalSize != nil }
+
+    var defaultVersion: KeptVersion { row.fromOutside || isOptimized ? .optimized : .original }
+}
+
+private enum KeepOutcome {
+    case unchanged, optimized(saved: Int64), compact, restored
+
+    var note: String? {
+        switch self {
+        case .unchanged: return nil
+        case .optimized(let saved): return "optimized, saving \(ByteFormat.string(saved))"
+        case .compact: return "already compact, so not optimized"
+        case .restored: return "restored to the original"
+        }
+    }
+}
+
 extension AppModel {
 
     func approveAll() {
@@ -36,7 +81,7 @@ extension AppModel {
     }
 
     func file(_ row: DocumentRow, in primary: URL, alsoIn secondaries: Set<String>,
-              approve: Bool, keepOriginal: Bool = true, advance: Bool = false) {
+              approve: Bool, version: KeptVersion? = nil, advance: Bool = false) {
         guard let lib = library(of: row) else { return }
         guard lib.owns(path: primary.path) else {
             errorMessage = "“\(primary.lastPathComponent)” is outside \(lib.displayName). A document can only be filed within its own library."
@@ -87,9 +132,10 @@ extension AppModel {
                 added.append((folder as NSString).lastPathComponent)
             }
 
+            var kept: String?
             if approve {
                 try? await lib.store.setDocumentApproved(row.doc, true)
-                if !keepOriginal { try? await lib.store.deleteOriginalFile(for: row.doc) }
+                if let version { kept = await keep(version, of: row, in: lib).note }
             }
             if let next { selectedIDs = [next] }
             refreshAll()
@@ -98,11 +144,96 @@ extension AppModel {
             var parts: [String] = []
             if moved { parts.append("Moved to “\(primary.lastPathComponent)”") }
             if !added.isEmpty { parts.append("also filed in \(added.map { "“\($0)”" }.joined(separator: ", "))") }
+            if let kept { parts.append(kept) }
             if parts.isEmpty { parts.append(approve ? "Approved" : "Nothing to change") }
             else if approve { parts.append("approved") }
             let text = parts.joined(separator: ", ")
             notify(text.prefix(1).uppercased() + text.dropFirst() + ".", parts == ["Nothing to change"] ? .info : .success)
         }
+    }
+
+    func approve(_ rows: [DocumentRow], newArrivals: ReviewTreatment, alreadyInLibrary: ReviewTreatment) {
+        Task {
+            var moved = 0, optimized = 0, restored = 0, failed = 0
+            var saved: Int64 = 0
+            for (lib, rows) in grouped(rows) {
+                for row in rows {
+                    let treatment = row.fromOutside ? newArrivals : alreadyInLibrary
+                    if treatment.move, let best = await suggestedFolder(for: row) {
+                        if await lib.indexer.move(ids: [row.doc], to: URL(fileURLWithPath: best, isDirectory: true)) == 1 {
+                            moved += 1
+                        } else {
+                            failed += 1
+                        }
+                    }
+                    try? await lib.store.setDocumentApproved(row.doc, true)
+                    guard let version = treatment.version else { continue }
+                    switch await keep(version, of: row, in: lib) {
+                    case .optimized(let bytes): optimized += 1; saved += bytes
+                    case .restored: restored += 1
+                    case .unchanged, .compact: break
+                    }
+                }
+            }
+            refreshAll()
+            reloadDetail()
+
+            var parts = ["Approved \(rows.count) document\(rows.count == 1 ? "" : "s")"]
+            if moved > 0 { parts.append("moved \(moved)") }
+            if optimized > 0 { parts.append("optimized \(optimized), saving \(ByteFormat.string(saved))") }
+            if restored > 0 { parts.append("restored \(restored) to the original") }
+            if failed > 0 {
+                parts.append("\(failed) could not be moved and \(failed == 1 ? "was" : "were") left where \(failed == 1 ? "it is" : "they are")")
+            }
+            notify(parts.joined(separator: ", ") + ".", failed > 0 ? .warning : .success)
+        }
+    }
+
+    func suggestedFolder(for row: DocumentRow) async -> String? {
+        guard let lib = library(of: row) else { return nil }
+        let suggestions = (try? await lib.store.pathSuggestions(for: row.doc)) ?? []
+        guard let best = suggestions.first(where: { lib.owns(path: $0.path) }),
+              Store.canonical(best.path) != Store.canonical(row.directory) else { return nil }
+        return best.path
+    }
+
+    /// Only a new arrival drops its original; one already in the library keeps it so it can be reverted.
+    private func keep(_ version: KeptVersion, of row: DocumentRow, in lib: Library) async -> KeepOutcome {
+        switch version {
+        case .original:
+            guard (try? await lib.store.originalFileURL(for: row.doc)) != nil,
+                  await lib.indexer.revertOptimization(ids: [row.doc]) > 0 else { return .unchanged }
+            return .restored
+        case .optimized:
+            var outcome = KeepOutcome.unchanged
+            if row.originalSize == nil {
+                let result = await lib.indexer.optimize(ids: [row.doc])
+                outcome = result.count > 0 ? .optimized(saved: result.saved) : .compact
+            }
+            if row.fromOutside { try? await lib.store.deleteOriginalFile(for: row.doc) }
+            return outcome
+        }
+    }
+
+    /// Optimizes a throwaway copy, so the review can show the result; nil when it would not help.
+    func optimizationPreview(of row: DocumentRow) async -> OptimizationPreview? {
+        guard let lib = library(of: row) else { return nil }
+        let options = lib.settings.optimizerOptions
+        let source = row.url
+        return await Task.detached(priority: .utility) { () -> OptimizationPreview? in
+            let fm = FileManager.default
+            let dir = fm.temporaryDirectory
+                .appendingPathComponent("doctopus-preview-\(UUID().uuidString)", isDirectory: true)
+            let stem = source.deletingPathExtension().lastPathComponent
+            let copy = dir.appendingPathComponent("\(stem) (optimized).\(source.pathExtension)")
+            guard (try? fm.createDirectory(at: dir, withIntermediateDirectories: true)) != nil,
+                  (try? fm.copyItem(at: source, to: copy)) != nil,
+                  let result = try? Optimizer.optimize(url: copy, options: options) else {
+                try? fm.removeItem(at: dir)
+                return nil
+            }
+            return OptimizationPreview(url: copy, newSize: result.newSize)
+        }.value
     }
 
     private func rowAfter(_ row: DocumentRow) -> DocumentRef? {

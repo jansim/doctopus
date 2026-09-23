@@ -15,8 +15,10 @@ Each indexed folder holds its index in a `library.doctopus` package inside it:
 ```
 
 `meta.json` records the library format version and the app version that last
-wrote it, so a library from a newer Doctopus is refused with a reason rather
-than opened and written back missing whatever it did not know about.
+wrote it, and the index records its schema version. A library from a newer
+Doctopus is refused with a reason if either is ahead, rather than opened and
+written back missing whatever it did not know about. Each migration commits
+together with its version, so an interrupted upgrade resumes where it stopped.
 
 Finder shows the package as a single Doctopus document that opens the library
 on a double-click; Show Package Contents gets at the files.
@@ -32,6 +34,9 @@ folder travels with the folder.
 
 Keeping the second group out of the library is also what keeps an API key out
 of a folder somebody might share.
+
+Settings badges every section with its side of this split (`ScopeBadge`);
+fields, stored per library but edited in every open one, get a third badge.
 
 ## The index
 
@@ -49,7 +54,7 @@ statements. FTS5 with `unicode61 remove_diacritics 2`.
 | `tags`, `document_tags` | Relational junction for multi-tag assignment. Tags nest up to five deep, and assigning a child attaches every ancestor |
 | `tag_suggestions` | Model-proposed tags awaiting acceptance or dismissal, kept apart from `document_tags` so they never count toward a tag's sidebar total |
 | `path_suggestions` | Every folder the router considered for a new document, best first — what the review offers, and all there is to go on when it moved nothing |
-| `events`, `processing` | `events` is the append-only record of what happened to a document, never trimmed, and the inspector's History — what the pipeline did to it, and what somebody changed by hand afterwards. Hand edits made less than five minutes apart, with nothing else logged in between, fold into one `edited` row, one line of `detail` per change. `processing` is the bounded recency view the review reads, holding only which event is on show and whether it has been signed off; a hand edit never enters it |
+| `events`, `processing` | `events` is the append-only record of what happened to a document, never trimmed, and the inspector's History — where it came from (scanned, imported from a path, or already in the library at one), what the pipeline did to it, and what somebody changed by hand afterwards. Hand edits made less than five minutes apart, with nothing else logged in between, fold into one `edited` row, one line of `detail` per change. `processing` is the bounded recency view the review reads, holding only which event is on show and whether it has been signed off; a hand edit never enters it |
 | `finder_tags` | Index of the Finder's own tags, which live on the files themselves |
 | `value_icons` | Per-value icons for the fields whose values are still strings; a correspondent or type keeps its icon on its own row, where a rename cannot orphan it |
 | `aliases` | Registry of generated Finder aliases, for automated pruning when tags change |

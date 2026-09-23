@@ -57,6 +57,8 @@ struct DocumentRow: Identifiable, Hashable, Sendable {
     var isAliasHere = false
 
     var queue: QueueInfo?
+    /// Imported or scanned; only filled in for the review queues and the detail.
+    var fromOutside = false
 
     var tags: [Tag] = []
     var finderTags: [String] = []
@@ -81,9 +83,16 @@ struct QueueInfo: Hashable, Sendable {
     var icon: String { DocumentAction.icon(action) }
 }
 
+enum DocumentOrigin: Sendable {
+    case scanned
+    case imported(from: String)
+    case inLibrary
+}
+
 enum DocumentAction {
     static func icon(_ action: String) -> String {
         switch action {
+        case "added": return "plus.circle"
         case "routed": return "arrow.triangle.branch"
         case "optimized": return "arrow.down.circle"
         case "renamed": return "character.cursor.ibeam"
@@ -99,6 +108,7 @@ enum DocumentAction {
 
     static func label(_ action: String) -> String {
         switch action {
+        case "added": return "Added"
         case "routed": return "Filed"
         case "optimized": return "Optimized"
         case "renamed": return "Renamed"
@@ -309,7 +319,6 @@ struct FolderNode: Identifiable, Hashable, Sendable {
 
 enum Selection: Hashable, Sendable {
     case all
-    case inbox
     case queue
     case folder(String)
     case tag(TagRef)

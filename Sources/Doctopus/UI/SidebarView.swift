@@ -389,23 +389,14 @@ struct FolderRow: View {
         guard let name = TextPrompt.ask(title: "New Folder",
                                         message: "Create a folder inside \(node.name).",
                                         initial: "Untitled Folder") else { return }
-        let url = URL(fileURLWithPath: node.path).appendingPathComponent(name, isDirectory: true)
-        do {
-            try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
-            model.refreshAll()
-            model.selection = .folder(url.path)
-        } catch {
-            model.errorMessage = "Could not create “\(name)”: \(error.localizedDescription)"
-        }
+        model.createFolder(named: name, in: URL(fileURLWithPath: node.path))
     }
 
     private func renameFolder() {
         guard let name = TextPrompt.ask(title: "Rename Folder",
                                         message: "Renames the folder on disk; documents inside keep their tags and metadata.",
                                         initial: node.name) else { return }
-        let source = URL(fileURLWithPath: node.path)
-        let destination = source.deletingLastPathComponent().appendingPathComponent(name, isDirectory: true)
-        try? FileManager.default.moveItem(at: source, to: destination)
+        model.renameFolder(node.path, to: name)
     }
 }
 
