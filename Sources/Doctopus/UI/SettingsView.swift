@@ -444,7 +444,26 @@ struct IntelligenceSettings: View {
                 } header: {
                     Text("Suggestions")
                 } footer: {
-                    Text("Only the checked fields are taken from the model. The others are left to the built-in heuristics, and re-analyzing a document leaves them as they are.")
+                    Text("Only the checked fields are asked of the model. The others are left to the built-in heuristics, and re-analyzing a document leaves them as they are.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+
+                Section {
+                    TextEditor(text: promptTemplate)
+                        .font(.system(.caption, design: .monospaced))
+                        .frame(minHeight: 260)
+                    HStack {
+                        Text(model.settings.llmPromptTemplate.isEmpty
+                             ? "Using the default prompt." : "Using your own prompt.")
+                            .font(.caption).foregroundStyle(.secondary)
+                        Spacer()
+                        Button("Reset to Default") { model.settings.llmPromptTemplate = "" }
+                            .disabled(model.settings.llmPromptTemplate.isEmpty)
+                    }
+                } header: {
+                    Text("Prompt")
+                } footer: {
+                    Text(verbatim: "Text between {{#summary}} and {{/summary}} is only sent when Summary is checked above — likewise correspondent, documentType, language, intent, title and tags. {{#pageImage}}…{{/pageImage}} is only sent with a page image, {{^pageImage}}…{{/pageImage}} only without one. Keep asking for a JSON object with those keys; the document itself follows in a separate message.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
 
@@ -482,6 +501,13 @@ struct IntelligenceSettings: View {
             model.refreshModelStatus()
             await loadModels()
         }
+    }
+
+    /// Shows the default until it is edited, and stores nothing while it
+    /// matches, so the default can keep improving underneath.
+    private var promptTemplate: Binding<String> {
+        Binding(get: { model.settings.llmPromptTemplate.nilIfBlank ?? LLMPrompt.defaultTemplate },
+                set: { model.settings.llmPromptTemplate = $0 == LLMPrompt.defaultTemplate ? "" : $0 })
     }
 
     @ViewBuilder

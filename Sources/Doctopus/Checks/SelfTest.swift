@@ -689,6 +689,27 @@ enum SelfTest {
         Check.that("the system message asks for the document's own language",
                    LLMPrompt.instructions().contains("language the document"))
 
+        let everything = LLMPrompt.instructions()
+        let tagsOnly = LLMPrompt.instructions(fields: [.tags])
+        print("  tags-only prompt: \(tagsOnly.count) of \(everything.count) characters")
+        Check.that("the prompt only asks for the fields that are switched on",
+                   tagsOnly.contains("\"tags\":") && !tagsOnly.contains("\"summary\":")
+                       && !tagsOnly.contains("\"title\":") && everything.contains("\"summary\":"))
+        Check.that("a rendered prompt carries no template tags and no gaps where fields were",
+                   !tagsOnly.contains("{{") && !everything.contains("{{")
+                       && !tagsOnly.contains("\n\n\n") && everything.contains("Keys:\n\"summary\":"))
+        Check.that("a field left out does not leave its mention in the closing line",
+                   !LLMPrompt.instructions(fields: [.title]).contains("[] for no tags"))
+        Check.that("a broken template still renders instead of failing",
+                   PromptTemplate.render("a {{#x}}b {{name}}", flags: ["x"]) == "a b {{name}}"
+                       && PromptTemplate.render("a {{^x}}b", flags: ["x"]) == "a ")
+        let schema = LLMPrompt.jsonSchema([.title, .tags])
+        Check.that("the response schema holds exactly the fields asked for",
+                   (schema["required"] as? [String]) == ["title", "tags"]
+                       && (schema["properties"] as? [String: Any])?.count == 2)
+        Check.that("an answer to a tags-only question is not mistaken for an empty one",
+                   RemoteLLMService.parse(#"{"tags": ["gas"]}"#, fields: [.tags])?.tags == ["gas"])
+
         let pdfs = (try? await store.listDocuments(selection: .all, query: SearchQuery("ext:pdf"),
                                                    sort: .added, ascending: false)) ?? []
         if let pdf = pdfs.first(where: { FileManager.default.fileExists(atPath: $0.path) }) {

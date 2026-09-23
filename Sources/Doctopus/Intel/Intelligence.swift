@@ -67,9 +67,9 @@ enum InsightField: String, Codable, CaseIterable, Sendable, Identifiable {
 }
 
 extension DocumentInsight {
-    /// Drops what the user asked the model not to fill in. Only the answer is
-    /// trimmed, never the question: every document is asked the same thing, so
-    /// switching a field back on later does not make older answers stale.
+    /// Drops what the user asked the model not to fill in. The prompt already
+    /// leaves those fields out, but a model answering in plain JSON, or an edited
+    /// prompt, can still volunteer them.
     func keeping(_ fields: Set<InsightField>) -> DocumentInsight {
         var kept = self
         if !fields.contains(.title) { kept.title = nil }
@@ -137,59 +137,82 @@ enum MetadataSource: Equatable {
 /// Shared by both backends: asking them different questions would make their
 /// answers incomparable.
 enum LLMPrompt {
-    /// Bump whenever the question changes, so `is:stale-analysis` can find the
-    /// documents answered under an older one.
-    static let promptVersion = 4
+    /// Bump whenever the default template changes, so `is:stale-analysis` can
+    /// find the documents answered under an older one.
+    static let promptVersion = 5
 
-    static func instructions(withPageImage: Bool = false) -> String {
-        let sources = withPageImage
-            ? "Answer only from the page image and the document text you are given."
-            : "Answer only from the text you are given."
-        return """
+    /// The one place the question is written down. Both backends render it, and
+    /// Settings › Intelligence lets the user replace it outright. Each field's
+    /// section is only kept when that field is asked for; `pageImage` is set when
+    /// the first page goes along as an image.
+    static let defaultTemplate = """
         You classify scanned personal and business documents for a filing system. \
-        \(sources) Write the summary and the title in the language the document \
-        itself is written in — never translate them, and never answer in English \
-        because the question is in English. If a field is genuinely not \
-        determinable, return an empty string rather than guessing. Never invent \
-        names, amounts or dates. Be terse. Candidate tags are options, not requirements.
+        {{#pageImage}}Answer only from the page image and the document text you are given.{{/pageImage}}\
+        {{^pageImage}}Answer only from the text you are given.{{/pageImage}} \
+        If a field is genuinely not determinable, return an empty string rather than guessing. \
+        Never invent names, amounts or dates. Be terse.
+
+        Reply with one JSON object and nothing else — no prose, no code fence, no reasoning. Keys:
+        {{#summary}}
+        "summary": One or two sentences on what the document concerns, in the language the document itself is written in — never translate it, and never answer in English because the question is in English. State the substance directly — never open with "This document", "This is" or the document type, e.g. "Quarterly electricity bill for the Hauptstr. flat, due 14 March."
+        {{/summary}}
+        {{#correspondent}}
+        "correspondent": The organisation or person that issued or sent it.
+        {{/correspondent}}
+        {{#documentType}}
+        "documentType": Category, e.g. Invoice, Receipt, Contract, Bank Statement, Tax, Insurance, Payslip, Medical, Certificate, Letter.
+        {{/documentType}}
+        {{#language}}
+        "language": The two-letter ISO 639-1 code of the document body and nothing else, e.g. en, de, fr — never the name of the language.
+        {{/language}}
+        {{#intent}}
+        "intent": What the reader is expected to do: exactly one of pay, sign, file, read, respond, none.
+        {{/intent}}
+        {{#title}}
+        "title": A short canonical title in the language the document itself is written in — never translated — at most 5 words, without a date, e.g. "Electricity bill", "Stromrechnung", "Tenancy agreement termination".
+        {{/title}}
+        {{#tags}}
+        "tags": Two to four lowercase topical tags, as an array of strings. The library's existing tags are options, not requirements.
+        {{/tags}}
+
+        Use "" for any string you cannot determine{{#tags}} and [] for no tags{{/tags}}.
         """
-    }
 
-    static let fields: [(key: String, description: String)] = [
-        ("summary", "One or two sentences on what the document concerns, in the language of the document. State the substance directly — never open with \"This document\", \"This is\" or the document type, e.g. \"Quarterly electricity bill for the Hauptstr. flat, due 14 March.\""),
-        ("correspondent", "The organisation or person that issued or sent it."),
-        ("documentType", "Category, e.g. Invoice, Receipt, Contract, Bank Statement, Tax, Insurance, Payslip, Medical, Certificate, Letter."),
-        ("language", "The two-letter ISO 639-1 code of the document body and nothing else, e.g. en, de, fr — never the name of the language."),
-        ("intent", "What the reader is expected to do: exactly one of pay, sign, file, read, respond, none."),
-        ("title", "A short canonical title in the language of the document, at most 5 words, without a date, e.g. \"Electricity bill\", \"Stromrechnung\", \"Tenancy agreement termination\"."),
-    ]
-    static let tagsDescription = "Two to four lowercase topical tags."
+    /// What one document is asked: the template and the fields it is rendered for.
+    struct Question: Sendable, Equatable {
+        var template = LLMPrompt.defaultTemplate
+        var fields = Set(InsightField.allCases)
 
-    static func jsonInstructions(withPageImage: Bool = false) -> String {
-        let keys = fields.map { "\"\($0.key)\": \($0.description)" }
-            + ["\"tags\": \(tagsDescription) An array of strings."]
-        return instructions(withPageImage: withPageImage) + """
-
-
-        Reply with one JSON object and nothing else — no prose, no code fence, no
-        reasoning. Keys:
-        \(keys.joined(separator: "\n"))
-
-        Use "" for any string you cannot determine and [] for no tags.
-        """
-    }
-
-    static var jsonSchema: [String: Any] {
-        var properties: [String: Any] = [:]
-        for field in fields {
-            properties[field.key] = ["type": "string", "description": field.description]
+        func instructions(withPageImage: Bool = false) -> String {
+            LLMPrompt.instructions(template: template, fields: fields, withPageImage: withPageImage)
         }
-        properties["tags"] = ["type": "array", "description": tagsDescription,
-                              "items": ["type": "string"]]
+
+        var jsonSchema: [String: Any] { LLMPrompt.jsonSchema(fields) }
+    }
+
+    static func instructions(template: String = defaultTemplate,
+                             fields: Set<InsightField> = Set(InsightField.allCases),
+                             withPageImage: Bool = false) -> String {
+        var flags = Set(fields.map(\.rawValue))
+        if withPageImage { flags.insert("pageImage") }
+        return PromptTemplate.render(template, flags: flags)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Descriptions live in the template alone, so an edited prompt is never
+    /// contradicted by a second copy of the question hidden in the schema.
+    static func jsonSchema(_ fields: Set<InsightField>) -> [String: Any] {
+        let asked = InsightField.allCases.filter { fields.contains($0) }
+        var properties: [String: Any] = [:]
+        for field in asked {
+            properties[field.rawValue] = field == .tags
+                ? ["type": "array", "items": ["type": "string"]]
+                : ["type": "string"]
+        }
         return [
             "type": "object",
             "properties": properties,
-            "required": fields.map(\.key) + ["tags"],
+            "required": asked.map(\.rawValue),
             "additionalProperties": false,
         ]
     }
@@ -229,12 +252,14 @@ actor Intelligence {
     private var config = RemoteLLMConfig()
     private var excerptLimit = 6000
     private var fields = Set(InsightField.allCases)
+    private var template = LLMPrompt.defaultTemplate
 
     func update(settings: AppSettings) async {
         backend = settings.llmBackend
         config = settings.remoteConfig
         excerptLimit = settings.llmExcerptLimit
         fields = settings.predictedFields
+        template = settings.llmPromptTemplate.nilIfBlank ?? LLMPrompt.defaultTemplate
     }
 
     func status() async -> LLMStatus {
@@ -256,23 +281,20 @@ actor Intelligence {
     func enrich(text: String, filename: String, url: URL? = nil, pageCount: Int? = nil,
                 candidateTags: [String] = []) async -> DocumentInsight? {
         guard !fields.isEmpty else { return nil }
-        return await ask(text: text, filename: filename, url: url, pageCount: pageCount,
-                         candidateTags: candidateTags)?.keeping(fields)
-    }
-
-    private func ask(text: String, filename: String, url: URL?, pageCount: Int?,
-                     candidateTags: [String]) async -> DocumentInsight? {
         let readable = text.count >= LLMPrompt.minimumCharacters
+        let question = LLMPrompt.Question(template: template, fields: fields)
+        let candidateTags = fields.contains(.tags) ? candidateTags : []
         switch backend {
         case .off:
             return nil
         case .onDevice:
             guard readable else { return nil }
-            return await onDevice.enrich(text: text, filename: filename, limit: excerptLimit, candidateTags: candidateTags)
+            return await onDevice.enrich(text: text, filename: filename, question: question,
+                                         limit: excerptLimit, candidateTags: candidateTags)
         case .remote:
             let image = await pageImage(for: url)
             guard readable || image != nil else { return nil }
-            return await remote.enrich(text: text, filename: filename,
+            return await remote.enrich(text: text, filename: filename, question: question,
                                        pageImage: image, pageCount: pageCount ?? image?.pageCount,
                                        config: config, limit: excerptLimit, candidateTags: candidateTags)
         }

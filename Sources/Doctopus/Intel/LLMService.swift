@@ -16,33 +16,6 @@ struct DocumentInsight: Sendable {
     var source: String = "llm"
 }
 
-#if canImport(FoundationModels)
-@available(macOS 26.0, *)
-@Generable
-private struct GeneratedInsight {
-    @Guide(description: "One or two sentences on what the document concerns, in the language of the document. No preamble — never open with \"This document\" or \"This is\".")
-    var summary: String
-
-    @Guide(description: "The organisation or person that issued or sent the document. Empty string if unclear.")
-    var correspondent: String
-
-    @Guide(description: "Document category, e.g. Invoice, Receipt, Contract, Bank Statement, Tax, Insurance, Payslip, Medical, Certificate, Letter.")
-    var documentType: String
-
-    @Guide(description: "ISO 639-1 language code of the document body, e.g. en, de, fr.")
-    var language: String
-
-    @Guide(description: "What the reader is expected to do: pay, sign, file, read, respond, or none.")
-    var intent: String
-
-    @Guide(description: "A short canonical title in the language of the document, at most 5 words, without a date, e.g. \"Electricity bill\", \"Stromrechnung\".")
-    var title: String
-
-    @Guide(description: "Two to four lowercase topical tags, comma separated, no hashes.")
-    var tags: String
-}
-#endif
-
 /// FoundationModels only exists on macOS 26 with Apple Intelligence, so it is
 /// weak-linked and every touchpoint sits behind an availability check.
 actor LLMService {
@@ -57,6 +30,7 @@ actor LLMService {
     }
     #endif
     private var _session: AnyObject?
+    private var sessionInstructions: String?
 
     func probe() -> LLMStatus {
         if probed { return status }
@@ -80,27 +54,19 @@ actor LLMService {
 
     var isAvailable: Bool { probe().isReady }
 
-    func enrich(text: String, filename: String, limit: Int, candidateTags: [String] = []) async -> DocumentInsight? {
+    func enrich(text: String, filename: String, question: LLMPrompt.Question = .init(),
+                limit: Int, candidateTags: [String] = []) async -> DocumentInsight? {
         guard probe().isReady else { return nil }
         #if canImport(FoundationModels)
         if #available(macOS 26.0, *) {
             let prompt = LLMPrompt.user(text: text, filename: filename, limit: limit, candidateTags: candidateTags)
             do {
-                let session = try currentSession()
-                let response = try await session.respond(to: prompt, generating: GeneratedInsight.self)
-                let g = response.content
-                return DocumentInsight(
-                    summary: g.summary.nilIfBlank,
-                    correspondent: g.correspondent.nilIfBlank,
-                    docType: g.documentType.nilIfBlank,
-                    language: g.language.nilIfBlank.map { String($0.prefix(5)).lowercased() },
-                    intent: g.intent.nilIfBlank?.lowercased(),
-                    title: g.title.nilIfBlank,
-                    tags: g.tags.split(separator: ",")
-                        .map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
-                        .filter { !$0.isEmpty && $0.count < 32 },
-                    confidence: 0.9,
-                    source: "llm:v\(LLMPrompt.promptVersion)")
+                let session = currentSession(instructions: question.instructions())
+                let response = try await session.respond(to: prompt, schema: try Self.schema(question.fields))
+                guard var insight = RemoteLLMService.parse(response.content.jsonString,
+                                                           fields: question.fields) else { return nil }
+                insight.source = "llm:v\(LLMPrompt.promptVersion)"
+                return insight
             } catch {
                 // A single failure (context overflow, guardrail, model unloaded)
                 // must not poison the rest of the batch.
@@ -113,11 +79,33 @@ actor LLMService {
     }
 
     #if canImport(FoundationModels)
+    /// Built at run time rather than declared `@Generable`, so the model is
+    /// only made to produce the fields that were asked for. What each one means
+    /// is left to the prompt, which the user may have rewritten.
     @available(macOS 26.0, *)
-    private func currentSession() throws -> LanguageModelSession {
-        if let existing = sessionBox { return existing }
-        let s = LanguageModelSession(instructions: LLMPrompt.instructions())
+    private static func schema(_ fields: Set<InsightField>) throws -> GenerationSchema {
+        let text = DynamicGenerationSchema(type: String.self)
+        let properties = InsightField.allCases.filter { fields.contains($0) }.map { field in
+            DynamicGenerationSchema.Property(
+                name: field.rawValue,
+                description: nil,
+                schema: field == .tags
+                    ? DynamicGenerationSchema(arrayOf: text, minimumElements: 0, maximumElements: 4)
+                    : text)
+        }
+        let root = DynamicGenerationSchema(name: "DocumentInsight", description: nil,
+                                           properties: properties)
+        return try GenerationSchema(root: root, dependencies: [])
+    }
+
+    /// The session keeps its instructions for life, so a changed prompt or
+    /// field selection needs a new one.
+    @available(macOS 26.0, *)
+    private func currentSession(instructions: String) -> LanguageModelSession {
+        if let existing = sessionBox, sessionInstructions == instructions { return existing }
+        let s = LanguageModelSession(instructions: instructions)
         sessionBox = s
+        sessionInstructions = instructions
         return s
     }
 

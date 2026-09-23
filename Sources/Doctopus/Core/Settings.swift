@@ -36,6 +36,9 @@ struct AppWideSettings: StoredSettings, Sendable, Equatable {
     /// switched on: a field added later starts out on, and a stored name that
     /// no longer exists cannot fail the decode and reset every other setting.
     var unpredictedFields: [String] = []
+    /// Empty means `LLMPrompt.defaultTemplate`, so a user who never touched the
+    /// prompt picks up improvements to it with the next version.
+    var llmPromptTemplate = ""
     var ocrConcurrency = 0        // 0 = auto
     var viewMode: ViewMode = .list
     var galleryThumbnailSize: Double = 150
