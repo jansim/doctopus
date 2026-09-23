@@ -4,7 +4,7 @@ import AppKit
 struct RootView: View {
     @Environment(AppModel.self) private var model
     @State private var columnVisibility = NavigationSplitViewVisibility.all
-    @State private var showInspector = true
+    @SceneStorage("showInspector") private var showInspector = true
     @State private var renameSheet = false
     @State private var showQuickSwitcher = false
 

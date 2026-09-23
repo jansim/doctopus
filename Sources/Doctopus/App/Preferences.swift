@@ -1,4 +1,5 @@
 import Foundation
+import AppKit
 
 @MainActor
 enum Preferences {
@@ -35,6 +36,12 @@ enum Preferences {
             return name.isEmpty ? "library.doctopus" : name
         }
         set { defaults.set(newValue, forKey: Key.libraryFolderName) }
+    }
+
+    /// Also what the Dock icon's menu lists. Skipped for the headless checks.
+    static func noteRecentLibrary(_ container: URL) {
+        guard defaults == .standard else { return }
+        NSDocumentController.shared.noteNewRecentDocumentURL(container)
     }
 
     static func uiState(_ key: String) -> String? { defaults.string(forKey: "ui.\(key)") }

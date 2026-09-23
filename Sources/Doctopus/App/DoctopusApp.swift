@@ -83,7 +83,11 @@ struct DoctopusApp: App {
                 }
         }
         .defaultSize(width: 1320, height: 840)
-        .commands { DoctopusCommands(model: model) }
+        .commands {
+            SidebarCommands()
+            InspectorCommands()
+            DoctopusCommands(model: model)
+        }
 
         Settings {
             SettingsView().environment(model)
@@ -158,6 +162,16 @@ struct DoctopusCommands: Commands {
                 .keyboardShortcut("n", modifiers: [.command])
             Button("Open Library…") { model.openLibraryPicker() }
                 .keyboardShortcut("o", modifiers: [.command])
+            Menu("Open Recent") {
+                let recent = NSDocumentController.shared.recentDocumentURLs
+                    .filter { FileManager.default.fileExists(atPath: $0.path) }
+                ForEach(recent, id: \.self) { url in
+                    Button(url.deletingLastPathComponent().lastPathComponent) { model.openLibrary(at: url) }
+                }
+                Divider()
+                Button("Clear Menu") { NSDocumentController.shared.clearRecentDocuments(nil) }
+                    .disabled(recent.isEmpty)
+            }
             Button("Quick Open…") { NotificationCenter.default.post(name: .showQuickSwitcher, object: nil) }
                 .keyboardShortcut("o", modifiers: [.command, .shift])
             Button("Import Files…") { importPanel() }

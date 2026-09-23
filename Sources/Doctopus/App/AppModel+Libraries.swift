@@ -48,6 +48,7 @@ extension AppModel {
         }
 
         libraries.append(lib)
+        if persist { Preferences.noteRecentLibrary(lib.container) }
         startWatching(lib)
 
         if libraries.count == 1 {

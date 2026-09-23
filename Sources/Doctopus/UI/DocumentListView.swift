@@ -36,6 +36,7 @@ struct DocumentListView: View {
             }
         }
         .overlay(alignment: .center) { emptyState }
+        .onCopyCommand { model.selectedRows.map { NSItemProvider(object: $0.url as NSURL) } }
         .dropDestination(for: URL.self) { urls, _ in
             model.handleDroppedFiles(urls)
         } isTargeted: { dropTargeted = $0 }
@@ -485,6 +486,7 @@ private struct DocumentMenu: View {
             Button("Quick Look") { model.quickLook(startingAt: rows.first) }
             Button("Open in Default App") { model.open(rows) }
             Button("Reveal in Finder") { model.reveal(rows) }
+            ShareLink(items: rows.map(\.url))
             if model.selection.isQueueMode {
                 Divider()
                 Button("Approve") { model.setApproved(rows, true) }
