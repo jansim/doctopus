@@ -123,7 +123,7 @@ actor Store {
         var fileID: Int64? = nil
     }
 
-    func upsertDocument(_ f: FileFacts) throws -> (id: Int64, isNew: Bool, changed: Bool) {
+    func upsertDocument(_ f: FileFacts, origin: DocumentOrigin) throws -> (id: Int64, isNew: Bool, changed: Bool) {
         let url = URL(fileURLWithPath: f.path)
         let relative = relPath(f.path)
         let dir = relPath(url.deletingLastPathComponent().path)
@@ -157,7 +157,25 @@ actor Store {
                   .int(f.size), .double(f.mtime.timeIntervalSince1970),
                   .double(f.created.timeIntervalSince1970), .int(f.fileID)])
         try refreshSearchIndex(id)
+        try logOrigin(docID: id, origin, path: relative)
         return (id, true, true)
+    }
+
+    private func logOrigin(docID: Int64, _ origin: DocumentOrigin, path: String) throws {
+        let detail: String
+        var source: String?
+        switch origin {
+        case .scanned:
+            detail = "Scanned"
+        case .imported(let from):
+            detail = "Imported from \(from)"
+            source = from
+        case .inLibrary:
+            detail = "In library at \(path)"
+        }
+        try db.run("INSERT INTO events(doc_id, at, action, detail, from_path) VALUES(?,?,?,?,?)",
+                   [.int(docID), .double(Date().timeIntervalSince1970),
+                    .text("added"), .text(detail), .text(source)])
     }
 
     func reconcileMissing(seenPaths: Set<String>) throws -> Int {
