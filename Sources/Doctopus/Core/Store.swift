@@ -960,13 +960,19 @@ actor Store {
         var to: String
     }
 
-    func lastUndoableEvent() throws -> UndoableEvent? {
+    /// Where the event log stands, so an undo can take back what came after.
+    func latestEventID() throws -> Int64 {
+        try db.first("SELECT COALESCE(MAX(id), 0) FROM events") { $0.int(0) } ?? 0
+    }
+
+    func lastUndoableEvent(of docID: Int64, after mark: Int64) throws -> UndoableEvent? {
         let actions = EventAction.undoable.map { "'\($0.rawValue)'" }.joined(separator: ", ")
         return try db.first("""
             SELECT id, doc_id, action, from_path, to_path FROM events
-            WHERE action IN (\(actions)) AND from_path IS NOT NULL AND to_path IS NOT NULL
-            ORDER BY at DESC, id DESC LIMIT 1
-            """) {
+            WHERE doc_id=? AND id>? AND action IN (\(actions))
+              AND from_path IS NOT NULL AND to_path IS NOT NULL
+            ORDER BY id DESC LIMIT 1
+            """, [.int(docID), .int(mark)]) {
             UndoableEvent(id: $0.int(0), docID: $0.int(1), action: EventAction(stored: $0.string(2)),
                           from: absPath($0.string(3)), to: absPath($0.string(4)))
         }

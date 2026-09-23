@@ -756,38 +756,52 @@ actor Indexer {
         return target
     }
 
-    /// Takes back the latest file change still on record. One whose file has
-    /// since moved outside Doctopus is dropped, so it cannot block older ones.
-    func undoLast() async -> (action: EventAction, filename: String)? {
-        while let event = try? await store.lastUndoableEvent() {
-            let moved = URL(fileURLWithPath: event.to)
-            if event.action == .unfiled {
-                try? await store.deleteEvent(event.id)
-                guard let current = try? await store.documentPath(event.docID),
-                      FileManager.default.fileExists(atPath: current),
-                      let alias = try? AliasManager.createAlias(to: URL(fileURLWithPath: current),
-                                                                 in: moved.deletingLastPathComponent())
-                else { continue }
+    /// Takes back every file change made to these documents since `mark`,
+    /// newest first. One whose file has since moved outside Doctopus is dropped
+    /// rather than left to block the rest.
+    @discardableResult
+    func undo(_ docIDs: [Int64], since mark: Int64) async -> Int {
+        var undone = 0
+        for id in docIDs {
+            while let event = try? await store.lastUndoableEvent(of: id, after: mark) {
+                guard await takeBack(event) else { break }
+                undone += 1
+            }
+        }
+        if undone > 0 { onDataChanged() }
+        return undone
+    }
+
+    /// False when the change could not be put back, which leaves it on record.
+    private func takeBack(_ event: Store.UndoableEvent) async -> Bool {
+        let moved = URL(fileURLWithPath: event.to)
+        let current = (try? await store.documentPath(event.docID)).map { URL(fileURLWithPath: $0) }
+        switch event.action {
+        case .aliased:
+            if let current, AliasManager.removeAlias(at: event.to, pointingTo: current) {
+                for alias in (try? await store.aliases(for: event.docID)) ?? [] where alias.path == event.to {
+                    try? await store.deleteAlias(id: alias.id)
+                }
+            }
+        case .unfiled:
+            if let current, FileManager.default.fileExists(atPath: current.path),
+               let alias = try? AliasManager.createAlias(to: current, in: moved.deletingLastPathComponent()) {
                 try? await store.recordAlias(docID: event.docID, tagID: nil, path: alias.path)
-                return (event.action, URL(fileURLWithPath: current).lastPathComponent)
             }
-            guard FileManager.default.fileExists(atPath: moved.path) else {
-                try? await store.deleteEvent(event.id)
-                continue
-            }
+        default:
+            guard FileManager.default.fileExists(atPath: moved.path) else { break }
             let original = URL(fileURLWithPath: event.from)
             guard let target = try? await relocate(event.docID, from: moved,
                                                    into: original.deletingLastPathComponent(),
                                                    named: original.lastPathComponent, action: nil, detail: nil)
-            else { return nil }
-            try? await store.deleteEvent(event.id)
+            else { return false }
             if event.action == .promoted,
                let alias = try? AliasManager.createAlias(to: target, in: moved.deletingLastPathComponent()) {
                 try? await store.recordAlias(docID: event.docID, tagID: nil, path: alias.path)
             }
-            return (event.action, target.lastPathComponent)
         }
-        return nil
+        try? await store.deleteEvent(event.id)
+        return true
     }
 
     struct RuleApplyResult: Sendable {

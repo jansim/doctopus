@@ -150,13 +150,6 @@ struct DoctopusCommands: Commands {
     let model: AppModel
 
     var body: some Commands {
-        // Added alongside the standard Undo/Redo rather than replacing it: ⌘Z
-        // has to keep undoing typing in text fields, not move files on disk.
-        CommandGroup(after: .undoRedo) {
-            Button("Undo File Change") { model.undo() }
-                .keyboardShortcut("z", modifiers: [.command, .option])
-        }
-
         CommandGroup(replacing: .newItem) {
             Button("New Library from Folder…") { model.addLibrary() }
                 .keyboardShortcut("n", modifiers: [.command])

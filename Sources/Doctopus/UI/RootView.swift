@@ -3,6 +3,7 @@ import AppKit
 
 struct RootView: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.undoManager) private var undoManager
     @State private var columnVisibility = NavigationSplitViewVisibility.all
     @SceneStorage("showInspector") private var showInspector = true
     @State private var renameSheet = false
@@ -50,6 +51,7 @@ struct RootView: View {
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in
             model.appResignedActive()
         }
+        .onAppear { model.undoManager = undoManager }
         .onOpenURL { url in
             model.handleURL(url)
         }

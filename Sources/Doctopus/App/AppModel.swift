@@ -239,6 +239,10 @@ final class AppModel {
     var revealedFolders: Set<String> = []
     var revealTask: Task<Void, Never>?
 
+    // AppModel+Libraries, undo
+    /// The window's, so a file change can be taken back with Edit › Undo.
+    @ObservationIgnored weak var undoManager: UndoManager?
+
     // AppModel+Import, continuous scanning
     var scanSession: ScanSession?
     var scanRound: Task<Void, Never>?

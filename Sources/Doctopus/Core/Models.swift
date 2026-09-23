@@ -86,8 +86,8 @@ enum EventAction: String, Sendable {
 
     init(stored: String) { self = EventAction(rawValue: stored) ?? .indexed }
 
-    /// What Undo File Change can take back.
-    static let undoable: [EventAction] = [.moved, .renamed, .routed, .promoted, .unfiled]
+    /// What Edit › Undo can take back.
+    static let undoable: [EventAction] = [.moved, .renamed, .routed, .promoted, .unfiled, .aliased]
 
     var icon: String {
         switch self {

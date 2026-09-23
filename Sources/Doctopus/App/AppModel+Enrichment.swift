@@ -110,23 +110,31 @@ extension AppModel {
 
     func rename(_ rows: [DocumentRow], template: String) {
         Task {
+            let marks = await eventMarks(rows)
             var n = 0
             for (lib, rows) in grouped(rows) {
                 n += await lib.indexer.rename(ids: rows.map(\.doc), template: template)
             }
             if n == 0 { notify("No files needed renaming.", .info) }
-            else { notify("Renamed \(n) file\(n == 1 ? "" : "s").") }
+            else {
+                offerUndo("Rename", of: rows, since: marks)
+                notify("Renamed \(n) file\(n == 1 ? "" : "s").")
+            }
         }
     }
 
     func move(_ rows: [DocumentRow], to destination: URL) {
         Task {
+            let marks = await eventMarks(rows)
             var moved = 0
             for (lib, rows) in grouped(rows) {
                 moved += await lib.indexer.move(ids: rows.map(\.doc), to: destination)
             }
             if moved == 0 { notify("Those documents are already in “\(destination.lastPathComponent)”.", .info) }
-            else { notify("Moved \(moved) document\(moved == 1 ? "" : "s") to “\(destination.lastPathComponent)”.") }
+            else {
+                offerUndo("Move", of: rows, since: marks)
+                notify("Moved \(moved) document\(moved == 1 ? "" : "s") to “\(destination.lastPathComponent)”.")
+            }
         }
     }
 
@@ -147,7 +155,8 @@ extension AppModel {
         let viewedFolder: String?
         if case .folder(let path) = selection { viewedFolder = path } else { viewedFolder = nil }
         Task {
-            var trashed = 0
+            let marks = await eventMarks(rows)
+            var trashed: [DocumentRow] = []
             var rehomed: [(title: String, folder: String)] = []
             var unfiled = 0
             var failed: [String] = []
@@ -172,7 +181,7 @@ extension AppModel {
                         try? await lib.store.softDelete(row.doc,
                                                         trashPath: (landed as URL?)?.path)
                         FileScanner.pruneEmptyDirectories(startingFrom: row.url.deletingLastPathComponent(), upTo: lib.store.root)
-                        trashed += 1
+                        trashed.append(row)
                     } catch {
                         failed.append(row.filename)
                     }
@@ -182,11 +191,15 @@ extension AppModel {
             if !failed.isEmpty {
                 errorMessage = "Could not move \(failed.count == 1 ? "“\(failed[0])”" : "\(failed.count) files") to the Trash. \(failed.count == 1 ? "It was" : "They were") left where \(failed.count == 1 ? "it is" : "they are")."
             }
+            let kept = rows.filter { row in !trashed.contains { $0.id == row.id } }
+            if !trashed.isEmpty || !rehomed.isEmpty || unfiled > 0 {
+                offerUndo("Move to Trash", of: kept, since: marks, restoring: trashed)
+            }
             var said: [String] = []
-            if trashed > 0 {
-                said.append(trashed == 1 && rows.count == 1
+            if !trashed.isEmpty {
+                said.append(trashed.count == 1 && rows.count == 1
                     ? "Moved “\(rows[0].displayTitle)” to the Trash."
-                    : "Moved \(trashed) documents to the Trash.")
+                    : "Moved \(trashed.count) documents to the Trash.")
             }
             if !rehomed.isEmpty {
                 said.append(rehomed.count == 1
@@ -257,6 +270,7 @@ extension AppModel {
 
     func createAliases(_ rows: [DocumentRow], in folder: URL) {
         Task {
+            let marks = await eventMarks(rows)
             var made = 0
             for (lib, rows) in grouped(rows) {
                 for row in rows {
@@ -273,6 +287,7 @@ extension AppModel {
             refreshAll()
             if made == 0 { notify("Those documents are already in that folder.", .info) }
             else {
+                offerUndo("File Here", of: rows, since: marks)
                 notify("Filed \(made) document\(made == 1 ? "" : "s") in “\(folder.lastPathComponent)” as \(made == 1 ? "an alias" : "aliases").")
             }
         }

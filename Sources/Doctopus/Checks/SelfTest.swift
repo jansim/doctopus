@@ -462,6 +462,7 @@ enum SelfTest {
                .url.deletingLastPathComponent(),
            let created = try? AliasManager.createAlias(to: source.url, in: second) {
             try? await store.recordAlias(docID: source.doc, tagID: nil, path: created.path)
+            let mark = (try? await store.latestEventID()) ?? 0
             let landed = await indexer.promoteClosestAlias(docID: source.doc)
             print("  deleted \(source.filename.padded(32)) → "
                   + (landed?.deletingLastPathComponent().lastPathComponent ?? "the Trash"))
@@ -477,13 +478,12 @@ enum SelfTest {
                        !((try? await store.aliases(for: source.doc)) ?? [])
                            .contains(where: { $0.path == created.path }))
 
-            let undone = await indexer.undoLast()
+            let undone = await indexer.undo([source.doc], since: mark)
             let restored = (try? await store.documentPath(source.doc)) ?? ""
             let placements = ((try? await store.aliases(for: source.doc)) ?? [])
                 .filter { $0.tagID == nil }
             Check.that("undo returns a promoted document to the folder it was deleted from",
-                       undone?.action == .promoted && restored == source.path,
-                       undone?.action.rawValue ?? "nothing to undo")
+                       undone == 1 && restored == source.path, "\(undone) change(s) undone")
             Check.that("…and writes the alias it stood in for again",
                        placements.contains(where: { alias in
                            let at = URL(fileURLWithPath: alias.path)
@@ -511,21 +511,21 @@ enum SelfTest {
                 .first(where: { $0.path == created.path })
             AliasManager.removeAlias(at: created.path, pointingTo: doc.url)
             if let record { try? await store.deleteAlias(id: record.id) }
+            let mark = (try? await store.latestEventID()) ?? 0
             try? await store.logProcessing(
                 docID: doc.doc, action: .unfiled,
                 detail: "No longer filed under \(elsewhere.lastPathComponent)",
                 confidence: nil, rule: nil, from: doc.path, to: created.path, approved: true)
 
-            let undone = await indexer.undoLast()
+            let undone = await indexer.undo([doc.doc], since: mark)
             let back = ((try? await store.aliases(for: doc.doc)) ?? []).filter { $0.tagID == nil }
             // `&&` takes its right side as a non-async autoclosure, so anything
             // awaited has to be in hand before the check, not inside it.
             let stillHome = (try? await store.documentPath(doc.doc)) ?? ""
             Check.that("undoing a deleted alias writes the alias again, and nothing else",
-                       undone?.action == .unfiled
+                       undone == 1
                            && back.contains(where: { AliasManager.isAlias(URL(fileURLWithPath: $0.path)) })
-                           && stillHome == doc.path,
-                       undone?.action.rawValue ?? "nothing to undo")
+                           && stillHome == doc.path, "\(undone) change(s) undone")
 
             for alias in back {
                 AliasManager.removeAlias(at: alias.path, pointingTo: doc.url)
@@ -1294,13 +1294,14 @@ enum SelfTest {
 
             let origPath = subject.path
             let movedTarget = root.appendingPathComponent("Work/undotest-\(subject.filename)")
+            let mark = (try? await store.latestEventID()) ?? 0
             if (try? FileManager.default.moveItem(at: subject.url, to: movedTarget)) != nil {
                 try? await store.updatePath(subject.doc, to: movedTarget.path)
                 try? await store.logProcessing(docID: subject.doc, action: .moved, detail: "test move",
                                                confidence: nil, rule: nil, from: origPath, to: movedTarget.path, approved: true)
-                let undone = await indexer.undoLast()
+                let undone = await indexer.undo([subject.doc], since: mark)
                 Check.that("undo restores moved file to previous path",
-                           undone != nil && FileManager.default.fileExists(atPath: origPath))
+                           undone == 1 && FileManager.default.fileExists(atPath: origPath))
             }
         }
 

@@ -22,6 +22,9 @@ when nobody chose a folder for it. Concretely:
   moves into.
 - Move to Trash uses the Trash, never a hard delete, and keeps the index entry
   if trashing fails.
+- Every file change made from the window — a move, a rename, filing, an alias,
+  Move to Trash — is taken back by Edit › Undo (⌘Z), which reverses that change
+  alone, not whatever was filed since.
 - Deleting a row that is in the folder being viewed only as an alias deletes
   that alias and nothing else — the document it points at is elsewhere and is
   not what was deleted — and Undo writes the alias back.

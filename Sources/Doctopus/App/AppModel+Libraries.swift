@@ -192,16 +192,29 @@ extension AppModel {
     }
     func cancelIndexing() { Task { for lib in libraries { await lib.indexer.cancel() } } }
 
-    func undo() {
-        guard let lib = activeLibrary else { return }
-        Task {
-            if let undone = await lib.indexer.undoLast() {
-                refreshAll()
-                notify("Undid the last file change to “\(undone.filename)”.", .success)
-            } else {
-                notify("Nothing to undo.", .info)
+    /// Where each library's event log stands before a file change, so Edit ›
+    /// Undo can take back that change alone and not whatever was filed since.
+    func eventMarks(_ rows: [DocumentRow]) async -> [LibraryID: Int64] {
+        var marks: [LibraryID: Int64] = [:]
+        for (lib, _) in grouped(rows) { marks[lib.id] = (try? await lib.store.latestEventID()) ?? 0 }
+        return marks
+    }
+
+    func offerUndo(_ name: String, of rows: [DocumentRow], since marks: [LibraryID: Int64],
+                   restoring trashed: [DocumentRow] = []) {
+        guard let undoManager, !rows.isEmpty || !trashed.isEmpty else { return }
+        undoManager.registerUndo(withTarget: self) { model in
+            MainActor.assumeIsolated {
+                if !trashed.isEmpty { model.restore(trashed) }
+                Task {
+                    for (lib, rows) in model.grouped(rows) {
+                        await lib.indexer.undo(rows.map(\.doc), since: marks[lib.id] ?? .max)
+                    }
+                    model.refreshAll()
+                }
             }
         }
+        undoManager.setActionName(name)
     }
 
     func verifyLibrary() {

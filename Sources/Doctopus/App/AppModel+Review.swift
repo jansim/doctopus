@@ -49,6 +49,7 @@ extension AppModel {
         }
         let next = advance ? rowAfter(row) : nil
         Task {
+            let marks = await eventMarks([row])
             let wanted = secondaries.subtracting([primary.path])
             let existing = ((try? await lib.store.aliases(for: row.doc)) ?? []).filter { $0.tagID == nil }
             var have: Set<String> = []
@@ -91,6 +92,7 @@ extension AppModel {
                 try? await lib.store.setDocumentApproved(row.doc, true)
                 if !keepOriginal { try? await lib.store.deleteOriginalFile(for: row.doc) }
             }
+            if moved || !added.isEmpty { offerUndo("File", of: [row], since: marks) }
             if let next { selectedIDs = [next] }
             refreshAll()
             reloadDetail()
