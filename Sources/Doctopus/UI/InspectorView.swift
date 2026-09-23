@@ -329,8 +329,7 @@ private struct DetailInspector: View {
     }
 
     private var shortPath: String {
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        return row.directory.hasPrefix(home) ? "~" + row.directory.dropFirst(home.count) : row.directory
+        row.directory.abbreviatingHome
     }
 
     @ViewBuilder

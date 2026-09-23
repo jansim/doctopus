@@ -71,7 +71,7 @@ final class AppModel {
             let appWideChanged = current.appWide != self.savedSettings?.appWide
             self.savedSettings = current
             lib.settings = current
-            await current.save(to: lib.store)
+            do { try await current.save(to: lib.store) } catch { self.report(error, "save the settings") }
             await lib.indexer.update(settings: current)
             if renamesChanged { self.refreshRuleMatches() }
             if appWideChanged { await Workspace.shared.share(current.appWide, from: self) }
@@ -160,7 +160,8 @@ final class AppModel {
             var updated = field
             updated.showInList = shown
             Task {
-                try? await lib.store.updateField(updated)
+                do { try await lib.store.updateField(updated) }
+                catch { report(error, "update the column for “\(field.name)”") }
                 refreshAll()
             }
         }
@@ -207,6 +208,19 @@ final class AppModel {
     private(set) var notice: Notice?
     private var noticeDismissal: Task<Void, Never>?
 
+    /// A store write or file change that failed, said rather than dropped.
+    func report(_ error: Error, _ doing: String) {
+        errorMessage = "Could not \(doing): \(error.localizedDescription)"
+    }
+
+    /// One line per file, under what could not be done to them.
+    func report(failures: [String], _ doing: String) {
+        guard !failures.isEmpty else { return }
+        let listed = failures.prefix(5).joined(separator: "\n")
+            + (failures.count > 5 ? "\n…and \(failures.count - 5) more" : "")
+        errorMessage = "Could not \(doing) \(failures.count == 1 ? "one file" : "\(failures.count) files"):\n\n\(listed)"
+    }
+
     func notify(_ text: String, _ kind: Notice.Kind = .success) {
         let next = Notice(text: text, kind: kind)
         notice = next
@@ -235,6 +249,9 @@ final class AppModel {
     // AppModel+Refresh
     var searchTask: Task<Void, Never>?
     var reloadTask: Task<Void, Never>?
+    /// The last library that could not be read, so a refresh that keeps
+    /// failing says so once rather than on every pass.
+    var refreshProblem: String?
     var detailTask: Task<Void, Never>?
     var reloadDocsTask: Task<Void, Never>?
     var currentLimit = 500

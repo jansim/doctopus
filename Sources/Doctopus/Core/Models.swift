@@ -381,6 +381,13 @@ extension String {
         let t = trimmingCharacters(in: .whitespacesAndNewlines)
         return t.isEmpty ? nil : t
     }
+
+    /// The path with the user's home directory shown as `~`.
+    var abbreviatingHome: String {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        if self == home { return "~" }
+        return hasPrefix(home + "/") ? "~" + dropFirst(home.count) : self
+    }
 }
 
 /// `metadata.source` is written as `backend[:model][:vN]`. Read it back only

@@ -7,6 +7,11 @@ extension AppModel {
         return try? JSONDecoder().decode(T.self, from: data)
     }
 
+    nonisolated static func attempt<T: Sendable>(
+        _ body: @Sendable () async throws -> T) async -> Result<T, Error> {
+        do { return .success(try await body()) } catch { return .failure(error) }
+    }
+
     func refreshAll() {
         reloadTask?.cancel()
         guard let lib = library else {
@@ -22,15 +27,30 @@ extension AppModel {
             async let finder = (try? await store.finderTags()) ?? []
             async let labels = (try? await store.finderTagLabels()) ?? [:]
             async let q = (try? await store.processingQueue()) ?? []
-            async let s = (try? await store.stats()) ?? Store.Stats()
+            // Stands for the rest: an index that cannot answer this cannot
+            // answer any of them, and should not pass for an empty library.
+            async let s = Self.attempt { try await store.stats() }
             async let svList = (try? await store.savedViews()) ?? []
 
-            let (t, tg, fs, ftg, lbl, qq, ss, svs) = await (tree, tagList, fieldList, finder, labels, q, s, svList)
+            let (t, tg, fs, ftg, lbl, qq, counted, svs) = await (tree, tagList, fieldList, finder, labels, q, s, svList)
             var facetMap: [String: [Facet]] = [:]
             for field in fs { facetMap[field.key] = (try? await store.facets(field: field)) ?? [] }
             FinderTags.learn(lbl)
 
             guard !Task.isCancelled else { return }
+            let problem: String?
+            switch counted {
+            case .success(let counts):
+                lib.stats = counts
+                problem = nil
+            case .failure(let error):
+                lib.stats = Store.Stats()
+                problem = "Could not read the index of \(lib.displayName) (\(error.localizedDescription)). What is shown may be incomplete."
+            }
+            if problem != self.refreshProblem {
+                self.refreshProblem = problem
+                if let problem { self.errorMessage = problem }
+            }
             lib.folders = t
             lib.tags = tg
             lib.fields = fs.sorted { $0.position < $1.position }
@@ -38,7 +58,6 @@ extension AppModel {
             lib.finderTags = ftg
             lib.facets = facetMap
             lib.queue = qq.sorted { $0.at > $1.at }
-            lib.stats = ss
             self.refreshRuleMatches()
             // A passive refresh (e.g. a Finder change) must not snap an
             // expanded "Load More" list back down to the first page.

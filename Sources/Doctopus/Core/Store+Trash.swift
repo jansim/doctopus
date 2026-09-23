@@ -11,9 +11,9 @@ extension Store {
             SELECT id, filename, deleted_path FROM documents
             WHERE missing=1 AND deleted_at IS NULL AND COALESCE(missing_since, 0) < ?
             """, [.double(cutoff)]) { ($0.int(0), $0.string(1), $0.stringOrNil(2)) }
-        guard !doomed.isEmpty else { return 0 }
-
-        let inTrash = Store.trashedFilenames()
+        // A Trash that cannot be listed says nothing about what is in it, so
+        // nothing is forgotten until it can be.
+        guard !doomed.isEmpty, let inTrash = Store.trashedFilenames() else { return 0 }
         var purged = 0
         for (id, filename, trashPath) in doomed {
             if let trashPath, FileManager.default.fileExists(atPath: trashPath) { continue }
@@ -28,13 +28,18 @@ extension Store {
     /// collision on the way in ("scan 2.pdf"), so this is a hint rather than a
     /// proof — but erring towards keeping a row costs a hundred bytes, and
     /// erring the other way costs everything anyone ever typed about it.
-    private static func trashedFilenames() -> Set<String> {
+    /// Nil when the Trash cannot be listed.
+    private static func trashedFilenames() -> Set<String>? {
         guard let trash = try? FileManager.default.url(for: .trashDirectory, in: .userDomainMask,
-                                                       appropriateFor: nil, create: false),
-              let contents = try? FileManager.default.contentsOfDirectory(
-                at: trash, includingPropertiesForKeys: nil,
-                options: [.skipsSubdirectoryDescendants])
-        else { return [] }
+                                                       appropriateFor: nil, create: false)
+        else { return nil }
+        return filenames(in: trash)
+    }
+
+    static func filenames(in folder: URL) -> Set<String>? {
+        guard let contents = try? FileManager.default.contentsOfDirectory(
+            at: folder, includingPropertiesForKeys: nil, options: [.skipsSubdirectoryDescendants])
+        else { return nil }
         return Set(contents.map(\.lastPathComponent))
     }
 

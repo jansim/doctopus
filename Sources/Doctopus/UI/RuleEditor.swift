@@ -236,6 +236,7 @@ struct RuleEditor: View {
             // library when the user presses Add Rule / Save.
             let res = await library.indexer.applyRule(tidied())
             applyStatus = "Applied to \(res.matched) document\(res.matched == 1 ? "" : "s") (\(res.moved) moved, \(res.renamed) renamed, \(res.tagged) tagged)."
+                + (res.failures.isEmpty ? "" : " \(res.failures.count) could not be changed: \(res.failures[0])")
             applying = false
         }
     }

@@ -138,7 +138,9 @@ struct RulesSettings: View {
     private func save(_ rule: Rule) {
         guard let store = model.library?.store else { return }
         Task {
-            let id = (try? await store.upsertRule(rule)) ?? rule.id
+            var id = rule.id
+            do { id = try await store.upsertRule(rule) }
+            catch { model.report(error, "save the rule “\(rule.name)”") }
             await load()
             selected = id
             rulesChanged()
@@ -165,8 +167,10 @@ struct RulesSettings: View {
     private func remove(_ id: Rule.ID) {
         guard let store = model.library?.store else { return }
         Task {
-            try? await store.deleteRule(id)
-            if selected == id { selected = nil }
+            do {
+                try await store.deleteRule(id)
+                if selected == id { selected = nil }
+            } catch { model.report(error, "delete the rule") }
             await load()
             rulesChanged()
         }
@@ -180,7 +184,7 @@ struct RulesSettings: View {
         var ordered = rules.map(\.id)
         ordered.swapAt(index, target)
         Task {
-            try? await store.reorderRules(ordered)
+            do { try await store.reorderRules(ordered) } catch { model.report(error, "reorder the rules") }
             await load()
             selected = id
             rulesChanged()

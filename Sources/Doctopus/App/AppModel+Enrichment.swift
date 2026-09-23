@@ -64,27 +64,32 @@ extension AppModel {
         guard let lib = library else { return }
         Task {
             let result = await lib.indexer.optimize(ids: rows.map(\.doc))
-            let count = result.count, saved = result.saved
-            if count == 0 { notify("Nothing to optimize — these files are already compact.", .info) }
-            else { notify("Optimized \(count) file\(count == 1 ? "" : "s"), saved \(ByteFormat.string(saved)).") }
+            let count = result.count, saved = result.saved, failures = result.failures
+            report(failures: failures, "optimize")
+            if count == 0, failures.isEmpty { notify("Nothing to optimize — these files are already compact.", .info) }
+            else if count > 0 { notify("Optimized \(count) file\(count == 1 ? "" : "s"), saved \(ByteFormat.string(saved)).") }
         }
     }
 
     func revertOptimization(_ rows: [DocumentRow]) {
         guard let lib = library else { return }
         Task {
-            let count = await lib.indexer.revertOptimization(ids: rows.map(\.doc))
-            if count == 0 { notify("No original pre-optimization files were found to restore.", .info) }
-            else { notify("Reverted \(count) document\(count == 1 ? "" : "s") to original.") }
+            let result = await lib.indexer.revertOptimization(ids: rows.map(\.doc))
+            let count = result.done, failures = result.failures
+            report(failures: failures, "revert")
+            if count == 0, failures.isEmpty { notify("No original pre-optimization files were found to restore.", .info) }
+            else if count > 0 { notify("Reverted \(count) document\(count == 1 ? "" : "s") to original.") }
         }
     }
 
     func deleteOriginal(_ row: DocumentRow) {
         guard let lib = library else { return }
         Task {
-            try? await lib.store.deleteOriginalFile(for: row.doc)
+            do {
+                try await lib.store.deleteOriginalFile(for: row.doc)
+                notify("Deleted the saved original of “\(row.displayTitle)”.")
+            } catch { report(error, "delete the saved original of “\(row.displayTitle)”") }
             reloadDetail()
-            notify("Deleted the saved original of “\(row.displayTitle)”.")
         }
     }
 
@@ -92,9 +97,12 @@ extension AppModel {
         guard let lib = library else { return }
         Task {
             let mark = await eventMark()
-            let n = await lib.indexer.rename(ids: rows.map(\.doc), template: template)
-            if n == 0 { notify("No files needed renaming.", .info) }
-            else {
+            let result = await lib.indexer.rename(ids: rows.map(\.doc), template: template)
+            let n = result.done, failures = result.failures
+            report(failures: failures, "rename")
+            if n == 0 {
+                if failures.isEmpty { notify("No files needed renaming.", .info) }
+            } else {
                 offerUndo("Rename", of: rows, since: mark)
                 notify("Renamed \(n) file\(n == 1 ? "" : "s").")
             }
@@ -105,9 +113,14 @@ extension AppModel {
         guard let lib = library else { return }
         Task {
             let mark = await eventMark()
-            let moved = await lib.indexer.move(ids: rows.map(\.doc), to: destination)
-            if moved == 0 { notify("Those documents are already in “\(destination.lastPathComponent)”.", .info) }
-            else {
+            let result = await lib.indexer.move(ids: rows.map(\.doc), to: destination)
+            let moved = result.done, failures = result.failures
+            report(failures: failures, "move to “\(destination.lastPathComponent)”")
+            if moved == 0 {
+                if failures.isEmpty {
+                    notify("Those documents are already in “\(destination.lastPathComponent)”.", .info)
+                }
+            } else {
                 offerUndo("Move", of: rows, since: mark)
                 notify("Moved \(moved) document\(moved == 1 ? "" : "s") to “\(destination.lastPathComponent)”.")
             }
@@ -137,34 +150,58 @@ extension AppModel {
             var rehomed: [(title: String, folder: String)] = []
             var unfiled = 0
             var failed: [String] = []
+            var reasons: [String] = []
             for row in rows {
                 if row.isAliasHere, let folder = viewedFolder {
                     unfiled += await removeAliasPlacements(of: row, in: folder, from: lib)
                     continue
                 }
-                if let newHome = await lib.indexer.promoteClosestAlias(docID: row.doc) {
-                    rehomed.append((row.displayTitle,
-                                    newHome.deletingLastPathComponent().lastPathComponent))
+                do {
+                    if let newHome = try await lib.indexer.promoteClosestAlias(docID: row.doc) {
+                        rehomed.append((row.displayTitle,
+                                        newHome.deletingLastPathComponent().lastPathComponent))
+                        continue
+                    }
+                } catch {
+                    // Also filed elsewhere, so it must not reach the Trash
+                    // just because it could not move there.
+                    failed.append(row.filename)
+                    reasons.append("“\(row.filename)” could not move to where else it is filed: "
+                                   + error.localizedDescription)
                     continue
                 }
+                var landed: NSURL?
                 do {
-                    var landed: NSURL?
                     try FileManager.default.trashItem(at: row.url, resultingItemURL: &landed)
-                    // The row stays, marked deleted and remembering where
-                    // in the Trash the file went. Rescuing the file a month
-                    // later brings the document back with its title, tags
-                    // and history rather than as something brand new.
-                    try? await lib.store.softDelete(row.doc,
-                                                    trashPath: (landed as URL?)?.path)
-                    FileScanner.pruneEmptyDirectories(startingFrom: row.url.deletingLastPathComponent(), upTo: lib.store.root)
-                    trashed.append(row)
                 } catch {
                     failed.append(row.filename)
+                    reasons.append("“\(row.filename)”: \(error.localizedDescription)")
+                    continue
                 }
+                // The row stays, marked deleted and remembering where
+                // in the Trash the file went. Rescuing the file a month
+                // later brings the document back with its title, tags
+                // and history rather than as something brand new.
+                do {
+                    try await lib.store.softDelete(row.doc, trashPath: (landed as URL?)?.path)
+                } catch {
+                    // Unrecorded, the row would stay listed with its file
+                    // gone, so the file comes back out of the Trash.
+                    let putBack = (landed as URL?).map {
+                        (try? FileManager.default.moveItem(at: $0, to: row.url)) != nil
+                    } ?? false
+                    failed.append(row.filename)
+                    reasons.append("“\(row.filename)”: \(error.localizedDescription)"
+                                   + (putBack ? "" : " It is in the Trash, but still listed here."))
+                    continue
+                }
+                FileScanner.pruneEmptyDirectories(startingFrom: row.url.deletingLastPathComponent(), upTo: lib.store.root)
+                trashed.append(row)
             }
             refreshAll()
             if !failed.isEmpty {
                 errorMessage = "Could not move \(failed.count == 1 ? "“\(failed[0])”" : "\(failed.count) files") to the Trash. \(failed.count == 1 ? "It was" : "They were") left where \(failed.count == 1 ? "it is" : "they are")."
+                    + "\n\n" + reasons.prefix(5).joined(separator: "\n")
             }
             let kept = rows.filter { row in !trashed.contains { $0.id == row.id } }
             if !trashed.isEmpty || !rehomed.isEmpty || unfiled > 0 {
@@ -196,6 +233,7 @@ extension AppModel {
         Task {
             var restored = 0
             var gone: [String] = []
+            var failures: [String] = []
             for row in rows {
                 guard let trashed = try? await lib.store.trashedFile(row.doc) else {
                     gone.append(row.filename)
@@ -209,13 +247,20 @@ extension AppModel {
                     let target = Naming.uniqueURL(in: destination.deletingLastPathComponent(),
                                                   filename: destination.lastPathComponent)
                     try FileManager.default.moveItem(at: URL(fileURLWithPath: trashed), to: target)
-                    try? await lib.store.restore(row.doc, at: target.path)
+                    do {
+                        try await lib.store.restore(row.doc, at: target.path)
+                    } catch {
+                        // The row still says it is in the Trash, so that is
+                        // where the file goes back to.
+                        try? FileManager.default.moveItem(at: target, to: URL(fileURLWithPath: trashed))
+                        throw error
+                    }
                     try? await lib.store.logProcessing(
                         docID: row.doc, action: .moved, detail: "Restored from the Trash",
                         confidence: nil, rule: nil, from: trashed, to: target.path, approved: true)
                     restored += 1
                 } catch {
-                    gone.append(row.filename)
+                    failures.append("“\(row.filename)”: \(error.localizedDescription)")
                 }
             }
             refreshAll()
@@ -224,6 +269,7 @@ extension AppModel {
                     ? "“\(gone[0])” is no longer in the Trash, so there is nothing to put back."
                     : "\(gone.count) of these files are no longer in the Trash."
             }
+            report(failures: failures, "put back")
             if restored > 0 {
                 notify(restored == 1 ? "Put “\(rows.first?.displayTitle ?? "the document")” back."
                                      : "Put \(restored) documents back.")
@@ -234,10 +280,20 @@ extension AppModel {
     func forget(_ rows: [DocumentRow]) {
         guard let lib = library else { return }
         Task {
-            for row in rows { try? await lib.store.deleteDocument(row.doc) }
+            var removed = 0
+            var failures: [String] = []
+            for row in rows {
+                do {
+                    try await lib.store.deleteDocument(row.doc)
+                    removed += 1
+                } catch { failures.append("“\(row.filename)”: \(error.localizedDescription)") }
+            }
             refreshAll()
-            notify(rows.count == 1 ? "Removed “\(rows[0].displayTitle)” from the library."
-                                   : "Removed \(rows.count) documents from the library.")
+            report(failures: failures, "remove from the library")
+            if removed > 0 {
+                notify(rows.count == 1 ? "Removed “\(rows[0].displayTitle)” from the library."
+                                       : "Removed \(removed) documents from the library.")
+            }
         }
     }
 
@@ -246,10 +302,21 @@ extension AppModel {
         Task {
             let mark = await eventMark()
             var made = 0
+            var failures: [String] = []
             for row in rows {
                 guard row.url.deletingLastPathComponent().path != folder.path else { continue }
-                guard let created = try? AliasManager.createAlias(to: row.url, in: folder) else { continue }
-                try? await lib.store.recordAlias(docID: row.doc, tagID: nil, path: created.path)
+                let created: URL
+                do {
+                    created = try AliasManager.createAlias(to: row.url, in: folder)
+                } catch { failures.append("“\(row.filename)”: \(error.localizedDescription)"); continue }
+                do {
+                    try await lib.store.recordAlias(docID: row.doc, tagID: nil, path: created.path)
+                } catch {
+                    // An alias the index does not know of could never be pruned.
+                    AliasManager.removeAlias(at: created.path, pointingTo: row.url)
+                    failures.append("“\(row.filename)”: \(error.localizedDescription)")
+                    continue
+                }
                 try? await lib.store.logProcessing(docID: row.doc, action: .aliased,
                                                    detail: "Also filed under \(folder.lastPathComponent)",
                                                    confidence: nil, rule: nil, from: row.path,
@@ -257,8 +324,10 @@ extension AppModel {
                 made += 1
             }
             refreshAll()
-            if made == 0 { notify("Those documents are already in that folder.", .info) }
-            else {
+            report(failures: failures, "file in “\(folder.lastPathComponent)”")
+            if made == 0 {
+                if failures.isEmpty { notify("Those documents are already in that folder.", .info) }
+            } else {
                 offerUndo("File Here", of: rows, since: mark)
                 notify("Filed \(made) document\(made == 1 ? "" : "s") in “\(folder.lastPathComponent)” as \(made == 1 ? "an alias" : "aliases").")
             }

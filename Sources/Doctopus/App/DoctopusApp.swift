@@ -197,7 +197,7 @@ struct DoctopusCommands: Commands {
                 let recent = NSDocumentController.shared.recentDocumentURLs
                     .filter { FileManager.default.fileExists(atPath: $0.path) }
                 ForEach(recent, id: \.self) { url in
-                    Button(url.deletingLastPathComponent().lastPathComponent) { model.openLibrary(at: url) }
+                    Button(url.deletingLastPathComponent().path.abbreviatingHome) { model.openLibrary(at: url) }
                 }
                 Divider()
                 Button("Clear Menu") { NSDocumentController.shared.clearRecentDocuments(nil) }

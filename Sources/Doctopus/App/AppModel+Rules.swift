@@ -61,6 +61,7 @@ extension AppModel {
                 result = await lib.indexer.applyRule(rule, onlyTo: row.doc)
             }
             if result.moved + result.renamed > 0 { offerUndo("Apply Rule", of: [row], since: mark) }
+            report(failures: result.failures, "apply “\(name)” to")
             if result.matched > 0,
                let path = try? await lib.store.documentPath(row.doc) {
                 await lib.indexer.syncAliases(docID: row.doc, target: URL(fileURLWithPath: path))
@@ -94,7 +95,8 @@ extension AppModel {
 
     func setRuleSuppressed(_ suppressed: Bool, rule ruleID: Int64, name: String,
                            doc: Int64, in lib: Library) async {
-        try? await lib.store.setRuleSuppressed(suppressed, rule: ruleID, doc: doc)
+        do { try await lib.store.setRuleSuppressed(suppressed, rule: ruleID, doc: doc) }
+        catch { report(error, suppressed ? "mark it as an outlier for “\(name)”" : "take it off the outliers of “\(name)”"); return }
         lib.outlierRevision += 1
         // Update now rather than after the debounced pass.
         if var matches = lib.ruleMatches[doc],

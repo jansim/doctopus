@@ -64,13 +64,14 @@ extension AppModel {
     func addTag(_ name: String, to rows: [DocumentRow]) {
         guard let lib = library else { return }
         Task {
-            if let id = try? await lib.store.tagID(named: name), id > 0 {
-                for row in rows {
-                    try? await lib.store.assign(tag: id, to: row.doc)
+            do {
+                let id = try await lib.store.tagID(named: name)
+                for row in rows where id > 0 {
+                    try await lib.store.assign(tag: id, to: row.doc)
                     try? await lib.store.logEdit(docID: row.doc, detail: "Tagged “\(name)”")
                     await lib.indexer.syncAliases(docID: row.doc, target: row.url)
                 }
-            }
+            } catch { report(error, "tag \(rows.count == 1 ? "it" : "them") “\(name)”") }
             refreshAll()
             reloadDetail()
         }
@@ -80,7 +81,8 @@ extension AppModel {
         guard let lib = library else { return }
         Task {
             for row in rows {
-                try? await lib.store.unassign(tag: tag.tagID, from: row.doc)
+                do { try await lib.store.unassign(tag: tag.tagID, from: row.doc) }
+                catch { report(error, "take “\(tag.name)” off “\(row.displayTitle)”"); continue }
                 try? await lib.store.logEdit(docID: row.doc, detail: "Untagged “\(tag.name)”")
                 await lib.indexer.syncAliases(docID: row.doc, target: row.url)
             }
@@ -92,10 +94,12 @@ extension AppModel {
     func acceptTagSuggestion(_ suggestion: TagSuggestion, for row: DocumentRow) {
         guard let lib = library else { return }
         Task {
-            try? await lib.store.acceptTagSuggestion(suggestion.name, for: row.doc)
-            try? await lib.store.logEdit(docID: row.doc,
-                                         detail: "Tagged “\(suggestion.name)”")
-            await lib.indexer.syncAliases(docID: row.doc, target: row.url)
+            do {
+                try await lib.store.acceptTagSuggestion(suggestion.name, for: row.doc)
+                try? await lib.store.logEdit(docID: row.doc,
+                                             detail: "Tagged “\(suggestion.name)”")
+                await lib.indexer.syncAliases(docID: row.doc, target: row.url)
+            } catch { report(error, "tag it “\(suggestion.name)”") }
             refreshAll()
             reloadDetail()
         }
@@ -104,7 +108,8 @@ extension AppModel {
     func discardTagSuggestion(_ suggestion: TagSuggestion, for row: DocumentRow) {
         guard let lib = library else { return }
         Task {
-            try? await lib.store.discardTagSuggestion(suggestion.name, for: row.doc)
+            do { try await lib.store.discardTagSuggestion(suggestion.name, for: row.doc) }
+            catch { report(error, "discard the suggestion “\(suggestion.name)”") }
             reloadDetail()
         }
     }
@@ -112,10 +117,12 @@ extension AppModel {
     func setTagMirroring(_ tag: Tag, enabled: Bool) {
         guard let lib = library else { return }
         Task {
-            try? await lib.store.setTagMirroring(tag.tagID, enabled, folder: tag.folder)
-            let rows = (try? await lib.store.listDocuments(selection: .tag(tag.id), query: SearchQuery(""),
-                                                           sort: .added, ascending: false, limit: 5000)) ?? []
-            for row in rows { await lib.indexer.syncAliases(docID: row.doc, target: row.url) }
+            do {
+                try await lib.store.setTagMirroring(tag.tagID, enabled, folder: tag.folder)
+                let rows = try await lib.store.listDocuments(selection: .tag(tag.id), query: SearchQuery(""),
+                                                             sort: .added, ascending: false, limit: 5000)
+                for row in rows { await lib.indexer.syncAliases(docID: row.doc, target: row.url) }
+            } catch { report(error, "change how “\(tag.name)” is mirrored") }
             refreshAll()
         }
     }
@@ -123,24 +130,31 @@ extension AppModel {
     func setTagParent(_ tag: Tag, to parent: Tag?) {
         guard let lib = library else { return }
         Task {
-            let moved = (try? await lib.store.setTagParent(tag.tagID, to: parent?.tagID)) ?? false
-            if !moved, parent != nil {
-                errorMessage = "“\(tag.name)” cannot go under “\(parent?.name ?? "")”: "
-                    + "a tag cannot sit inside itself, and tags nest at most \(Tag.maxDepth) deep."
-            }
+            do {
+                let moved = try await lib.store.setTagParent(tag.tagID, to: parent?.tagID)
+                if !moved, parent != nil {
+                    errorMessage = "“\(tag.name)” cannot go under “\(parent?.name ?? "")”: "
+                        + "a tag cannot sit inside itself, and tags nest at most \(Tag.maxDepth) deep."
+                }
+            } catch { report(error, "move “\(tag.name)”") }
             refreshAll()
         }
     }
 
     func createTag(named name: String) {
         guard let lib = library else { return }
-        Task { _ = try? await lib.store.tagID(named: name); refreshAll() }
+        Task {
+            do { _ = try await lib.store.tagID(named: name) } catch { report(error, "create “\(name)”") }
+            refreshAll()
+        }
     }
 
     func renameTag(_ tag: Tag, to name: String) {
         guard let lib = library else { return }
         Task {
-            let survivor = (try? await lib.store.renameTag(tag.tagID, to: name)) ?? tag.tagID
+            let survivor: Int64
+            do { survivor = try await lib.store.renameTag(tag.tagID, to: name) }
+            catch { report(error, "rename “\(tag.name)”"); return }
             if selection == .tag(tag.id) {
                 selection = .tag(survivor)
             }
@@ -151,13 +165,18 @@ extension AppModel {
 
     func setTagColor(_ tag: Tag, _ color: Int64) {
         guard let lib = library else { return }
-        Task { try? await lib.store.setTagColor(tag.tagID, color); refreshAll(); reloadDetail() }
+        Task {
+            do { try await lib.store.setTagColor(tag.tagID, color) } catch { report(error, "recolour “\(tag.name)”") }
+            refreshAll()
+            reloadDetail()
+        }
     }
 
     func deleteTag(_ tag: Tag) {
         guard let lib = library else { return }
         Task {
-            try? await lib.store.deleteTag(tag.tagID)
+            do { try await lib.store.deleteTag(tag.tagID) }
+            catch { report(error, "delete “\(tag.name)”"); refreshAll(); return }
             if selection == .tag(tag.id) { selection = .all }
             refreshAll()
         }
@@ -172,7 +191,8 @@ extension AppModel {
         guard !clean.isEmpty else { return }
         Task {
             for row in rows where FinderTags.add(clean, to: row.url) {
-                try? await lib.store.indexFinderTags(docID: row.doc, entries: FinderTags.entries(row.url))
+                do { try await lib.store.indexFinderTags(docID: row.doc, entries: FinderTags.entries(row.url)) }
+                catch { report(error, "record the Finder tag on “\(row.displayTitle)”"); continue }
                 try? await lib.store.logEdit(docID: row.doc,
                                              detail: "Finder tag “\(clean)” added")
             }
@@ -185,7 +205,8 @@ extension AppModel {
         guard let lib = library else { return }
         Task {
             for row in rows where FinderTags.remove(name, from: row.url) {
-                try? await lib.store.indexFinderTags(docID: row.doc, entries: FinderTags.entries(row.url))
+                do { try await lib.store.indexFinderTags(docID: row.doc, entries: FinderTags.entries(row.url)) }
+                catch { report(error, "record the Finder tag on “\(row.displayTitle)”"); continue }
                 try? await lib.store.logEdit(docID: row.doc,
                                              detail: "Finder tag “\(name)” removed")
             }
@@ -198,7 +219,8 @@ extension AppModel {
     func setValueIcon(_ field: Field, value: String, icon: String?) {
         guard let lib = library else { return }
         Task {
-            try? await lib.store.setValueIcon(field: field, value: value, icon: icon)
+            do { try await lib.store.setValueIcon(field: field, value: value, icon: icon) }
+            catch { report(error, "set the icon for “\(value)”") }
             refreshAll()
         }
     }
@@ -206,8 +228,10 @@ extension AppModel {
     func addNote(_ body: String, to doc: Int64) {
         guard let lib = library, body.nilIfBlank != nil else { return }
         Task {
-            _ = try? await lib.store.addNote(body, to: doc)
-            try? await lib.store.logEdit(docID: doc, detail: "Note added")
+            do {
+                _ = try await lib.store.addNote(body, to: doc)
+                try? await lib.store.logEdit(docID: doc, detail: "Note added")
+            } catch { report(error, "save the note") }
             reloadDetail()
         }
     }
@@ -215,9 +239,11 @@ extension AppModel {
     func updateNote(_ id: Int64, body: String, in doc: Int64) {
         guard let lib = library else { return }
         Task {
-            try? await lib.store.updateNote(id, body: body)
-            try? await lib.store.logEdit(docID: doc,
-                                         detail: body.nilIfBlank == nil ? "Note deleted" : "Note edited")
+            do {
+                try await lib.store.updateNote(id, body: body)
+                try? await lib.store.logEdit(docID: doc,
+                                             detail: body.nilIfBlank == nil ? "Note deleted" : "Note edited")
+            } catch { report(error, body.nilIfBlank == nil ? "delete the note" : "save the note") }
             reloadDetail()
         }
     }
@@ -225,8 +251,10 @@ extension AppModel {
     func deleteNote(_ id: Int64, in doc: Int64) {
         guard let lib = library else { return }
         Task {
-            try? await lib.store.deleteNote(id)
-            try? await lib.store.logEdit(docID: doc, detail: "Note deleted")
+            do {
+                try await lib.store.deleteNote(id)
+                try? await lib.store.logEdit(docID: doc, detail: "Note deleted")
+            } catch { report(error, "delete the note") }
             reloadDetail()
         }
     }
@@ -235,7 +263,8 @@ extension AppModel {
         guard let lib = library else { return }
         Task {
             for row in rows {
-                try? await lib.store.setFieldValue(docID: row.doc, field: field, value: value)
+                do { try await lib.store.setFieldValue(docID: row.doc, field: field, value: value) }
+                catch { report(error, "set \(field.name) on “\(row.displayTitle)”"); continue }
                 try? await lib.store.logEdit(docID: row.doc,
                                              detail: Self.editDetail(field.name, value))
             }
@@ -248,9 +277,11 @@ extension AppModel {
     func setFieldValue(_ doc: Int64, field: Field, value: String?) {
         guard let lib = library else { return }
         Task {
-            try? await lib.store.setFieldValue(docID: doc, field: field, value: value)
-            try? await lib.store.logEdit(docID: doc, detail: Self.editDetail(field.name, value))
-            await lib.indexer.reroute([doc], applyingActions: false)
+            do {
+                try await lib.store.setFieldValue(docID: doc, field: field, value: value)
+                try? await lib.store.logEdit(docID: doc, detail: Self.editDetail(field.name, value))
+                await lib.indexer.reroute([doc], applyingActions: false)
+            } catch { report(error, "set \(field.name)") }
             reloadDetail()
             refreshAll()
         }
@@ -259,8 +290,10 @@ extension AppModel {
     func renameFieldValue(_ field: Field, from old: String, to new: String) {
         guard let lib = library else { return }
         Task {
-            let n = (try? await lib.store.renameFieldValue(field: field, from: old, to: new)) ?? 0
-            if case .field(let key, let value) = selection, key == field.key, value == old {
+            var n = 0
+            do { n = try await lib.store.renameFieldValue(field: field, from: old, to: new) }
+            catch { report(error, "rename “\(old)”") }
+            if case .field(let key, let value) = selection, key == field.key, value == old, n > 0 {
                 selection = .field(field.key, new)
             }
             refreshAll()
@@ -271,12 +304,16 @@ extension AppModel {
     func setEntityMatch(_ field: Field, value: String, pattern: String) {
         guard let lib = library else { return }
         Task {
-            if let column = field.builtinColumn,
-               let id = try? await lib.store.existingEntityID(named: value, builtin: column) {
-                try? await lib.store.setEntityMatch(id, pattern: pattern.nilIfBlank)
-            }
+            var saved = false
+            do {
+                if let column = field.builtinColumn,
+                   let id = try await lib.store.existingEntityID(named: value, builtin: column) {
+                    try await lib.store.setEntityMatch(id, pattern: pattern.nilIfBlank)
+                    saved = true
+                }
+            } catch { report(error, "save what “\(value)” matches") }
             refreshAll()
-            if pattern.nilIfBlank != nil {
+            if saved, pattern.nilIfBlank != nil {
                 notify("Documents mentioning that will be filed as “\(value)”.")
             }
         }
@@ -285,7 +322,8 @@ extension AppModel {
     func deleteFieldValue(_ field: Field, value: String) {
         guard let lib = library else { return }
         Task {
-            try? await lib.store.deleteFieldValue(field: field, value: value)
+            do { try await lib.store.deleteFieldValue(field: field, value: value) }
+            catch { report(error, "delete “\(value)”") }
             if selection == .field(field.key, value) { selection = .all }
             refreshAll()
         }
@@ -295,7 +333,8 @@ extension AppModel {
         guard let lib = library else { return }
         listColumns[visibility: "field.\(field.key)"] = .automatic
         Task {
-            try? await lib.store.updateField(field)
+            do { try await lib.store.updateField(field) }
+            catch { report(error, "update “\(field.name)”") }
             refreshAll()
         }
     }
@@ -303,7 +342,8 @@ extension AppModel {
     func addCustomField(named name: String, type: FieldType = .string) {
         guard let lib = library else { return }
         Task {
-            _ = try? await lib.store.addCustomField(name: name, type: type)
+            do { _ = try await lib.store.addCustomField(name: name, type: type) }
+            catch { report(error, "add “\(name)”") }
             refreshAll()
         }
     }
@@ -311,7 +351,8 @@ extension AppModel {
     func deleteField(_ field: Field) {
         guard let lib = library else { return }
         Task {
-            try? await lib.store.deleteField(field.fieldID)
+            do { try await lib.store.deleteField(field.fieldID) }
+            catch { report(error, "delete “\(field.name)”") }
             if case .field(let key, _) = selection, key == field.key { selection = .all }
             refreshAll()
         }
@@ -321,10 +362,12 @@ extension AppModel {
         guard let lib = library else { return }
         let label = columnLabel(column)
         Task {
-            try? await lib.store.overwriteMetadataField(doc, column: column, value: value?.nilIfBlank)
-            try? await lib.store.logEdit(docID: doc,
-                                         detail: Self.editDetail(label, value))
-            await lib.indexer.reroute([doc], applyingActions: false)
+            do {
+                try await lib.store.overwriteMetadataField(doc, column: column, value: value?.nilIfBlank)
+                try? await lib.store.logEdit(docID: doc,
+                                             detail: Self.editDetail(label, value))
+                await lib.indexer.reroute([doc], applyingActions: false)
+            } catch { report(error, "set \(label)") }
             reloadDetail()
             reloadDocuments()
             refreshRuleMatches()
@@ -339,11 +382,13 @@ extension AppModel {
     func setDocumentDate(_ doc: Int64, _ date: Date?) {
         guard let lib = library else { return }
         Task {
-            try? await lib.store.setDocumentDate(doc, date)
-            try? await lib.store.logEdit(
-                docID: doc,
-                detail: Self.editDetail("Date", date.map(DayDate.display)))
-            await lib.indexer.reroute([doc], applyingActions: false)
+            do {
+                try await lib.store.setDocumentDate(doc, date)
+                try? await lib.store.logEdit(
+                    docID: doc,
+                    detail: Self.editDetail("Date", date.map(DayDate.display)))
+                await lib.indexer.reroute([doc], applyingActions: false)
+            } catch { report(error, "set the date") }
             reloadDetail()
             reloadDocuments()
             refreshRuleMatches()
