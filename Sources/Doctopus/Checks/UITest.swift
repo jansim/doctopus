@@ -518,10 +518,15 @@ enum UITest {
         guard let lib = model.libraries.first else { return }
         let fm = FileManager.default
         model.selection = .all
-        _ = await settle({ !model.documents.isEmpty }, timeout: 10)
-        guard let sample = model.documents.first(where: {
-            $0.ext.lowercased() == "pdf" && $0.library == lib.id && !$0.filename.hasPrefix("review-")
-        }) else {
+        // The list reloads behind the selection, so wait for the full one.
+        var sample: DocumentRow?
+        _ = await settle({
+            sample = model.documents.first {
+                $0.ext.lowercased() == "pdf" && $0.library == lib.id && !$0.filename.hasPrefix("review-")
+            }
+            return sample != nil
+        }, timeout: 10)
+        guard let sample else {
             Check.that("a document to stage a batch from", false)
             return
         }
