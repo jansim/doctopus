@@ -1,13 +1,9 @@
 import Foundation
 
 enum ByteFormat {
-    private static let formatter: ByteCountFormatter = {
-        let f = ByteCountFormatter()
-        f.countStyle = .file
-        f.allowsNonnumericFormatting = false
-        return f
-    }()
-    static func string(_ bytes: Int64) -> String { formatter.string(fromByteCount: bytes) }
+    static func string(_ bytes: Int64) -> String {
+        bytes.formatted(.byteCount(style: .file, spellsOutZero: false))
+    }
 }
 
 extension DateFormatter {

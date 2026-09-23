@@ -61,7 +61,7 @@ struct BulkReview: View {
     private var presetPicker: some View {
         HStack(spacing: 8) {
             Text("Treat them").font(.caption).foregroundStyle(.secondary)
-            Picker("Treat them", selection: Binding(get: { preset }, set: apply)) {
+            Picker("Treat them", selection: Binding(get: { preset }, set: { apply($0) })) {
                 Text("Each by its default").tag(Preset.defaults)
                 Text("All like new").tag(Preset.allNew)
                 Text("All like already in library").tag(Preset.allInLibrary)

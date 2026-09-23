@@ -9,7 +9,7 @@ let package = Package(
             name: "Doctopus",
             path: "Sources/Doctopus",
             swiftSettings: [
-                .swiftLanguageMode(.v5),
+                .swiftLanguageMode(.v6),
                 .unsafeFlags(["-Onone"], .when(configuration: .debug)),
             ],
             linkerSettings: [

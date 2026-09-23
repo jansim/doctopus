@@ -1144,7 +1144,7 @@ enum SelfTest {
         if let targetDoc = rows.first(where: { $0.ext == "pdf" }) {
             let origSize = targetDoc.size
             if let hash = FileScanner.hash(targetDoc.url) {
-                try? await store.saveOriginalFile(for: targetDoc.doc, from: targetDoc.url, hash: hash)
+                _ = try? await store.saveOriginalFile(for: targetDoc.doc, from: targetDoc.url, hash: hash)
                 try? await store.setSizes(targetDoc.doc, size: origSize / 2, originalSize: origSize)
                 let origURL = try? await store.originalFileURL(for: targetDoc.doc)
                 Check.that("pre-optimization original file is preserved", origURL != nil && FileManager.default.fileExists(atPath: origURL!.path))

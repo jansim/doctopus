@@ -490,18 +490,22 @@ extension View {
 /// Holding ⌥ on its own points out, in the sidebar, the folders the selected
 /// documents are in. Only on its own: ⌥ is also half of several shortcuts,
 /// and those should not flash the sidebar on the way past.
+@MainActor
 enum OptionReveal {
+    private static var held: @MainActor (Bool) -> Void = { _ in }
+
     static func install(_ held: @escaping @MainActor (Bool) -> Void) {
+        self.held = held
         _ = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { event in
             let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
                 .intersection([.command, .option, .control, .shift])
-            MainActor.assumeIsolated { held(flags == .option) }
+            MainActor.assumeIsolated { Self.held(flags == .option) }
             return event
         }
         // A key let go while another app is in front never reaches the monitor.
         _ = NotificationCenter.default.addObserver(forName: NSApplication.didResignActiveNotification,
                                                    object: nil, queue: .main) { _ in
-            MainActor.assumeIsolated { held(false) }
+            MainActor.assumeIsolated { Self.held(false) }
         }
     }
 }
