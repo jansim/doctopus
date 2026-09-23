@@ -47,6 +47,9 @@ document is reviewed underneath the list.
 A document a rule would still change shows that rule's changes in purple above
 the rest, each with a checkbox: Apply does the ticked ones — and suppresses the
 rule for the document if any were left unticked — and Suppress does none.
+When several rules match, a purple box above them says so and, where they
+conflict, asks for one of them per disagreement; Apply stays disabled on the
+rules involved until it has an answer, and Apply All settles every match at once.
 
 On the left, everything that was worked out — title, fields, date, tags and tag
 suggestions — is editable in place, or can be discarded in one go; the file is
