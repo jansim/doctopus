@@ -138,10 +138,11 @@ extension AppModel {
             await withTaskGroup(of: (Int, [DocumentRow]).self) { group in
                 for (i, lib) in libs.enumerated() {
                     let libID = lib.id, store = lib.store
+                    let ruleMatched = sel == .needsReview ? lib.ruleMatchedDocs : []
                     group.addTask {
                         var rows = (try? await store.listDocuments(
                             selection: sel, query: query, sort: sortField,
-                            ascending: asc, limit: limit)) ?? []
+                            ascending: asc, limit: limit, ruleMatched: ruleMatched)) ?? []
                         for j in rows.indices {
                             rows[j].library = libID
                             for k in rows[j].tags.indices { rows[j].tags[k].library = libID }

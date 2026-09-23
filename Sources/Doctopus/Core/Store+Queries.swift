@@ -57,7 +57,8 @@ extension Store {
     }
 
     func listDocuments(selection: Selection, query: SearchQuery, sort: SortField,
-                       ascending: Bool, limit: Int = 500, offset: Int = 0) throws -> [DocumentRow] {
+                       ascending: Bool, limit: Int = 500, offset: Int = 0,
+                       ruleMatched: Set<Int64> = []) throws -> [DocumentRow] {
         let allFields = try cachedFields()
         var args: [Database.Value] = []
         var wheres: [String] = selection == .deleted
@@ -91,7 +92,13 @@ extension Store {
         case .untagged:
             wheres.append("d.id NOT IN (SELECT doc_id FROM document_tags)")
         case .needsReview:
-            wheres.append("d.id IN (SELECT doc_id FROM processing WHERE status=0)")
+            // Rule matches are worked out in memory, so the caller names the
+            // documents a rule would still change; they wait here too.
+            var waiting = "d.id IN (SELECT doc_id FROM processing WHERE status=0)"
+            if !ruleMatched.isEmpty {
+                waiting += " OR d.id IN (\(ruleMatched.sorted().map { String($0) }.joined(separator: ",")))"
+            }
+            wheres.append("(\(waiting))")
         case .outliers(_, let rule):
             wheres.append("d.id IN (SELECT doc_id FROM rule_suppressions WHERE rule_id=?)")
             args.append(.int(rule))
@@ -187,7 +194,7 @@ extension Store {
         if selection == .deleted {
             order = "d.deleted_at DESC"
         } else if selection.isQueueMode {
-            order = "pe.at DESC"
+            order = "pe.at DESC, d.created_at DESC"
         } else if sort == .relevance && !joinFTS.isEmpty {
             // bm25() is more negative the better the match.
             order = "h.r ASC, d.created_at DESC"

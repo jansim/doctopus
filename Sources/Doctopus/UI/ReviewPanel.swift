@@ -78,6 +78,10 @@ private struct DocumentReview: View {
         VStack(spacing: 0) {
             header
             Divider()
+            if !model.pendingRuleMatches(for: row).isEmpty {
+                RuleMatchReview(row: row)
+                Divider()
+            }
             HStack(alignment: .top, spacing: 0) {
                 GeneratedInfoEditor(detail: detail, version: $version)
                     .frame(minWidth: 250, idealWidth: 330, maxWidth: 400)
@@ -107,6 +111,9 @@ private struct DocumentReview: View {
             }
             Spacer(minLength: 8)
             ArrivalBadge(arrival: arrival)
+            if !model.pendingRuleMatches(for: row).isEmpty {
+                Badge("Rule match", tint: .purple)
+            }
             if row.approved {
                 Badge("Approved")
             } else {

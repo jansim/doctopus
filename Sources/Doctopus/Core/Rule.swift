@@ -61,6 +61,14 @@ struct Rule: Identifiable, Hashable, Sendable {
 
     var hasEffect: Bool { actions.contains { $0.value.nilIfBlank != nil } }
 
+    /// The same rule doing only some of what it does, for accepting part of a
+    /// match. Conditions are kept, so it still only touches what the rule would.
+    func limited(to kinds: Set<RuleActionKind>) -> Rule {
+        var copy = self
+        copy.actions = actions.filter { kinds.contains($0.kind) }
+        return copy
+    }
+
     var conditionSummary: String {
         let live = liveConditions
         guard let first = live.first else { return "—" }
@@ -209,6 +217,16 @@ struct RuleMatch: Identifiable, Hashable, Sendable {
         case addTags([String])
         case setCorrespondent(String)
         case setDocType(String)
+
+        var kind: RuleActionKind {
+            switch self {
+            case .move: return .moveFile
+            case .rename: return .renameFile
+            case .addTags: return .addTags
+            case .setCorrespondent: return .setCorrespondent
+            case .setDocType: return .setDocType
+            }
+        }
 
         var icon: String {
             switch self {

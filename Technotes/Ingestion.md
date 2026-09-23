@@ -135,6 +135,12 @@ document as an outlier: the rule stops pointing it out, Apply to Existing and
 reprocessing skip it, and the inspector keeps it listed, muted, so it can be
 undone. The Rules table counts each rule's outliers and lists them.
 
+Such documents also wait in Needs Review, approved or not, with each pending
+change ticked. Applying with some unticked applies the rest — the rule cut down
+to those actions — and then suppresses the rule for that document, so what was
+left is never pointed out again. Which documents a rule would still change is
+worked out in memory, so the app hands the list to the Needs Review query.
+
 Matching reads every document's text, so the store keeps each answer until the
 text, filename, correspondent, type or a rule's conditions change. What a
 match would change is compared against the index fresh on every pass.

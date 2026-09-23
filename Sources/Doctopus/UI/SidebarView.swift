@@ -11,8 +11,7 @@ struct SidebarView: View {
         List(selection: $model.selection) {
             Section(model.libraries.count > 1 ? "All Libraries" : "Library") {
                 row(.all, "All Documents", "tray.full", model.stats.total)
-                row(.needsReview, "Needs Review", "exclamationmark.triangle",
-                    model.queue.filter { !$0.approved }.count)
+                row(.needsReview, "Needs Review", "exclamationmark.triangle", model.needsReviewCount)
                 row(.untagged, "Untagged", "tag.slash", nil)
                 row(.queue, "Recent Processing", "clock.arrow.circlepath", model.queue.count)
                 if model.stats.deleted > 0 {

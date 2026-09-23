@@ -1556,6 +1556,11 @@ enum SelfTest {
         Check.that("a matching rule that would change a document is pointed out on it",
                    pending?.isPending == true && pending?.changes == [.addTags(["outlier-check"])],
                    pending.map { $0.changes.map(\.label).joined(separator: "; ") } ?? "no match")
+        let reviewing = (try? await store.listDocuments(selection: .needsReview, query: SearchQuery(""),
+                                                        sort: .added, ascending: false,
+                                                        ruleMatched: [payslip.doc])) ?? []
+        Check.that("Needs Review lists a document a rule would still change",
+                   reviewing.contains { $0.doc == payslip.doc })
 
         try? await store.setRuleSuppressed(true, rule: id, doc: payslip.doc)
         let suppressed = await match()
@@ -1581,6 +1586,7 @@ enum SelfTest {
         let after = await match()
         Check.that("applying the rule to the one document settles the match",
                    applied.matched == 1 && appliedTagged && after == nil)
+        await partialRuleMatch(store: store, indexer: indexer, payslip: payslip)
 
         let original = try? await store.detail(payslip.doc)
         let tagsBefore = Set(((try? await store.tags()) ?? []).map(\.tagID))
@@ -1609,6 +1615,40 @@ enum SelfTest {
         let orphaned = ((try? await store.suppressions()) ?? [:])[payslip.doc]?.contains(id) == true
         Check.that("deleting a rule forgets its outliers", !orphaned)
         if let tag = try? await store.tagID(named: "outlier-check") { try? await store.deleteTag(tag) }
+    }
+
+    /// Accepting part of a match from Needs Review: the ticked changes are
+    /// applied with the rule cut down to them, and the rule is suppressed.
+    private static func partialRuleMatch(store: Store, indexer: Indexer, payslip: DocumentRow) async {
+        let rule = Rule(id: 0, name: "Partial Check", priority: 1,
+                        conditions: [RuleCondition(field: .filename, pattern: "gehaltsabrechnung")],
+                        actions: [RuleAction(kind: .addTags, value: "partial-check"),
+                                  RuleAction(kind: .setDocType, value: "Partial Check")])
+        guard let id = try? await store.upsertRule(rule) else {
+            Check.that("a rule to accept part of is saved", false)
+            return
+        }
+        var saved = rule
+        saved.id = id
+        let typeBefore = (try? await store.detail(payslip.doc))?.row.docType
+
+        let match = ((try? await store.ruleMatches()) ?? [:])[payslip.doc]?.first { $0.ruleID == id }
+        let accepted = Set(match?.changes.filter { $0.kind == .addTags } ?? [])
+        Check.that("a match offers each of its changes apart",
+                   match?.changes.count == 2 && accepted.count == 1,
+                   match.map { $0.changes.map(\.label).joined(separator: "; ") } ?? "no match")
+        _ = await indexer.applyRule(saved.limited(to: Set(accepted.map(\.kind))), onlyTo: payslip.doc)
+        try? await store.setRuleSuppressed(true, rule: id, doc: payslip.doc)
+
+        let detail = try? await store.detail(payslip.doc)
+        let tagged = ((try? await store.tags(for: payslip.doc)) ?? []).contains { $0.name == "partial-check" }
+        let settled = ((try? await store.ruleMatches()) ?? [:])[payslip.doc]?.first { $0.ruleID == id }
+        Check.that("accepting part of a match applies only that and suppresses the rule",
+                   tagged && detail?.row.docType == typeBefore && settled?.isPending == false,
+                   "tagged \(tagged), type \(detail?.row.docType ?? "none"), pending \(settled?.isPending ?? false)")
+
+        try? await store.deleteRule(id)
+        if let tag = try? await store.tagID(named: "partial-check") { try? await store.deleteTag(tag) }
     }
 
     private static func ruleMigration() {
