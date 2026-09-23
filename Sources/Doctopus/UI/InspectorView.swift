@@ -460,7 +460,7 @@ private struct DetailInspector: View {
 private struct NoteRow: View {
     @Environment(AppModel.self) private var model
     let note: Note
-    let document: DocumentRef
+    let document: Int64
 
     @State private var editing = false
     @State private var draft = ""
@@ -635,7 +635,7 @@ private struct FieldValueRow: View {
     @Environment(AppModel.self) private var model
     let field: Field
     let value: String
-    let document: DocumentRef
+    let document: Int64
 
     var body: some View {
         switch field.type {

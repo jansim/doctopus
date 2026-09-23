@@ -236,7 +236,7 @@ extension AppModel {
         }.value
     }
 
-    private func rowAfter(_ row: DocumentRow) -> DocumentRef? {
+    private func rowAfter(_ row: DocumentRow) -> Int64? {
         guard let index = documents.firstIndex(where: { $0.id == row.id }) else { return nil }
         if index + 1 < documents.count { return documents[index + 1].id }
         return index > 0 ? documents[index - 1].id : nil

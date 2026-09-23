@@ -79,9 +79,9 @@ extension Store {
                 args.append(.text(rel)); args.append(.text(rel + "/%"))
                 args.append(.text(rel + "/%"))
             }
-        case .tag(let ref):
+        case .tag(let tag):
             wheres.append("d.id IN (SELECT doc_id FROM document_tags WHERE tag_id=?)")
-            args.append(.int(ref.tag))
+            args.append(.int(tag))
         case .finderTag(let name):
             wheres.append("d.id IN (SELECT doc_id FROM finder_tags WHERE name = ? COLLATE NOCASE)")
             args.append(.text(name))
@@ -99,7 +99,7 @@ extension Store {
                 waiting += " OR d.id IN (\(ruleMatched.sorted().map { String($0) }.joined(separator: ",")))"
             }
             wheres.append("(\(waiting))")
-        case .outliers(_, let rule):
+        case .outliers(let rule):
             wheres.append("d.id IN (SELECT doc_id FROM rule_suppressions WHERE rule_id=?)")
             args.append(.int(rule))
         }

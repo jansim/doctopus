@@ -188,7 +188,7 @@ final class AppModel {
             StoredSort(field: sort.storageKey, ascending: sortAscending)))
         reloadDocuments()
     }
-    var selectedIDs: Set<DocumentRef> = [] {
+    var selectedIDs: Set<Int64> = [] {
         didSet {
             guard selectedIDs != oldValue else { return }
             reloadDetail()

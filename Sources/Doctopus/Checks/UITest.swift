@@ -186,7 +186,7 @@ enum UITest {
         Check.that("⇧ before anything has been clicked selects the one cell",
                    unanchored == .init(selection: [order[2]], anchor: order[2]))
         let stale = GallerySelection.click(order[2], in: order, modifiers: .shift, selection: [],
-                                           anchor: DocumentRef(library: "gone", doc: -1))
+                                           anchor: -1)
         Check.that("⇧ with an anchor no longer in the pane selects the one cell",
                    stale == .init(selection: [order[2]], anchor: order[2]))
     }
@@ -209,6 +209,13 @@ enum UITest {
         Check.that("dragging a document outside the selection counts just that one",
                    outside == 1 && model.rows(forDropped: [DocumentDragItem(rows[2])]).count == 1,
                    "badge \(outside)")
+
+        // What another window's library would send: the same row number, but
+        // not a file this library holds.
+        var foreign = DocumentDragItem(rows[0])
+        foreign.path = "/elsewhere/" + rows[0].filename
+        Check.that("a document dragged in from another library's window is not taken for one here",
+                   model.rows(forDropped: [foreign]).isEmpty)
     }
 
     private static func folderPickerResolvesPaths(_ model: AppModel) {
@@ -522,7 +529,7 @@ enum UITest {
         var sample: DocumentRow?
         _ = await settle({
             sample = model.documents.first {
-                $0.ext.lowercased() == "pdf" && $0.library == lib.id && !$0.filename.hasPrefix("review-")
+                $0.ext.lowercased() == "pdf" && !$0.filename.hasPrefix("review-")
             }
             return sample != nil
         }, timeout: 10)
@@ -882,7 +889,7 @@ enum UITest {
 
         model.selectedIDs = []
         let candidates = model.documents.filter {
-            $0.library == library.id && !$0.isAliasHere && !$0.missing
+            !$0.isAliasHere && !$0.missing
                 && $0.directory != destination.path && fm.fileExists(atPath: $0.path)
         }
         guard candidates.count >= 2 else { return fail("\(candidates.count) usable documents") }

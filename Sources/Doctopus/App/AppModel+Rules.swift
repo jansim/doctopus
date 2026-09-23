@@ -108,14 +108,13 @@ extension AppModel {
                                      ? "Marked as an outlier for rule “\(name)”"
                                      : "No longer an outlier for rule “\(name)”")
         refreshRuleMatches()
-        if case .outliers(let id, let rule) = selection, id == lib.id, rule == ruleID {
+        if selection == .outliers(rule: ruleID) {
             reloadDocuments(resetPaging: false)
         }
     }
 
     func showOutliers(of ruleID: Int64) {
-        guard let lib = library else { return }
         searchText = ""
-        selection = .outliers(library: lib.id, rule: ruleID)
+        selection = .outliers(rule: ruleID)
     }
 }

@@ -14,10 +14,10 @@ struct GlobalSearchResult: Identifiable, Sendable {
     var title: String
     var subtitle: String?
     var icon: String
-    var document: DocumentRef?
+    var document: Int64?
     var path: String?
     var fieldKey: String?
-    var tagRef: TagRef?
+    var tag: Int64?
     var savedViewID: Int64?
 }
 
@@ -66,7 +66,7 @@ extension AppModel {
         }
 
         for tag in distinctTags where tag.name.lowercased().contains(query) {
-            results.append(GlobalSearchResult(id: "tag-\(tag.tagID)", category: .tag, title: tag.name, subtitle: "\(tag.count) document(s)", icon: "tag", tagRef: tag.id))
+            results.append(GlobalSearchResult(id: "tag-\(tag.tagID)", category: .tag, title: tag.name, subtitle: "\(tag.count) document(s)", icon: "tag", tag: tag.id))
         }
 
         let taxonomies: [(key: String, category: GlobalSearchResult.Category, icon: String)] = [
@@ -93,7 +93,7 @@ extension AppModel {
         collectFolders(folders)
 
         for doc in documents where doc.displayTitle.lowercased().contains(query) || doc.filename.lowercased().contains(query) {
-            results.append(GlobalSearchResult(id: "doc-\(doc.library)-\(doc.doc)", category: .document,
+            results.append(GlobalSearchResult(id: "doc-\(doc.doc)", category: .document,
                                               title: doc.displayTitle, subtitle: doc.filename,
                                               icon: "doc.text", document: doc.id))
         }
@@ -152,9 +152,7 @@ extension AppModel {
             searchText = q
         case .open(let docID):
             selection = .all
-            if let lib = library {
-                selectedIDs = [DocumentRef(library: lib.id, doc: docID)]
-            }
+            selectedIDs = [docID]
         case .verify:
             verifyLibrary()
         }

@@ -108,8 +108,8 @@ struct QuickSwitcherSheet: View {
                 model.selectedIDs = [document]
             }
         case .tag:
-            if let tagRef = item.tagRef {
-                model.selection = .tag(tagRef)
+            if let tag = item.tag {
+                model.selection = .tag(tag)
             }
         case .correspondent, .docType:
             if let key = item.fieldKey {

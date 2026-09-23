@@ -8,7 +8,7 @@ extension UTType {
 }
 
 struct DocumentDragItem: Codable, Transferable, Hashable, Sendable {
-    var id: DocumentRef
+    var id: Int64
     var path: String
 
     init(_ row: DocumentRow) {
@@ -168,8 +168,12 @@ extension AppModel {
         selectedIDs.contains(row.id) ? selectedIDs.count : 1
     }
 
+    /// A drag can come from another window, whose library numbers its rows
+    /// too, so a row counts as the one dragged only where its path agrees.
     func rows(forDropped items: [DocumentDragItem]) -> [DocumentRow] {
-        let dropped = Set(items.map(\.id))
+        let listed = Dictionary(documents.map { ($0.id, $0.path) }, uniquingKeysWith: { first, _ in first })
+        let dropped = Set(items.filter { listed[$0.id] == $0.path }.map(\.id))
+        guard !dropped.isEmpty else { return [] }
         if !dropped.isDisjoint(with: selectedIDs) {
             let union = dropped.union(selectedIDs)
             return documents.filter { union.contains($0.id) }
@@ -204,9 +208,7 @@ extension AppModel {
         case .move(let folder):
             move(dropped, to: URL(fileURLWithPath: folder))
         case .tag(let tag):
-            let mine = dropped.filter { $0.library == tag.library }
-            guard !mine.isEmpty else { return false }
-            addTag(tag.name, to: mine)
+            addTag(tag.name, to: dropped)
         case .field(let field, let value):
             guard confirmFieldChange(field: field, value: value, count: dropped.count) else { return false }
             setFieldValue(dropped, field: field, value: value)

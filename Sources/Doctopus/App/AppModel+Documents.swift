@@ -79,7 +79,7 @@ extension AppModel {
     func removeTag(_ tag: Tag, from rows: [DocumentRow]) {
         guard let lib = library else { return }
         Task {
-            for row in rows where row.library == tag.library {
+            for row in rows {
                 try? await lib.store.unassign(tag: tag.tagID, from: row.doc)
                 try? await lib.store.logEdit(docID: row.doc, detail: "Untagged “\(tag.name)”")
                 await lib.indexer.syncAliases(docID: row.doc, target: row.url)
@@ -142,7 +142,7 @@ extension AppModel {
         Task {
             let survivor = (try? await lib.store.renameTag(tag.tagID, to: name)) ?? tag.tagID
             if selection == .tag(tag.id) {
-                selection = .tag(TagRef(library: tag.library, tag: survivor))
+                selection = .tag(survivor)
             }
             refreshAll()
             reloadDetail()
@@ -203,30 +203,30 @@ extension AppModel {
         }
     }
 
-    func addNote(_ body: String, to ref: DocumentRef) {
+    func addNote(_ body: String, to doc: Int64) {
         guard let lib = library, body.nilIfBlank != nil else { return }
         Task {
-            _ = try? await lib.store.addNote(body, to: ref.doc)
-            try? await lib.store.logEdit(docID: ref.doc, detail: "Note added")
+            _ = try? await lib.store.addNote(body, to: doc)
+            try? await lib.store.logEdit(docID: doc, detail: "Note added")
             reloadDetail()
         }
     }
 
-    func updateNote(_ id: Int64, body: String, in ref: DocumentRef) {
+    func updateNote(_ id: Int64, body: String, in doc: Int64) {
         guard let lib = library else { return }
         Task {
             try? await lib.store.updateNote(id, body: body)
-            try? await lib.store.logEdit(docID: ref.doc,
+            try? await lib.store.logEdit(docID: doc,
                                          detail: body.nilIfBlank == nil ? "Note deleted" : "Note edited")
             reloadDetail()
         }
     }
 
-    func deleteNote(_ id: Int64, in ref: DocumentRef) {
+    func deleteNote(_ id: Int64, in doc: Int64) {
         guard let lib = library else { return }
         Task {
             try? await lib.store.deleteNote(id)
-            try? await lib.store.logEdit(docID: ref.doc, detail: "Note deleted")
+            try? await lib.store.logEdit(docID: doc, detail: "Note deleted")
             reloadDetail()
         }
     }
@@ -245,12 +245,12 @@ extension AppModel {
         }
     }
 
-    func setFieldValue(_ ref: DocumentRef, field: Field, value: String?) {
+    func setFieldValue(_ doc: Int64, field: Field, value: String?) {
         guard let lib = library else { return }
         Task {
-            try? await lib.store.setFieldValue(docID: ref.doc, field: field, value: value)
-            try? await lib.store.logEdit(docID: ref.doc, detail: Self.editDetail(field.name, value))
-            await lib.indexer.reroute([ref.doc], applyingActions: false)
+            try? await lib.store.setFieldValue(docID: doc, field: field, value: value)
+            try? await lib.store.logEdit(docID: doc, detail: Self.editDetail(field.name, value))
+            await lib.indexer.reroute([doc], applyingActions: false)
             reloadDetail()
             refreshAll()
         }
@@ -317,14 +317,14 @@ extension AppModel {
         }
     }
 
-    func editMetadata(_ ref: DocumentRef, column: String, value: String?) {
+    func editMetadata(_ doc: Int64, column: String, value: String?) {
         guard let lib = library else { return }
         let label = columnLabel(column)
         Task {
-            try? await lib.store.overwriteMetadataField(ref.doc, column: column, value: value?.nilIfBlank)
-            try? await lib.store.logEdit(docID: ref.doc,
+            try? await lib.store.overwriteMetadataField(doc, column: column, value: value?.nilIfBlank)
+            try? await lib.store.logEdit(docID: doc,
                                          detail: Self.editDetail(label, value))
-            await lib.indexer.reroute([ref.doc], applyingActions: false)
+            await lib.indexer.reroute([doc], applyingActions: false)
             reloadDetail()
             reloadDocuments()
             refreshRuleMatches()
@@ -336,14 +336,14 @@ extension AppModel {
         return column == "summary" ? "Summary" : "Title"
     }
 
-    func setDocumentDate(_ ref: DocumentRef, _ date: Date?) {
+    func setDocumentDate(_ doc: Int64, _ date: Date?) {
         guard let lib = library else { return }
         Task {
-            try? await lib.store.setDocumentDate(ref.doc, date)
+            try? await lib.store.setDocumentDate(doc, date)
             try? await lib.store.logEdit(
-                docID: ref.doc,
+                docID: doc,
                 detail: Self.editDetail("Date", date.map(DayDate.display)))
-            await lib.indexer.reroute([ref.doc], applyingActions: false)
+            await lib.indexer.reroute([doc], applyingActions: false)
             reloadDetail()
             reloadDocuments()
             refreshRuleMatches()
