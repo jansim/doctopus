@@ -520,7 +520,7 @@ enum UITest {
         model.selection = .all
         _ = await settle({ !model.documents.isEmpty }, timeout: 10)
         guard let sample = model.documents.first(where: {
-            $0.ext.lowercased() == "pdf" && lib.owns(path: $0.path) && !$0.filename.hasPrefix("review-")
+            $0.ext.lowercased() == "pdf" && $0.library == lib.id && !$0.filename.hasPrefix("review-")
         }) else {
             Check.that("a document to stage a batch from", false)
             return
