@@ -701,14 +701,10 @@ actor Store {
             """, [.int(Store.queueLength - 1)])
     }
 
-    /// How long after one hand edit the next still joins it. Someone tidying
-    /// a document touches a title, a date and a tag in a row; the history
-    /// should say that happened once, not list every keystroke that committed.
+    /// Hand edits closer together than this are grouped into one history entry.
     static let editGroupingWindow: TimeInterval = 5 * 60
 
     func logEdit(docID: Int64, detail: String, at now: Date = Date()) throws {
-        // Only the newest event can absorb the edit, so anything the pipeline
-        // did in between still splits the edits around it.
         if let last = try db.first("""
             SELECT id, at, action, detail FROM events
             WHERE doc_id=? ORDER BY at DESC, id DESC LIMIT 1
@@ -726,8 +722,6 @@ actor Store {
                     .text("edited"), .text(detail)])
     }
 
-    /// One line per change. A field set twice keeps only where it ended up,
-    /// and repeating a change adds nothing.
     static func mergedEditDetail(_ existing: String?, _ addition: String) -> String {
         func subject(_ line: String) -> String {
             if let arrow = line.range(of: " → ") { return String(line[..<arrow.lowerBound]) }
