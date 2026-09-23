@@ -204,9 +204,7 @@ enum SelfTest {
         foldCtx.options = Naming.Options(underscoresForSpaces: true, asciiOnly: true)
         let folded = Naming.render(Naming.defaultTemplate, foldCtx)
         Check.that("filenames can be folded to ASCII with underscores",
-                   folded.hasPrefix("2026-03-14_Mueller_Strasse_GmbH_Cafe_Angstrom_")
-                   && folded.hasSuffix(".pdf") && !folded.contains(" ") && !folded.contains("/")
-                   && folded.unicodeScalars.allSatisfy(\.isASCII), folded)
+                   folded == "2026-03-14_Mueller_Strasse_GmbH_Cafe_Angstroem_1_2.pdf", folded)
 
         print("\nROUTING (dry run against starter rules)")
         let router = Router(rules: (try? await store.rules()) ?? [], threshold: settings.routingThreshold,
