@@ -74,6 +74,7 @@ extension AppModel {
             self.facets = facets
             self.queue = queue
             self.stats = stats
+            self.refreshRuleMatches()
             // A passive refresh (e.g. a Finder change) must not snap an
             // expanded "Load More" list back down to the first page.
             self.reloadDocuments(resetPaging: false)
@@ -107,6 +108,7 @@ extension AppModel {
     private func librariesInScope(for selection: Selection) -> [Library] {
         switch selection {
         case .tag(let ref): return library(ref.library).map { [$0] } ?? []
+        case .outliers(let id, _): return library(id).map { [$0] } ?? []
         case .folder(let path): return libraries.filter { $0.owns(path: path) }
         default: return libraries
         }

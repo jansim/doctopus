@@ -328,6 +328,8 @@ enum Selection: Hashable, Sendable {
     case untagged
     case needsReview
     case deleted
+    /// The documents marked as outliers for one rule.
+    case outliers(library: LibraryID, rule: Int64)
 
     var isQueueMode: Bool { self == .queue || self == .needsReview }
 }

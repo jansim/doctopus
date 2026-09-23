@@ -322,41 +322,76 @@ actor Indexer {
         return parts.joined(separator: " · ")
     }
 
-    /// Renames and moves only when `moving`; a `chosen` folder heads the suggestions so the review keeps it.
-    private func route(id: Int64, url: inout URL, text: String,
-                       findings: DocumentAnalyzer.Findings, insight: DocumentInsight?,
-                       moving: Bool, chosen: Bool, action: String) async {
-        let router = Router(rules: (try? await store.rules()) ?? [],
-                            threshold: settings.routingThreshold,
-                            derivedTemplate: settings.derivedTemplate,
-                            root: store.root,
-                            deriveWhenNoRule: settings.deriveWhenNoRule)
+    /// Leaves out the rules the document is an outlier for.
+    private func router(for id: Int64) async -> Router {
+        let outlierOf = (try? await store.suppressedRuleIDs(for: id)) ?? []
+        return Router(rules: ((try? await store.rules()) ?? []).filter { !outlierOf.contains($0.id) },
+                      threshold: settings.routingThreshold,
+                      derivedTemplate: settings.derivedTemplate,
+                      root: store.root,
+                      deriveWhenNoRule: settings.deriveWhenNoRule)
+    }
 
-        let decision = router.evaluate(text: text, filename: url.lastPathComponent,
-                                       findings: findings, insight: insight,
-                                       currentDirectory: url.deletingLastPathComponent())
+    /// A `chosen` folder heads the suggestions so the review keeps it.
+    private func suggest(_ decision: Router.Decision, for id: Int64, chosen: URL?) async {
         var candidates = decision.candidates
-        if chosen {
-            let here = url.deletingLastPathComponent()
-            candidates.removeAll { $0.destination.standardizedFileURL == here.standardizedFileURL }
-            candidates.insert(Router.Candidate(destination: here, confidence: 1, rule: "chosen",
+        if let chosen {
+            candidates.removeAll { $0.destination.standardizedFileURL == chosen.standardizedFileURL }
+            candidates.insert(Router.Candidate(destination: chosen, confidence: 1, rule: "chosen",
                                                explanation: "Chosen when it was brought in"), at: 0)
         }
         try? await store.setPathSuggestions(candidates, for: id)
+    }
 
+    private func applyRuleActions(_ decision: Router.Decision, to id: Int64) async {
         if let corr = decision.setCorrespondent {
             try? await store.storeMetadata(Store.MetadataPatch(docID: id, correspondent: corr, source: "rule"))
         }
         if let docType = decision.setDocType {
             try? await store.storeMetadata(Store.MetadataPatch(docID: id, docType: docType, source: "rule"))
         }
-
+        guard decision.tagsFromRule else { return }
         for tag in decision.tags {
-            if decision.tagsFromRule {
-                if let tagID = try? await store.tagID(named: tag) {
-                    try? await store.assign(tag: tagID, to: id, auto: true)
-                }
-            } else {
+            if let tagID = try? await store.tagID(named: tag) {
+                try? await store.assign(tag: tagID, to: id, auto: true)
+            }
+        }
+    }
+
+    /// Re-routes documents awaiting review from what the index holds, updating
+    /// their suggested folders without moving files. `applyingActions` also
+    /// re-applies rule tags and metadata; off after a hand edit, which it would
+    /// overwrite.
+    func reroute(_ ids: [Int64]? = nil, applyingActions: Bool) async {
+        let waiting = Set((try? await store.reviewDocumentIDs()) ?? [])
+        let targets = ids?.filter({ waiting.contains($0) }) ?? Array(waiting)
+        for id in targets {
+            guard let input = try? await store.routingInput(for: id) else { continue }
+            let findings = DocumentAnalyzer.Findings(date: input.date, correspondent: input.correspondent,
+                                                     docType: input.docType, confidence: input.confidence)
+            let decision = await router(for: id).evaluate(
+                text: input.text, filename: input.url.lastPathComponent, findings: findings,
+                insight: DocumentInsight(correspondent: input.correspondent, docType: input.docType),
+                currentDirectory: input.url.deletingLastPathComponent())
+            let chosen = try? await store.pathSuggestions(for: id).first { $0.source == "chosen" }
+            await suggest(decision, for: id, chosen: chosen.map { URL(fileURLWithPath: $0.path) })
+            guard applyingActions else { continue }
+            await applyRuleActions(decision, to: id)
+            await syncAliases(docID: id, target: input.url)
+        }
+    }
+
+    /// Renames and moves only when `moving`.
+    private func route(id: Int64, url: inout URL, text: String,
+                       findings: DocumentAnalyzer.Findings, insight: DocumentInsight?,
+                       moving: Bool, chosen: Bool, action: String) async {
+        let decision = await router(for: id).evaluate(
+            text: text, filename: url.lastPathComponent, findings: findings, insight: insight,
+            currentDirectory: url.deletingLastPathComponent())
+        await suggest(decision, for: id, chosen: chosen ? url.deletingLastPathComponent() : nil)
+        await applyRuleActions(decision, to: id)
+        if !decision.tagsFromRule {
+            for tag in decision.tags {
                 try? await store.suggestTag(tag, for: id, autoAcceptMatching: settings.autoAcceptMatchingTagSuggestions)
             }
         }
