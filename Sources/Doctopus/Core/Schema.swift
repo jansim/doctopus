@@ -1,31 +1,27 @@
 import Foundation
 
-/// Versioned schema. Migrations are append-only: bump `current` and add a case.
+/// Versioned schema. Migrations are append-only: add a step to `steps`.
+/// A step is frozen once shipped, so it never calls code that may change later.
 enum Schema {
-    static let current = 19
+    struct TooNew: Error {}
 
+    private static let steps: [(Database) throws -> Void] = [
+        v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19,
+    ]
+    static var current: Int { steps.count }
+
+    /// Each step commits with its own version, so a crash mid-way resumes at
+    /// the step that failed. An index from a newer build is refused rather than
+    /// stamped back down to this one's version.
     static func migrate(_ db: Database) throws {
         let version = try db.first("PRAGMA user_version") { Int($0.int(0)) } ?? 0
-        if version < 1 { try v1(db) }
-        if version < 2 { try v2(db) }
-        if version < 3 { try v3(db) }
-        if version < 4 { try v4(db) }
-        if version < 5 { try v5(db) }
-        if version < 6 { try v6(db) }
-        if version < 7 { try v7(db) }
-        if version < 8 { try v8(db) }
-        if version < 9 { try v9(db) }
-        if version < 10 { try v10(db) }
-        if version < 11 { try v11(db) }
-        if version < 12 { try v12(db) }
-        if version < 13 { try v13(db) }
-        if version < 14 { try v14(db) }
-        if version < 15 { try v15(db) }
-        if version < 16 { try v16(db) }
-        if version < 17 { try v17(db) }
-        if version < 18 { try v18(db) }
-        if version < 19 { try v19(db) }
-        try db.exec("PRAGMA user_version=\(current)")
+        guard version <= current else { throw TooNew() }
+        for (index, step) in steps.enumerated().dropFirst(version) {
+            try db.transaction {
+                try step(db)
+                try db.exec("PRAGMA user_version=\(index + 1)")
+            }
+        }
     }
 
     /// Adds a column for a column-adding migration, once. SQLite has no
@@ -40,6 +36,24 @@ enum Schema {
         try db.exec("ALTER TABLE \(table) ADD COLUMN \(column) \(declaration)")
     }
 
+    /// v15: a pattern that compiled as a regex was being matched as one.
+    static func inferredMode(_ pattern: String) -> Int64 {
+        let p = pattern.trimmingCharacters(in: .whitespaces)
+        guard p.rangeOfCharacter(from: CharacterSet(charactersIn: "^$*+?[]()|\\")) != nil,
+              (try? NSRegularExpression(pattern: p)) != nil else { return 0 }
+        return 3
+    }
+
+    /// v19: every word pattern had matched at the start of a word.
+    static func openingEnds(_ pattern: String) -> String {
+        pattern.split(separator: ",", omittingEmptySubsequences: false)
+            .map { part -> String in
+                let t = part.trimmingCharacters(in: .whitespaces)
+                return t.isEmpty || t.hasSuffix("*") ? t : t + "*"
+            }
+            .joined(separator: ", ")
+    }
+
     /// Word patterns used to match at the start of a word; the `*` keeps every
     /// existing one matching what it matched.
     private static func v19(_ db: Database) throws {
@@ -49,14 +63,14 @@ enum Schema {
 
         try db.exec("UPDATE rule_actions SET kind='move_file' WHERE kind='file_into'")
 
-        let words = "(\(MatchMode.anyWord.rawValue), \(MatchMode.allWords.rawValue))"
+        let words = "(0, 1)"  // any words, all words
         for (table, column) in [("rule_conditions", "pattern"), ("entities", "match")] {
             let rows = try db.map(
                 "SELECT id, \(column) FROM \(table) WHERE match_mode IN \(words) AND \(column) IS NOT NULL"
             ) { ($0.int(0), $0.string(1)) }
             for (id, pattern) in rows {
                 try db.run("UPDATE \(table) SET \(column)=? WHERE id=?",
-                           [.text(PatternMatcher.openingEnds(pattern)), .int(id)])
+                           [.text(openingEnds(pattern)), .int(id)])
             }
         }
 
@@ -220,8 +234,7 @@ enum Schema {
 
         let existing = try db.map("SELECT id, pattern FROM rules") { ($0.int(0), $0.string(1)) }
         for (id, pattern) in existing {
-            let mode = MatchMode.inferred(from: pattern)
-            try db.run("UPDATE rules SET match_mode=? WHERE id=?", [.int(mode.rawValue), .int(id)])
+            try db.run("UPDATE rules SET match_mode=? WHERE id=?", [.int(inferredMode(pattern)), .int(id)])
         }
     }
 

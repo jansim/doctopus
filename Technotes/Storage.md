@@ -15,8 +15,10 @@ Each indexed folder holds its index in a `library.doctopus` package inside it:
 ```
 
 `meta.json` records the library format version and the app version that last
-wrote it, so a library from a newer Doctopus is refused with a reason rather
-than opened and written back missing whatever it did not know about.
+wrote it, and the index records its schema version. A library from a newer
+Doctopus is refused with a reason if either is ahead, rather than opened and
+written back missing whatever it did not know about. Each migration commits
+together with its version, so an interrupted upgrade resumes where it stopped.
 
 Finder shows the package as a single Doctopus document that opens the library
 on a double-click; Show Package Contents gets at the files.
