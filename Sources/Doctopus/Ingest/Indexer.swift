@@ -285,7 +285,7 @@ actor Indexer {
             await self.route(id: id, url: &url, text: extracted.text, findings: findings, insight: insight,
                              moving: isImport && route && settings.autoRouteImports,
                              chosen: isImport && !route,
-                             action: isImport ? "imported" : "indexed")
+                             action: isImport ? .imported : .indexed)
         }
 
         await syncAliases(docID: id, target: url)
@@ -325,7 +325,7 @@ actor Indexer {
     /// Renames and moves only when `moving`; a `chosen` folder heads the suggestions so the review keeps it.
     private func route(id: Int64, url: inout URL, text: String,
                        findings: DocumentAnalyzer.Findings, insight: DocumentInsight?,
-                       moving: Bool, chosen: Bool, action: String) async {
+                       moving: Bool, chosen: Bool, action: EventAction) async {
         let router = Router(rules: (try? await store.rules()) ?? [],
                             threshold: settings.routingThreshold,
                             derivedTemplate: settings.derivedTemplate,
