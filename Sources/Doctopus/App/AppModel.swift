@@ -79,10 +79,12 @@ final class AppModel {
             _ = await previous?.value
             guard let self, self.settingsLibrary === lib, self.settings != self.savedSettings else { return }
             let current = self.settings
+            let renamesChanged = current.namingOptions != self.savedSettings?.namingOptions
             self.savedSettings = current
             lib.settings = current
             await current.save(to: lib.store)
             await lib.indexer.update(settings: current)
+            if renamesChanged { self.refreshRuleMatches() }
             for other in self.libraries where other !== lib {
                 other.settings.appWide = current.appWide
                 await other.indexer?.update(settings: other.settings)

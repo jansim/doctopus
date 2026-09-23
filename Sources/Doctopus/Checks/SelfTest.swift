@@ -196,6 +196,15 @@ enum SelfTest {
         let renderedDefault = Naming.render("{correspondent|Unknown}_{title}", fallbackCtx)
         Check.that("template conditional fallback renders default", renderedDefault.hasPrefix("Unknown"))
         Check.that("path safety cleans invalid or hidden stems", !renderedDefault.hasPrefix(".") && !renderedDefault.contains(".."))
+        var foldCtx = Naming.Context(date: DayDate.calendar.date(from: DateComponents(year: 2026, month: 3, day: 14)),
+                                     correspondent: "Mu\u{308}ller Straße GmbH", title: "Café Ångström ½",
+                                     docType: nil, language: nil, counter: nil, originalStem: "scan", ext: "pdf")
+        let unfolded = Naming.render(Naming.defaultTemplate, foldCtx)
+        Check.that("filenames keep spaces and accents unless asked", unfolded == "2026-03-14_Mu\u{308}ller Straße GmbH_Café Ångström ½.pdf", unfolded)
+        foldCtx.options = Naming.Options(underscoresForSpaces: true, asciiOnly: true)
+        let folded = Naming.render(Naming.defaultTemplate, foldCtx)
+        Check.that("filenames can be folded to ASCII with underscores",
+                   folded == "2026-03-14_Mueller_Strasse_GmbH_Cafe_Angstroem_1_2.pdf", folded)
 
         print("\nROUTING (dry run against starter rules)")
         let router = Router(rules: (try? await store.rules()) ?? [], threshold: settings.routingThreshold,

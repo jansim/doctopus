@@ -68,7 +68,14 @@ private struct GeneralSettings: View {
                 Section("Library Settings", scope: .library) {
                     LibraryPicker()
                     TemplateField(title: "Default rename template",
-                                  template: $model.settings.namingTemplate, kind: .filename)
+                                  template: $model.settings.namingTemplate, kind: .filename,
+                                  naming: model.settings.namingOptions)
+                    Toggle("Replace spaces with underscores in filenames",
+                           isOn: $model.settings.filenameUnderscoresForSpaces)
+                    Toggle("Replace special characters with ASCII in filenames",
+                           isOn: $model.settings.filenameASCIIOnly)
+                    Text("For example ä becomes ae and á becomes a; characters with no ASCII equivalent are dropped. Applies to every rename, including rules. Folder names are left as they are.")
+                        .font(.caption).foregroundStyle(.secondary)
                     TextField("Scan destination folder", text: $model.settings.scanDestination)
                     Text("Relative to this library's folder. Right-clicking a folder in the sidebar always overrides it.")
                         .font(.caption).foregroundStyle(.secondary)

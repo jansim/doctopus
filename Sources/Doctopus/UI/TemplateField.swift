@@ -63,11 +63,13 @@ enum TemplateFieldKind: Equatable {
             language: "en", counter: 2, originalStem: originalStem, ext: ext)
     }
 
-    func preview(_ template: String) -> String {
+    func preview(_ template: String, naming: Naming.Options = Naming.Options()) -> String {
         guard template.nilIfBlank != nil else { return "—" }
         switch self {
         case .filename:
-            return Naming.render(template, Self.sample(ext: "pdf", originalStem: "scan0001"))
+            var ctx = Self.sample(ext: "pdf", originalStem: "scan0001")
+            ctx.options = naming
+            return Naming.render(template, ctx)
         case .path:
             let components = Naming.renderPath(template, Self.sample(ext: "", originalStem: "Unfiled"))
             return components.isEmpty ? "/" : components.joined(separator: "/") + "/"
@@ -81,6 +83,8 @@ struct TemplateField: View {
     var kind: TemplateFieldKind
     var tokens: [TemplateToken] = TemplateTokens.all
     var library: Library? = nil
+    /// Filename clean-ups to show in the example; folders ignore them.
+    var naming = Naming.Options()
 
     @State private var selection: TextSelection?
 
@@ -118,7 +122,7 @@ struct TemplateField: View {
                 }
             }
             LabeledContent("For example") {
-                Text(kind.preview(template))
+                Text(kind.preview(template, naming: naming))
                     .font(.caption.monospaced())
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
