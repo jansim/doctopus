@@ -1,13 +1,7 @@
 import Foundation
 
-/// The small part of Mustache a prompt needs: `{{#name}}…{{/name}}` keeps its
-/// text when `name` is set, `{{^name}}…{{/name}}` when it is not. Sections nest.
-/// A section tag alone on its line takes the line with it, so a template can
-/// keep one field per line without leaving blank lines behind.
-///
-/// Anything else between braces is left exactly as written, and an unclosed
-/// section runs to the end: a user's edit can make the prompt worse, never
-/// make it fail to render.
+/// A Mustache subset: `{{#name}}…{{/name}}` if set, `{{^name}}…{{/name}}` if not; a tag alone
+/// on its line takes the line with it. Never fails, so a user's edit cannot break rendering.
 enum PromptTemplate {
     static func render(_ template: String, flags: Set<String>) -> String {
         var rest = Substring(dropStandaloneLines(template))

@@ -326,8 +326,7 @@ actor RemoteLLMService {
         return (error as NSError).localizedDescription
     }
 
-    /// Shared with the on-device backend, which hands over its structured
-    /// answer as JSON, so both clean up a reply the same way.
+    /// Also reads the on-device backend's JSON, so both clean up a reply the same way.
     static func parse(_ content: String, fields: Set<InsightField> = Set(InsightField.allCases),
                       model: String? = nil, vision: Bool = false) -> DocumentInsight? {
         guard let data = jsonObject(in: content),

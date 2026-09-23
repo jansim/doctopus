@@ -32,12 +32,9 @@ struct AppWideSettings: StoredSettings, Sendable, Equatable {
     var llmExcerptLimit = 6000
     var remoteVision = false
     var remoteVisionImageSize = 1024
-    /// Raw values of the `InsightField`s switched off, rather than the ones
-    /// switched on: a field added later starts out on, and a stored name that
-    /// no longer exists cannot fail the decode and reset every other setting.
+    /// Stored as switched-off raw values: new fields start on, and a stale name cannot fail the decode.
     var unpredictedFields: [String] = []
-    /// Empty means `LLMPrompt.defaultTemplate`, so a user who never touched the
-    /// prompt picks up improvements to it with the next version.
+    /// Empty means `LLMPrompt.defaultTemplate`, so an untouched prompt follows the default.
     var llmPromptTemplate = ""
     var ocrConcurrency = 0        // 0 = auto
     var viewMode: ViewMode = .list
@@ -113,10 +110,6 @@ struct AppSettings: Sendable, Equatable {
     var optimizerOptions: Optimizer.Options { appWide.optimizerOptions }
     var remoteConfig: RemoteLLMConfig { appWide.remoteConfig }
     var sendsPageImage: Bool { appWide.sendsPageImage }
-    var predictedFields: Set<InsightField> {
-        get { appWide.predictedFields }
-        set { appWide.predictedFields = newValue }
-    }
     var effectiveConcurrency: Int { appWide.effectiveConcurrency }
 
     static let storageKey = "app_settings_v1"

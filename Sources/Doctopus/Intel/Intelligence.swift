@@ -53,23 +53,11 @@ enum InsightField: String, Codable, CaseIterable, Sendable, Identifiable {
 
     var id: String { rawValue }
 
-    var label: String {
-        switch self {
-        case .title: return "Title"
-        case .summary: return "Summary"
-        case .correspondent: return "Correspondent"
-        case .documentType: return "Category"
-        case .language: return "Language"
-        case .intent: return "Intent"
-        case .tags: return "Tags"
-        }
-    }
+    var label: String { self == .documentType ? "Category" : rawValue.capitalized }
 }
 
 extension DocumentInsight {
-    /// Drops what the user asked the model not to fill in. The prompt already
-    /// leaves those fields out, but a model answering in plain JSON, or an edited
-    /// prompt, can still volunteer them.
+    /// A plain-JSON reply or an edited prompt can still volunteer fields that were not asked for.
     func keeping(_ fields: Set<InsightField>) -> DocumentInsight {
         var kept = self
         if !fields.contains(.title) { kept.title = nil }
@@ -141,10 +129,7 @@ enum LLMPrompt {
     /// find the documents answered under an older one.
     static let promptVersion = 5
 
-    /// The one place the question is written down. Both backends render it, and
-    /// Settings › Intelligence lets the user replace it outright. Each field's
-    /// section is only kept when that field is asked for; `pageImage` is set when
-    /// the first page goes along as an image.
+    /// The only copy of the question; field meanings live here, not in the schemas.
     static let defaultTemplate = """
         You classify scanned personal and business documents for a filing system. \
         {{#pageImage}}Answer only from the page image and the document text you are given.{{/pageImage}}\
@@ -178,43 +163,29 @@ enum LLMPrompt {
         Use "" for any string you cannot determine{{#tags}} and [] for no tags{{/tags}}.
         """
 
-    /// What one document is asked: the template and the fields it is rendered for.
-    struct Question: Sendable, Equatable {
+    struct Question: Sendable {
         var template = LLMPrompt.defaultTemplate
         var fields = Set(InsightField.allCases)
 
+        var asked: [InsightField] { InsightField.allCases.filter { fields.contains($0) } }
+
         func instructions(withPageImage: Bool = false) -> String {
-            LLMPrompt.instructions(template: template, fields: fields, withPageImage: withPageImage)
+            var flags = Set(fields.map(\.rawValue))
+            if withPageImage { flags.insert("pageImage") }
+            return PromptTemplate.render(template, flags: flags)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
         }
 
-        var jsonSchema: [String: Any] { LLMPrompt.jsonSchema(fields) }
-    }
-
-    static func instructions(template: String = defaultTemplate,
-                             fields: Set<InsightField> = Set(InsightField.allCases),
-                             withPageImage: Bool = false) -> String {
-        var flags = Set(fields.map(\.rawValue))
-        if withPageImage { flags.insert("pageImage") }
-        return PromptTemplate.render(template, flags: flags)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    /// Descriptions live in the template alone, so an edited prompt is never
-    /// contradicted by a second copy of the question hidden in the schema.
-    static func jsonSchema(_ fields: Set<InsightField>) -> [String: Any] {
-        let asked = InsightField.allCases.filter { fields.contains($0) }
-        var properties: [String: Any] = [:]
-        for field in asked {
-            properties[field.rawValue] = field == .tags
-                ? ["type": "array", "items": ["type": "string"]]
-                : ["type": "string"]
+        var jsonSchema: [String: Any] {
+            var properties: [String: Any] = [:]
+            for field in asked {
+                properties[field.rawValue] = field == .tags
+                    ? ["type": "array", "items": ["type": "string"]]
+                    : ["type": "string"]
+            }
+            return ["type": "object", "properties": properties,
+                    "required": asked.map(\.rawValue), "additionalProperties": false]
         }
-        return [
-            "type": "object",
-            "properties": properties,
-            "required": asked.map(\.rawValue),
-            "additionalProperties": false,
-        ]
     }
 
     static func user(text: String, filename: String, limit: Int, candidateTags: [String] = [],
@@ -251,15 +222,15 @@ actor Intelligence {
     private var backend: LLMBackend = .onDevice
     private var config = RemoteLLMConfig()
     private var excerptLimit = 6000
-    private var fields = Set(InsightField.allCases)
-    private var template = LLMPrompt.defaultTemplate
+    private var question = LLMPrompt.Question()
 
     func update(settings: AppSettings) async {
         backend = settings.llmBackend
         config = settings.remoteConfig
         excerptLimit = settings.llmExcerptLimit
-        fields = settings.predictedFields
-        template = settings.llmPromptTemplate.nilIfBlank ?? LLMPrompt.defaultTemplate
+        question = LLMPrompt.Question(
+            template: settings.llmPromptTemplate.nilIfBlank ?? LLMPrompt.defaultTemplate,
+            fields: settings.predictedFields)
     }
 
     func status() async -> LLMStatus {
@@ -280,10 +251,9 @@ actor Intelligence {
 
     func enrich(text: String, filename: String, url: URL? = nil, pageCount: Int? = nil,
                 candidateTags: [String] = []) async -> DocumentInsight? {
-        guard !fields.isEmpty else { return nil }
+        guard !question.fields.isEmpty else { return nil }
         let readable = text.count >= LLMPrompt.minimumCharacters
-        let question = LLMPrompt.Question(template: template, fields: fields)
-        let candidateTags = fields.contains(.tags) ? candidateTags : []
+        let candidateTags = question.fields.contains(.tags) ? candidateTags : []
         switch backend {
         case .off:
             return nil

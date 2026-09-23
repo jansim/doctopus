@@ -503,8 +503,7 @@ struct IntelligenceSettings: View {
         }
     }
 
-    /// Shows the default until it is edited, and stores nothing while it
-    /// matches, so the default can keep improving underneath.
+    /// Stores "" while the text matches the default.
     private var promptTemplate: Binding<String> {
         Binding(get: { model.settings.llmPromptTemplate.nilIfBlank ?? LLMPrompt.defaultTemplate },
                 set: { model.settings.llmPromptTemplate = $0 == LLMPrompt.defaultTemplate ? "" : $0 })

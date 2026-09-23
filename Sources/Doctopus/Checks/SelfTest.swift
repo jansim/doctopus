@@ -684,13 +684,13 @@ enum SelfTest {
         Check.that("prompt says the attached image is the document's first page",
                    visionPrompt.contains("first page of the document"))
         Check.that("the system message tells a vision model to read the page too",
-                   LLMPrompt.instructions(withPageImage: true).contains("page image")
-                       && !LLMPrompt.instructions().contains("page image"))
+                   LLMPrompt.Question().instructions(withPageImage: true).contains("page image")
+                       && !LLMPrompt.Question().instructions().contains("page image"))
         Check.that("the system message asks for the document's own language",
-                   LLMPrompt.instructions().contains("language the document"))
+                   LLMPrompt.Question().instructions().contains("language the document"))
 
-        let everything = LLMPrompt.instructions()
-        let tagsOnly = LLMPrompt.instructions(fields: [.tags])
+        let everything = LLMPrompt.Question().instructions()
+        let tagsOnly = LLMPrompt.Question(fields: [.tags]).instructions()
         print("  tags-only prompt: \(tagsOnly.count) of \(everything.count) characters")
         Check.that("the prompt only asks for the fields that are switched on",
                    tagsOnly.contains("\"tags\":") && !tagsOnly.contains("\"summary\":")
@@ -699,11 +699,11 @@ enum SelfTest {
                    !tagsOnly.contains("{{") && !everything.contains("{{")
                        && !tagsOnly.contains("\n\n\n") && everything.contains("Keys:\n\"summary\":"))
         Check.that("a field left out does not leave its mention in the closing line",
-                   !LLMPrompt.instructions(fields: [.title]).contains("[] for no tags"))
+                   !LLMPrompt.Question(fields: [.title]).instructions().contains("[] for no tags"))
         Check.that("a broken template still renders instead of failing",
                    PromptTemplate.render("a {{#x}}b {{name}}", flags: ["x"]) == "a b {{name}}"
                        && PromptTemplate.render("a {{^x}}b", flags: ["x"]) == "a ")
-        let schema = LLMPrompt.jsonSchema([.title, .tags])
+        let schema = LLMPrompt.Question(fields: [.title, .tags]).jsonSchema
         Check.that("the response schema holds exactly the fields asked for",
                    (schema["required"] as? [String]) == ["title", "tags"]
                        && (schema["properties"] as? [String: Any])?.count == 2)

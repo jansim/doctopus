@@ -79,13 +79,11 @@ actor LLMService {
     }
 
     #if canImport(FoundationModels)
-    /// Built at run time rather than declared `@Generable`, so the model is
-    /// only made to produce the fields that were asked for. What each one means
-    /// is left to the prompt, which the user may have rewritten.
+    /// Built at run time so the model only produces the fields that were asked for.
     @available(macOS 26.0, *)
     private static func schema(_ fields: Set<InsightField>) throws -> GenerationSchema {
         let text = DynamicGenerationSchema(type: String.self)
-        let properties = InsightField.allCases.filter { fields.contains($0) }.map { field in
+        let properties = LLMPrompt.Question(fields: fields).asked.map { field in
             DynamicGenerationSchema.Property(
                 name: field.rawValue,
                 description: nil,
@@ -98,8 +96,7 @@ actor LLMService {
         return try GenerationSchema(root: root, dependencies: [])
     }
 
-    /// The session keeps its instructions for life, so a changed prompt or
-    /// field selection needs a new one.
+    /// Instructions are fixed per session, so a changed prompt needs a new one.
     @available(macOS 26.0, *)
     private func currentSession(instructions: String) -> LanguageModelSession {
         if let existing = sessionBox, sessionInstructions == instructions { return existing }
