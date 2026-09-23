@@ -50,8 +50,7 @@ actor Indexer {
 
         onProgress(IndexProgress(phase: "Scanning", done: 0, total: 1))
 
-        // The first pass over a library is its existing archive, not news:
-        // only a file that turns up after that waits in Needs Review.
+        // A new library's first pass is its existing archive, not new arrivals.
         let firstPass = ((try? await store.documentCount()) ?? 0) == 0
         var toProcess: [(Int64, String)] = []
         var fresh: Set<Int64> = []
@@ -149,8 +148,7 @@ actor Indexer {
         }
     }
 
-    /// `found` are documents new to the index that were already in the library:
-    /// they are queued for review like an import, but nothing is done to the file.
+    /// `found`: new to the index, but already in the library.
     @discardableResult
     func process(documents: [(Int64, String)], phase: String, isImport: Bool,
                  route: Bool = false, found: Set<Int64> = []) async -> Int {
@@ -190,9 +188,7 @@ actor Indexer {
     }
 
     /// Nothing here writes to a file the user already had: only a fresh import is
-    /// optimized, and only an import nobody gave a destination is moved. Every
-    /// document new to the library — imported, scanned or found in place — is
-    /// given its suggested folders and waits in Needs Review.
+    /// optimized, and only an import nobody gave a destination is moved.
     @discardableResult
     private func pipeline(id: Int64, path: String, isImport: Bool, route: Bool,
                           isNew: Bool) async -> String? {
@@ -278,9 +274,7 @@ actor Indexer {
             try? await store.suggestTag(tag, for: id, autoAcceptMatching: settings.autoAcceptMatchingTagSuggestions)
         }
 
-        // 6. Routing. Every new document gets suggested folders, but only an
-        // undirected import is moved to one; a file found in the library, or
-        // imported into a chosen folder, stays where it is until reviewed.
+        // 6. Routing — every new document gets suggestions; only undirected imports move.
         if isImport || isNew {
             await self.route(id: id, url: &url, text: extracted.text, findings: findings, insight: insight,
                              moving: isImport && route && settings.autoRouteImports,
@@ -321,9 +315,7 @@ actor Indexer {
         return parts.joined(separator: " · ")
     }
 
-    /// Suggests folders and applies the rules' tags, correspondent and type.
-    /// Renaming and moving happen only when `moving`; otherwise the document is
-    /// logged under `action` and waits in Needs Review where it is.
+    /// Renames and moves only when `moving`; otherwise it just suggests.
     private func route(id: Int64, url: inout URL, text: String,
                        findings: DocumentAnalyzer.Findings, insight: DocumentInsight?,
                        moving: Bool, action: String) async {
@@ -619,8 +611,7 @@ actor Indexer {
 
     /// A file from outside the library is copied in and the original left alone —
     /// `movingSource` is only for files the app itself produced. A file already in
-    /// the library is indexed in place, never optimized or moved; if it is new to
-    /// the index it waits in Needs Review with its suggested folders.
+    /// the library is indexed in place, never optimized or moved.
     @discardableResult
     func importFiles(_ urls: [URL], into destination: URL,
                      movingSource: Bool = false, route: Bool = false) async -> ImportSummary {

@@ -171,8 +171,6 @@ private struct GeneratedInfoEditor: View {
         .help("Approving deletes the pre-optimization original unless this is checked")
     }
 
-    /// Never ticked by default: a file that was not optimized on the way in is
-    /// only rewritten when someone asks for it here.
     private var optimizeSection: some View {
         Toggle("Optimize when approving", isOn: $optimize)
             .toggleStyle(.checkbox)
@@ -271,8 +269,6 @@ struct FilingEditor: View {
     @State private var secondaries: Set<String>
     @State private var chosen: [FilingOption] = []
 
-    /// Starts on the folder the file is in now, whatever was suggested: filing
-    /// it anywhere else is always a choice made here.
     init(detail: DocumentDetail, mode: Mode, keepOriginal: Bool = true, optimize: Bool = false) {
         self.detail = detail
         self.mode = mode

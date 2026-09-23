@@ -91,7 +91,7 @@ extension AppModel {
                 try? await lib.store.setDocumentApproved(row.doc, true)
                 if !keepOriginal { try? await lib.store.deleteOriginalFile(for: row.doc) }
             }
-            // After approval, so the original this saves is kept for Revert.
+            // After approval, so the original it saves is kept.
             var optimized: (count: Int, saved: Int64) = (0, 0)
             if optimize { optimized = await lib.indexer.optimize(ids: [row.doc]) }
             if let next { selectedIDs = [next] }
