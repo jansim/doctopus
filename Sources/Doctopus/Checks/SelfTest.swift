@@ -1733,6 +1733,9 @@ enum SelfTest {
                                                            sort: .added, ascending: false)) ?? [])
                 .contains { $0.id == row?.id }
             Check.that("…and still waits in Needs Review for a look at what was read", waiting)
+            var fromOutside = false
+            if let row { fromOutside = (try? await store.detail(row.doc))?.row.fromOutside == true }
+            Check.that("…as a new arrival, not one found in the library", fromOutside)
             try? fm.removeItem(at: clear)
         }
 
@@ -1746,6 +1749,8 @@ enum SelfTest {
             if let row { offered = (try? await store.pathSuggestions(for: row.doc)) ?? [] }
             Check.that("…but is still offered the folder the rules would pick",
                        offered.map(\.path).contains(root.appendingPathComponent("Filed/Clear").path))
+            Check.that("…after the folder that was chosen, so the review keeps it there",
+                       offered.first?.path == folder.path, offered.first?.path ?? "no suggestions")
             try? fm.removeItem(at: chosen)
         }
 
@@ -1767,6 +1772,10 @@ enum SelfTest {
                        offered.map(\.path).contains(root.appendingPathComponent("Filed/Clear").path))
             Check.that("…and waits in Needs Review", waiting)
             Check.that("…without being optimized", row?.originalSize == nil)
+            let listed = ((try? await store.listDocuments(selection: .needsReview, query: SearchQuery(""),
+                                                          sort: .added, ascending: false)) ?? [])
+                .first { $0.id == row?.id }
+            Check.that("…and is marked as already in the library", listed?.fromOutside == false)
         }
 
         if let tie = stage("doctopus-tie") {
@@ -1787,6 +1796,10 @@ enum SelfTest {
                        offered.map(\.path).contains(root.appendingPathComponent("Filed/A").path)
                            && offered.map(\.path).contains(root.appendingPathComponent("Filed/B").path))
             Check.that("…and waits in Needs Review", queued)
+            let listed = ((try? await store.listDocuments(selection: .needsReview, query: SearchQuery(""),
+                                                          sort: .added, ascending: false)) ?? [])
+                .first { $0.id == row?.id }
+            Check.that("…marked as a new arrival", listed?.fromOutside == true)
             try? fm.removeItem(at: tie)
         }
 
