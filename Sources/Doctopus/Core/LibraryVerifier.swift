@@ -112,3 +112,47 @@ enum LibraryVerifier {
         return report
     }
 }
+
+extension Store {
+
+    struct VerificationDocInfo: Sendable {
+        var id: Int64
+        var path: String
+        var filename: String
+        var hash: String?
+        var ocrState: OCRState
+    }
+
+    func verificationDocumentInfos() throws -> [VerificationDocInfo] {
+        try db.map("""
+            SELECT id, path, filename, hash, ocr_state
+            FROM documents WHERE deleted_at IS NULL
+            """) {
+            VerificationDocInfo(id: $0.int(0), path: absPath($0.string(1)), filename: $0.string(2),
+                                hash: $0.stringOrNil(3),
+                                ocrState: OCRState(rawValue: $0.int(4)) ?? .pending)
+        }
+    }
+
+    func allAliasRecords() throws -> [(id: Int64, docID: Int64, path: String)] {
+        try db.map("SELECT id, doc_id, path FROM aliases") { ($0.int(0), $0.int(1), absPath($0.string(2))) }
+    }
+
+    func orphanedSuggestionsCount() throws -> Int {
+        try db.first("SELECT COUNT(*) FROM tag_suggestions WHERE doc_id NOT IN (SELECT id FROM documents)") {
+            Int($0.int(0))
+        } ?? 0
+    }
+
+    func orphanedIconsCount() throws -> Int {
+        try db.first("SELECT COUNT(*) FROM value_icons WHERE field_id NOT IN (SELECT id FROM fields)") {
+            Int($0.int(0))
+        } ?? 0
+    }
+
+    func orphanedFTSCount() throws -> Int {
+        try db.first("SELECT COUNT(*) FROM doc_fts WHERE rowid NOT IN (SELECT id FROM documents)") {
+            Int($0.int(0))
+        } ?? 0
+    }
+}

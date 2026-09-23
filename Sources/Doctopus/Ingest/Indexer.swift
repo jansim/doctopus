@@ -50,20 +50,12 @@ actor Indexer {
 
         onProgress(IndexProgress(phase: "Scanning", done: 0, total: 1))
 
-        var toProcess: [(Int64, String)] = []
         let found = FileScanner.scan(root: store.root)
-        var seen = Set<String>()
-        seen.reserveCapacity(found.count)
-
-        for f in found {
-            if cancelled { return nil }
-            seen.insert(f.url.path)
-            let facts = Store.FileFacts(path: f.url.path,
-                                        size: f.size, mtime: f.mtime, created: f.created)
-            guard let result = try? await store.upsertDocument(facts) else { continue }
-            if result.changed { toProcess.append((result.id, f.url.path)) }
-        }
-        _ = try? await store.reconcileMissing(seenPaths: seen)
+        if cancelled { return nil }
+        let facts = found.map { Store.FileFacts(path: $0.url.path, size: $0.size, mtime: $0.mtime, created: $0.created) }
+        guard let upserted = try? await store.upsertDocuments(facts) else { return nil }
+        var toProcess = upserted.filter(\.changed).map { ($0.id, $0.path) }
+        _ = try? await store.reconcileMissing(seenPaths: Set(facts.map(\.path)))
 
         _ = try? await store.purgeMissing()
         _ = try? await store.purgeDeleted()
