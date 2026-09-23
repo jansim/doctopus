@@ -34,6 +34,29 @@ struct SearchQuery: Sendable, Equatable {
         "language": "language", "correspondent": "correspondent", "amount": "amount",
     ]
 
+    /// Every `is:` flag: its names, the first one suggested, and what it means.
+    static let flagPredicates: [(names: [String], sql: String)] = [
+        (["review", "unapproved"], "d.approved=0"),
+        (["approved"], "d.approved=1"),
+        (["untagged"], "d.id NOT IN (SELECT doc_id FROM document_tags)"),
+        (["tagged"], "d.id IN (SELECT doc_id FROM document_tags)"),
+        (["pending"], "d.ocr_state=0"),
+        (["failed"], "d.ocr_state=2"),
+        (["optimized"], "d.original_size IS NOT NULL"),
+        (["duplicate", "duplicates"], """
+            d.hash IN (SELECT hash FROM documents WHERE missing=0 AND deleted_at IS NULL AND hash IS NOT NULL GROUP BY hash HAVING COUNT(*) > 1)
+            OR d.original_hash IN (SELECT original_hash FROM documents WHERE missing=0 AND deleted_at IS NULL AND original_hash IS NOT NULL GROUP BY original_hash HAVING COUNT(*) > 1)
+            """),
+        (["stale-analysis", "stale"],
+         "m.source = 'heuristic' OR m.source IS NULL OR m.source NOT LIKE '%:v\(MetadataSource.promptVersion)'"),
+        (["missing"], "d.missing=1"),
+        (["trashed", "deleted"], "d.deleted_at IS NOT NULL"),
+    ]
+
+    static func flagPredicate(_ name: String) -> String? {
+        flagPredicates.first { $0.names.contains(name) }?.sql
+    }
+
     static let reserved: Set<String> = [
         "tag", "finder", "in", "ext", "is", "date", "created", "added", "before", "after", "docdate"
     ]

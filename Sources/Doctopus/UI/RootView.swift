@@ -187,7 +187,7 @@ private struct SearchSuggestions: View {
     var body: some View {
         if model.searchText.isEmpty {
             ForEach(["is:review", "is:untagged", "is:duplicate", "is:stale-analysis", "ext:pdf",
-                     "date:\"this month\"", "date:2026"], id: \.self) { token in
+                     "date:\"this month\"", "date:\(thisYear)"], id: \.self) { token in
                 Text(token).searchCompletion(token)
             }
         } else {
@@ -215,9 +215,9 @@ private struct SearchSuggestions: View {
         let candidates: [String]
         switch prefix {
         case "tag": candidates = model.tagNames
-        case "is": candidates = ["review", "approved", "untagged", "tagged", "pending", "failed", "optimized", "duplicate", "stale-analysis", "missing", "trashed"]
+        case "is": candidates = SearchQuery.flagPredicates.map { $0.names[0] }
         case "ext": candidates = ["pdf", "png", "jpg", "jpeg"]
-        case "date", "created", "added": candidates = ["today", "yesterday", "this week", "last week", "this month", "last month", "this year", "last year", "this quarter", "2026", "2025"]
+        case "date", "created", "added": candidates = ["today", "yesterday", "this week", "last week", "this month", "last month", "this year", "last year", "this quarter", "\(thisYear)", "\(thisYear - 1)"]
         default:
             let key = SearchQuery.aliases[prefix] ?? prefix
             candidates = (model.facets[key] ?? []).map(\.value)
@@ -225,6 +225,8 @@ private struct SearchSuggestions: View {
         if query.isEmpty { return candidates }
         return candidates.filter { $0.lowercased().hasPrefix(query) || $0.lowercased().contains(query) }
     }
+
+    private var thisYear: Int { Calendar.current.component(.year, from: .now) }
 
     private func quoted(_ v: String) -> String { v.contains(" ") ? "\"\(v)\"" : v }
 }
