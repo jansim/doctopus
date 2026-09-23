@@ -7,6 +7,20 @@ import AppKit
 ///
 /// Views only ever read this; every mutation funnels through an action here so
 /// there is exactly one place where "disk changed" turns into "UI changed".
+enum DocumentSheet: Identifiable {
+    case rename, addTag, quickOpen
+    case file(DocumentRow)
+
+    var id: String {
+        switch self {
+        case .rename: return "rename"
+        case .addTag: return "addTag"
+        case .quickOpen: return "quickOpen"
+        case .file(let row): return "file \(row.id)"
+        }
+    }
+}
+
 @MainActor
 @Observable
 final class AppModel {
@@ -192,6 +206,7 @@ final class AppModel {
     }
 
     var detail: DocumentDetail?
+    var sheet: DocumentSheet?
 
     var progress = IndexProgress()
     var modelStatus: LLMStatus = .unsupported("Checking…")
@@ -239,6 +254,10 @@ final class AppModel {
     /// Every folder a selected document is in, as its master file or an alias.
     var revealedFolders: Set<String> = []
     var revealTask: Task<Void, Never>?
+
+    // AppModel+Libraries, undo
+    /// The window's, so a file change can be taken back with Edit › Undo.
+    @ObservationIgnored weak var undoManager: UndoManager?
 
     // AppModel+Rules
     var ruleMatchTask: Task<Void, Never>?

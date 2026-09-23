@@ -83,7 +83,11 @@ struct DoctopusApp: App {
                 }
         }
         .defaultSize(width: 1320, height: 840)
-        .commands { DoctopusCommands(model: model) }
+        .commands {
+            SidebarCommands()
+            InspectorCommands()
+            DoctopusCommands(model: model)
+        }
 
         Settings {
             SettingsView().environment(model)
@@ -146,19 +150,22 @@ struct DoctopusCommands: Commands {
     let model: AppModel
 
     var body: some Commands {
-        // Added alongside the standard Undo/Redo rather than replacing it: ⌘Z
-        // has to keep undoing typing in text fields, not move files on disk.
-        CommandGroup(after: .undoRedo) {
-            Button("Undo File Change") { model.undo() }
-                .keyboardShortcut("z", modifiers: [.command, .option])
-        }
-
         CommandGroup(replacing: .newItem) {
             Button("New Library from Folder…") { model.addLibrary() }
                 .keyboardShortcut("n", modifiers: [.command])
             Button("Open Library…") { model.openLibraryPicker() }
                 .keyboardShortcut("o", modifiers: [.command])
-            Button("Quick Open…") { NotificationCenter.default.post(name: .showQuickSwitcher, object: nil) }
+            Menu("Open Recent") {
+                let recent = NSDocumentController.shared.recentDocumentURLs
+                    .filter { FileManager.default.fileExists(atPath: $0.path) }
+                ForEach(recent, id: \.self) { url in
+                    Button(url.deletingLastPathComponent().lastPathComponent) { model.openLibrary(at: url) }
+                }
+                Divider()
+                Button("Clear Menu") { NSDocumentController.shared.clearRecentDocuments(nil) }
+                    .disabled(recent.isEmpty)
+            }
+            Button("Quick Open…") { model.sheet = .quickOpen }
                 .keyboardShortcut("o", modifiers: [.command, .shift])
             Button("Import Files…") { importPanel() }
                 .keyboardShortcut("i", modifiers: [.command])
@@ -191,7 +198,7 @@ struct DoctopusCommands: Commands {
                 .keyboardShortcut("r", modifiers: [.command, .shift])
                 .disabled(model.selectedIDs.isEmpty)
             Divider()
-            Button("Rename with Template…") { NotificationCenter.default.post(name: .showRenameSheet, object: nil) }
+            Button("Rename with Template…") { model.sheet = .rename }
                 .disabled(model.selectedIDs.isEmpty)
             Button("Move to Folder…") { model.moveToFolderPicker(model.selectedRows) }
                 .disabled(model.selectedIDs.isEmpty)
@@ -216,9 +223,4 @@ struct DoctopusCommands: Commands {
         guard let urls = ImportPanel.choose() else { return }
         model.importFiles(urls, into: nil)
     }
-}
-
-extension Notification.Name {
-    static let showRenameSheet = Notification.Name("io.doctopus.showRenameSheet")
-    static let showQuickSwitcher = Notification.Name("io.doctopus.showQuickSwitcher")
 }

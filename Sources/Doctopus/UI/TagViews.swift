@@ -1,5 +1,15 @@
 import SwiftUI
 
+extension FinderTags {
+    static let labelColors: [Color?] = [nil, .gray, .green, .purple, .blue, .yellow, .red, .orange]
+
+    static func color(label: Int) -> Color? {
+        labelColors.indices.contains(label) ? labelColors[label] : nil
+    }
+
+    static func color(for name: String) -> Color? { color(label: label(for: name)) }
+}
+
 struct FinderTagDot: View {
     let name: String
     var size: CGFloat = 9

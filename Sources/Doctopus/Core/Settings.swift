@@ -42,26 +42,6 @@ struct AppWideSettings: StoredSettings, Sendable, Equatable {
     var jpegQuality: Double = 0.6
     var targetDPI: Double = 150
 
-    var optimizerOptions: Optimizer.Options {
-        var o = Optimizer.Options()
-        o.jpegQuality = CGFloat(jpegQuality)
-        o.targetDPI = CGFloat(targetDPI)
-        return o
-    }
-
-    var remoteConfig: RemoteLLMConfig {
-        RemoteLLMConfig(endpoint: remoteEndpoint, model: remoteModel, apiKey: remoteAPIKey,
-                        timeout: remoteTimeout, parallelRequests: remoteParallelRequests,
-                        vision: remoteVision, visionImageSize: remoteVisionImageSize)
-    }
-
-    var sendsPageImage: Bool { llmBackend == .remote && remoteVision }
-
-    var predictedFields: Set<InsightField> {
-        get { Set(InsightField.allCases.filter { !unpredictedFields.contains($0.rawValue) }) }
-        set { unpredictedFields = InsightField.allCases.filter { !newValue.contains($0) }.map(\.rawValue) }
-    }
-
     var effectiveConcurrency: Int {
         if ocrConcurrency > 0 { return min(ocrConcurrency, 16) }
         return max(2, min(6, ProcessInfo.processInfo.activeProcessorCount - 2))
@@ -107,27 +87,29 @@ struct AppSettings: Sendable, Equatable {
     }
 
     var ignoredDays: Set<String> { library.ignoredDays }
-    var optimizerOptions: Optimizer.Options { appWide.optimizerOptions }
-    var remoteConfig: RemoteLLMConfig { appWide.remoteConfig }
-    var sendsPageImage: Bool { appWide.sendsPageImage }
     var effectiveConcurrency: Int { appWide.effectiveConcurrency }
+}
 
-    static let storageKey = "app_settings_v1"
+enum LLMBackend: String, Codable, CaseIterable, Sendable, Identifiable {
+    case off
+    case onDevice
+    case remote
 
-    @MainActor
-    static func load(from store: Store) async -> AppSettings {
-        let raw = (try? await store.setting(storageKey)) ?? ""
-        return AppSettings(library: LibrarySettings.decoded(from: Data(raw.utf8)),
-                           appWide: Preferences.appWide)
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .off: return "Heuristics only"
+        case .onDevice: return "Apple on-device model"
+        case .remote: return "API endpoint"
+        }
     }
 
-    /// Each half goes where it belongs. Only the library's own settings reach
-    /// the blob, so no library ends up holding somebody's API key.
-    @MainActor
-    func save(to store: Store) async {
-        Preferences.appWide = appWide
-        guard let data = try? JSONEncoder().encode(library),
-              let raw = String(data: data, encoding: .utf8) else { return }
-        try? await store.setSetting(Self.storageKey, raw)
+    var metadataSource: String? {
+        switch self {
+        case .off: return nil
+        case .onDevice: return "llm"
+        case .remote: return "remote"
+        }
     }
 }

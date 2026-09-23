@@ -36,8 +36,9 @@ extension AppModel {
         guard let lib = library(of: row) else { return }
         Task {
             guard let rule = try? await lib.store.rules().first(where: { $0.id == match.ruleID }) else { return }
-            let result = (try? await lib.store.applyRuleToExisting(rule, onlyTo: row.doc))
-                ?? Store.RuleApplyResult()
+            let marks = await eventMarks([row])
+            let result = await lib.indexer.applyRule(rule, onlyTo: row.doc)
+            if result.moved + result.renamed > 0 { offerUndo("Apply Rule", of: [row], since: marks) }
             if result.matched > 0,
                let path = try? await lib.store.documentPath(row.doc) {
                 await lib.indexer.syncAliases(docID: row.doc, target: URL(fileURLWithPath: path))

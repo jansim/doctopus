@@ -349,7 +349,7 @@ actor RemoteLLMService {
         insight.title = string("title")
         insight.tags = tags(object["tags"])
         let modelPart = model.flatMap { $0.nilIfBlank }.map { ":\($0)" } ?? ""
-        insight.source = "\(vision ? "vlm" : "remote")\(modelPart):v\(LLMPrompt.promptVersion)"
+        insight.source = "\(vision ? "vlm" : "remote")\(modelPart):v\(MetadataSource.promptVersion)"
         insight.confidence = 0.9
 
         insight = insight.keeping(fields)
@@ -439,4 +439,15 @@ actor RemoteLLMService {
         }
         return best
     }
+}
+
+extension AppSettings {
+    var remoteConfig: RemoteLLMConfig {
+        let s = appWide
+        return RemoteLLMConfig(endpoint: s.remoteEndpoint, model: s.remoteModel, apiKey: s.remoteAPIKey,
+                               timeout: s.remoteTimeout, parallelRequests: s.remoteParallelRequests,
+                               vision: s.remoteVision, visionImageSize: s.remoteVisionImageSize)
+    }
+
+    var sendsPageImage: Bool { appWide.llmBackend == .remote && appWide.remoteVision }
 }

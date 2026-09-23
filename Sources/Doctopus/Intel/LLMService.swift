@@ -65,7 +65,7 @@ actor LLMService {
                 let response = try await session.respond(to: prompt, schema: try Self.schema(question.fields))
                 guard var insight = RemoteLLMService.parse(response.content.jsonString,
                                                            fields: question.fields) else { return nil }
-                insight.source = "llm:v\(LLMPrompt.promptVersion)"
+                insight.source = "llm:v\(MetadataSource.promptVersion)"
                 return insight
             } catch {
                 // A single failure (context overflow, guardrail, model unloaded)

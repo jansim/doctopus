@@ -27,6 +27,10 @@ land.
 Dropping onto a tag, a Finder tag or a facet assigns it rather than filing
 anything.
 
+Dragging documents out of Doctopus hands over the files themselves, so a drop
+on Finder, Mail or Preview gets the document; ⌘C copies them the same way, and
+Share in the context menu offers the system's share targets.
+
 Dragging one document out of a selection carries the whole selection. In the
 gallery the drag says so as it leaves: the page under the pointer carries
 Finder's red count of how many documents are going along.
@@ -79,6 +83,10 @@ optimization savings, alias mappings, raw text, all metadata.
 Full keyboard navigation with native Quick Look — Space on any file gives an
 instant preview with text selection and pagination. Double-click, or ⌘↓, hands
 the document to whichever app owns it, the way Finder does.
+
+The sidebar and inspector are shown and hidden from the View menu (⌃⌘S,
+⌃⌘I), and the inspector stays as it was left. Libraries appear in File › Open
+Recent and in the Dock icon's menu.
 
 Holding ⌥ on its own lights up, in the sidebar, every folder the selected
 documents are in — where each master file lives and every folder it is filed

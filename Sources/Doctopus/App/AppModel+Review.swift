@@ -94,6 +94,7 @@ extension AppModel {
         }
         let next = advance ? rowAfter(row) : nil
         Task {
+            let marks = await eventMarks([row])
             let wanted = secondaries.subtracting([primary.path])
             let existing = ((try? await lib.store.aliases(for: row.doc)) ?? []).filter { $0.tagID == nil }
             var have: Set<String> = []
@@ -125,7 +126,7 @@ extension AppModel {
                 guard let created = try? AliasManager.createAlias(to: target, in: URL(fileURLWithPath: folder))
                 else { continue }
                 try? await lib.store.recordAlias(docID: row.doc, tagID: nil, path: created.path)
-                try? await lib.store.logProcessing(docID: row.doc, action: "aliased",
+                try? await lib.store.logProcessing(docID: row.doc, action: .aliased,
                                                    detail: "Also filed under \((folder as NSString).lastPathComponent)",
                                                    confidence: nil, rule: nil, from: target.path,
                                                    to: created.path, approved: true)
@@ -137,6 +138,7 @@ extension AppModel {
                 try? await lib.store.setDocumentApproved(row.doc, true)
                 if let version { kept = await keep(version, of: row, in: lib).note }
             }
+            if moved || !added.isEmpty { offerUndo("File", of: [row], since: marks) }
             if let next { selectedIDs = [next] }
             refreshAll()
             reloadDetail()

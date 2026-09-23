@@ -126,44 +126,10 @@ extension Store {
         for v in query.folders        { wheres.append("d.directory LIKE ?");     args.append(.text("%\(v)%")) }
         for v in query.negatedFolders { wheres.append("d.directory NOT LIKE ?"); args.append(.text("%\(v)%")) }
         for f in query.flags {
-            switch f {
-            case "review", "unapproved": wheres.append("d.approved=0")
-            case "approved":             wheres.append("d.approved=1")
-            case "untagged":             wheres.append("d.id NOT IN (SELECT doc_id FROM document_tags)")
-            case "tagged":               wheres.append("d.id IN (SELECT doc_id FROM document_tags)")
-            case "pending":              wheres.append("d.ocr_state=0")
-            case "failed":               wheres.append("d.ocr_state=2")
-            case "optimized":            wheres.append("d.original_size IS NOT NULL")
-            case "duplicate", "duplicates":
-                wheres.append("""
-                    (d.hash IN (SELECT hash FROM documents WHERE missing=0 AND deleted_at IS NULL AND hash IS NOT NULL GROUP BY hash HAVING COUNT(*) > 1)
-                     OR d.original_hash IN (SELECT original_hash FROM documents WHERE missing=0 AND deleted_at IS NULL AND original_hash IS NOT NULL GROUP BY original_hash HAVING COUNT(*) > 1))
-                    """)
-            case "missing":              wheres.append("d.missing=1")
-            case "trashed", "deleted":   wheres.append("d.deleted_at IS NOT NULL")
-            case "stale-analysis", "stale":
-                wheres.append("(m.source = 'heuristic' OR m.source IS NULL OR m.source NOT LIKE '%:v\(LLMPrompt.promptVersion)')")
-            default: break
-            }
+            if let p = SearchQuery.flagPredicate(f) { wheres.append("(\(p))") }
         }
         for f in query.negatedFlags {
-            switch f {
-            case "review", "unapproved": wheres.append("d.approved=1")
-            case "approved":             wheres.append("d.approved=0")
-            case "untagged":             wheres.append("d.id IN (SELECT doc_id FROM document_tags)")
-            case "tagged":               wheres.append("d.id NOT IN (SELECT doc_id FROM document_tags)")
-            case "pending":              wheres.append("d.ocr_state<>0")
-            case "failed":               wheres.append("d.ocr_state<>2")
-            case "optimized":            wheres.append("d.original_size IS NULL")
-            case "duplicate", "duplicates":
-                wheres.append("""
-                    ((d.hash IS NULL OR d.hash NOT IN (SELECT hash FROM documents WHERE missing=0 AND deleted_at IS NULL AND hash IS NOT NULL GROUP BY hash HAVING COUNT(*) > 1))
-                     AND (d.original_hash IS NULL OR d.original_hash NOT IN (SELECT original_hash FROM documents WHERE missing=0 AND deleted_at IS NULL AND original_hash IS NOT NULL GROUP BY original_hash HAVING COUNT(*) > 1)))
-                    """)
-            case "missing":              wheres.append("d.missing=0")
-            case "trashed", "deleted":   wheres.append("d.deleted_at IS NULL")
-            default: break
-            }
+            if let p = SearchQuery.flagPredicate(f) { wheres.append("NOT COALESCE((\(p)), 0)") }
         }
         for df in query.dateFilters {
             let col = df.column
@@ -269,7 +235,7 @@ extension Store {
             var row = documentRow(r)
             row.snippet = r.stringOrNil(19)?.nilIfBlank
             row.queue = r.intOrNil(20).map { id in
-                QueueInfo(entryID: id, at: r.date(21) ?? .now, action: r.string(22),
+                QueueInfo(entryID: id, at: r.date(21) ?? .now, action: EventAction(stored: r.string(22)),
                           detail: r.stringOrNil(23), confidence: r.doubleOrNil(24),
                           rule: r.stringOrNil(25), approved: r.bool(26))
             }

@@ -58,6 +58,7 @@ enum UITest {
             await reviewBatchTreatsEachKindApart(model, snapshots: snapshots)
             await droppingAFolderImportsIt(model)
             await draggingOntoAFolderFilesOrMoves(model)
+            await undoTakesBackAMove(model)
             Check.finish("ui checks")
         }
         app.run()
@@ -686,7 +687,7 @@ enum UITest {
 
         func recorded(_ needle: String) -> Bool {
             model.detail?.history.contains {
-                $0.action == "edited" && $0.detail?.contains(needle) == true
+                $0.action == .edited && $0.detail?.contains(needle) == true
             } == true
         }
 
@@ -911,6 +912,23 @@ enum UITest {
         try? fm.createDirectory(at: cameFrom, withIntermediateDirectories: true)
         try? fm.moveItem(at: landed, to: cameFrom.appendingPathComponent(moving.filename))
         try? fm.removeItem(at: destination)
+    }
+
+    private static func undoTakesBackAMove(_ model: AppModel) async {
+        let undo = UndoManager()
+        model.undoManager = undo
+        model.selection = .all
+        guard let row = model.documents.first(where: { !$0.isAliasHere }),
+              let library = model.library(of: row) else { return }
+        let folder = library.root.appendingPathComponent("Undo Check", isDirectory: true)
+        model.move([row], to: folder)
+        let moved = await settle { undo.canUndo }
+        Check.that("a move is offered to Edit › Undo", moved && undo.undoActionName == "Move",
+                   undo.undoActionName)
+        guard moved else { return }
+        undo.undo()
+        let back = await settle { FileManager.default.fileExists(atPath: row.path) }
+        Check.that("…and undoing it puts the file back where it was", back)
     }
 
     private static func drop(_ item: DocumentDragItem, on target: NSView, in window: NSWindow) -> Bool {

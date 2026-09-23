@@ -18,7 +18,8 @@ struct DocumentDragItem: Codable, Transferable, Hashable, Sendable {
 
     static var transferRepresentation: some TransferRepresentation {
         CodableRepresentation(contentType: .doctopusDocument)
-        ProxyRepresentation(exporting: \.path)
+        // The file itself, so a drop on Finder, Mail or Preview gets the document.
+        ProxyRepresentation(exporting: { URL(fileURLWithPath: $0.path) })
     }
 
     /// Handed a callback rather than waited out: a drag out of this app's own
@@ -177,7 +178,10 @@ extension AppModel {
         return documents.filter { dropped.contains($0.id) }
     }
 
-    func handleDroppedFiles(_ urls: [URL]) -> Bool {
+    func handleDroppedFiles(_ offered: [URL]) -> Bool {
+        // A row dragged out of the list and let go over it again is not an import.
+        let listed = Set(documents.map(\.path))
+        let urls = offered.filter { !listed.contains($0.path) }
         let libraries = urls.filter { $0.lastPathComponent.hasSuffix(".doctopus") }
         let imports = urls.filter { url in
             guard !url.lastPathComponent.hasSuffix(".doctopus") else { return false }

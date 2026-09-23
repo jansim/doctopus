@@ -3,10 +3,9 @@ import AppKit
 
 struct RootView: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.undoManager) private var undoManager
     @State private var columnVisibility = NavigationSplitViewVisibility.all
-    @State private var showInspector = true
-    @State private var renameSheet = false
-    @State private var showQuickSwitcher = false
+    @SceneStorage("showInspector") private var showInspector = true
 
     var body: some View {
         @Bindable var model = model
@@ -39,17 +38,18 @@ struct RootView: View {
         // Each column is its own hosting view and needs its own; this one
         // covers focus outside them, such as the toolbar.
         .acceptsScans()
-        .sheet(isPresented: $renameSheet) { RenameSheet(isPresented: $renameSheet) }
-        .sheet(isPresented: $showQuickSwitcher) { QuickSwitcherSheet() }
-        .onReceive(NotificationCenter.default.publisher(for: .showRenameSheet)) { _ in
-            if !model.selectedIDs.isEmpty { renameSheet = true }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .showQuickSwitcher)) { _ in
-            showQuickSwitcher = true
+        .sheet(item: $model.sheet) { sheet in
+            switch sheet {
+            case .rename: RenameSheet()
+            case .addTag: AddTagSheet()
+            case .quickOpen: QuickSwitcherSheet()
+            case .file(let row): FilingSheet(row: row)
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in
             model.appResignedActive()
         }
+        .onAppear { model.undoManager = undoManager }
         .onOpenURL { url in
             model.handleURL(url)
         }
@@ -187,7 +187,7 @@ private struct SearchSuggestions: View {
     var body: some View {
         if model.searchText.isEmpty {
             ForEach(["is:review", "is:untagged", "is:duplicate", "is:stale-analysis", "ext:pdf",
-                     "date:\"this month\"", "date:2026"], id: \.self) { token in
+                     "date:\"this month\"", "date:\(thisYear)"], id: \.self) { token in
                 Text(token).searchCompletion(token)
             }
         } else {
@@ -215,9 +215,9 @@ private struct SearchSuggestions: View {
         let candidates: [String]
         switch prefix {
         case "tag": candidates = model.tagNames
-        case "is": candidates = ["review", "approved", "untagged", "tagged", "pending", "failed", "optimized", "duplicate", "stale-analysis", "missing", "trashed"]
+        case "is": candidates = SearchQuery.flagPredicates.map { $0.names[0] }
         case "ext": candidates = ["pdf", "png", "jpg", "jpeg"]
-        case "date", "created", "added": candidates = ["today", "yesterday", "this week", "last week", "this month", "last month", "this year", "last year", "this quarter", "2026", "2025"]
+        case "date", "created", "added": candidates = ["today", "yesterday", "this week", "last week", "this month", "last month", "this year", "last year", "this quarter", "\(thisYear)", "\(thisYear - 1)"]
         default:
             let key = SearchQuery.aliases[prefix] ?? prefix
             candidates = (model.facets[key] ?? []).map(\.value)
@@ -225,6 +225,8 @@ private struct SearchSuggestions: View {
         if query.isEmpty { return candidates }
         return candidates.filter { $0.lowercased().hasPrefix(query) || $0.lowercased().contains(query) }
     }
+
+    private var thisYear: Int { Calendar.current.component(.year, from: .now) }
 
     private func quoted(_ v: String) -> String { v.contains(" ") ? "\"\(v)\"" : v }
 }

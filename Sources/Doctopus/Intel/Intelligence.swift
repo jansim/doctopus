@@ -17,30 +17,6 @@ enum LLMStatus: Sendable, Equatable {
     }
 }
 
-enum LLMBackend: String, Codable, CaseIterable, Sendable, Identifiable {
-    case off
-    case onDevice
-    case remote
-
-    var id: String { rawValue }
-
-    var label: String {
-        switch self {
-        case .off: return "Heuristics only"
-        case .onDevice: return "Apple on-device model"
-        case .remote: return "API endpoint"
-        }
-    }
-
-    var metadataSource: String? {
-        switch self {
-        case .off: return nil
-        case .onDevice: return "llm"
-        case .remote: return "remote"
-        }
-    }
-}
-
 /// The parts of a `DocumentInsight` the user can switch off one by one.
 enum InsightField: String, Codable, CaseIterable, Sendable, Identifiable {
     case title
@@ -54,6 +30,13 @@ enum InsightField: String, Codable, CaseIterable, Sendable, Identifiable {
     var id: String { rawValue }
 
     var label: String { self == .documentType ? "Category" : rawValue.capitalized }
+}
+
+extension AppWideSettings {
+    var predictedFields: Set<InsightField> {
+        get { Set(InsightField.allCases.filter { !unpredictedFields.contains($0.rawValue) }) }
+        set { unpredictedFields = InsightField.allCases.filter { !newValue.contains($0) }.map(\.rawValue) }
+    }
 }
 
 extension DocumentInsight {
@@ -71,64 +54,9 @@ extension DocumentInsight {
     }
 }
 
-/// `metadata.source` is written as `backend[:model][:vN]`. Read it back only
-/// through here, so adding a component never breaks a prefix match elsewhere.
-enum MetadataSource: Equatable {
-    case onDevice(model: String?)
-    case remote(model: String?, vision: Bool)
-    case heuristics
-
-    init(_ raw: String) {
-        var parts = raw.split(separator: ":").map(String.init)
-        let backend = parts.isEmpty ? "" : parts.removeFirst()
-        if let last = parts.last, last.hasPrefix("v"), last.dropFirst().allSatisfy(\.isNumber) {
-            parts.removeLast()
-        }
-        let model = parts.joined(separator: ":").nilIfBlank
-        switch backend {
-        case "llm": self = .onDevice(model: model)
-        case "remote": self = .remote(model: model, vision: false)
-        case "vlm": self = .remote(model: model, vision: true)
-        default: self = .heuristics
-        }
-    }
-
-    var model: String? {
-        switch self {
-        case .onDevice(let m), .remote(let m, _): return m
-        case .heuristics: return nil
-        }
-    }
-
-    var label: String {
-        switch self {
-        case .onDevice: return "On-device model"
-        case .remote(_, let vision): return vision ? "API vision model" : "API model"
-        case .heuristics: return "Heuristics"
-        }
-    }
-
-    var inlineLabel: String {
-        switch self {
-        case .onDevice: return "on-device model"
-        case .remote(_, let vision): return vision ? "API vision model" : "API model"
-        case .heuristics: return "heuristics"
-        }
-    }
-
-    var detailedLabel: String {
-        guard let model else { return label }
-        return "\(label) (\(model))"
-    }
-}
-
 /// Shared by both backends: asking them different questions would make their
 /// answers incomparable.
 enum LLMPrompt {
-    /// Bump whenever the default template changes, so `is:stale-analysis` can
-    /// find the documents answered under an older one.
-    static let promptVersion = 5
-
     /// The only copy of the question; field meanings live here, not in the schemas.
     static let defaultTemplate = """
         You classify scanned personal and business documents for a filing system. \
