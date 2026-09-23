@@ -1,11 +1,7 @@
 import SwiftUI
 import AppKit
 
-/// The review's choice between a document's original bytes and an optimized
-/// copy. Both are always on show side by side, so either can be looked at, or
-/// the two flipped between in Quick Look, before anything is decided. A file
-/// that has not been optimized is tried on a throwaway copy to show what
-/// optimizing would make of it; nothing is written to the file until approval.
+/// Original vs optimized, side by side; an unoptimized file is previewed on a throwaway copy.
 struct VersionPicker: View {
     @Environment(AppModel.self) private var model
     let detail: DocumentDetail
@@ -23,8 +19,6 @@ struct VersionPicker: View {
     private var row: DocumentRow { detail.row }
     private var arrival: Arrival { Arrival(row) }
 
-    /// Only PDFs are optimized, and a file optimized before now whose original
-    /// has since been let go has no choice left to offer.
     static func applies(to detail: DocumentDetail) -> Bool {
         if detail.isOptimized { return detail.originalFileURL != nil }
         return detail.row.ext.lowercased() == "pdf"
@@ -166,7 +160,7 @@ struct VersionPicker: View {
     private func tryOptimizing() async {
         guard !detail.isOptimized, preview == nil else { return }
         trying = true
-        // Arrowing through the list should not start a trial for every row passed.
+        // Debounced, so arrowing through the list doesn't optimize every row passed.
         try? await Task.sleep(for: .milliseconds(350))
         guard !Task.isCancelled else { trying = false; return }
         let result = await model.optimizationPreview(of: row)
@@ -176,7 +170,6 @@ struct VersionPicker: View {
             return
         }
         preview = result
-        // Nothing to choose between, so nothing to optimize on approval.
         if result == nil { version = .original }
     }
 }

@@ -1,16 +1,11 @@
 import SwiftUI
 
-/// Several documents reviewed at once. Each kind of arrival starts on what the
-/// single-document review would do with it — a new one filed in its best
-/// suggestion and kept optimized, one already in the library left where and as
-/// it is — and a mixed selection can set both kinds at once. What approving
-/// will do is counted out in the arrivals' colours before anything happens.
+/// Each kind of arrival starts on its single-document defaults; the outcome is counted before approving.
 struct BulkReview: View {
     @Environment(AppModel.self) private var model
     let rows: [DocumentRow]
-    @State private var newArrivals = ReviewTreatment.default(fromOutside: true)
-    @State private var inLibrary = ReviewTreatment.default(fromOutside: false)
-    /// Each document's best suggestion, where that is somewhere else.
+    @State private var newArrivals = BulkReview.new
+    @State private var inLibrary = BulkReview.found
     @State private var suggested: [DocumentRef: String] = [:]
     @State private var confirmingDiscard = false
 
@@ -34,9 +29,7 @@ struct BulkReview: View {
             header
             if mixed { presetPicker }
             ForEach(present, id: \.self) { arrival in
-                GroupTreatment(arrival: arrival, count: rows(arrival).count,
-                               movable: rows(arrival).filter { suggested[$0.id] != nil }.count,
-                               treatment: treatment(arrival))
+                GroupTreatment(arrival: arrival, count: rows(arrival).count, treatment: treatment(arrival))
             }
             Divider()
             outcome
@@ -81,9 +74,11 @@ struct BulkReview: View {
         }
     }
 
+    private static let new = ReviewTreatment.default(fromOutside: true)
+    private static let found = ReviewTreatment.default(fromOutside: false)
+
     private var preset: Preset {
-        let new = ReviewTreatment.default(fromOutside: true)
-        let found = ReviewTreatment.default(fromOutside: false)
+        let (new, found) = (Self.new, Self.found)
         switch (newArrivals, inLibrary) {
         case (new, found): return .defaults
         case (new, new): return .allNew
@@ -93,8 +88,7 @@ struct BulkReview: View {
     }
 
     private func apply(_ preset: Preset) {
-        let new = ReviewTreatment.default(fromOutside: true)
-        let found = ReviewTreatment.default(fromOutside: false)
+        let (new, found) = (Self.new, Self.found)
         switch preset {
         case .defaults: newArrivals = new; inLibrary = found
         case .allNew: newArrivals = new; inLibrary = new
@@ -102,8 +96,6 @@ struct BulkReview: View {
         case .custom: break
         }
     }
-
-    // MARK: What approving does
 
     private struct Outcome: Identifiable {
         var id: String { label }
@@ -195,13 +187,9 @@ struct BulkReview: View {
     }
 }
 
-/// One kind of arrival's two choices: whether approving files it in its best
-/// suggestion, and which version of the file it keeps.
 private struct GroupTreatment: View {
     let arrival: Arrival
     let count: Int
-    /// How many have a best suggestion somewhere other than where they are.
-    let movable: Int
     @Binding var treatment: ReviewTreatment
 
     var body: some View {
@@ -221,12 +209,10 @@ private struct GroupTreatment: View {
                             Text("Where they are").tag(false)
                         }
                         .pickerStyle(.segmented).labelsHidden().controlSize(.small).fixedSize()
-                        Text(folderNote).font(.caption).foregroundStyle(.secondary)
                     }
                     GridRow {
                         Text("Version").font(.caption).foregroundStyle(.secondary)
                         versionPicker
-                        Text(versionNote).font(.caption).foregroundStyle(.secondary)
                     }
                 }
             }
@@ -242,20 +228,5 @@ private struct GroupTreatment: View {
             Text("As they are").tag(KeptVersion?.none)
         }
         .pickerStyle(.segmented).labelsHidden().controlSize(.small).fixedSize()
-    }
-
-    private var folderNote: String {
-        guard treatment.move else { return "Nothing moves" }
-        if movable == count { return "All \(count) move" }
-        return "\(movable) move, \(count - movable) already there or with no suggestion"
-    }
-
-    private var versionNote: String {
-        switch treatment.version {
-        case .optimized:
-            return arrival == .new ? "Only the optimized file is kept" : "Originals kept, so they can be reverted"
-        case .original: return "Anything optimized goes back to its original"
-        case nil: return "Nothing is rewritten or deleted"
-        }
     }
 }

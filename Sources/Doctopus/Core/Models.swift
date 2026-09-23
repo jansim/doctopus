@@ -57,8 +57,7 @@ struct DocumentRow: Identifiable, Hashable, Sendable {
     var isAliasHere = false
 
     var queue: QueueInfo?
-    /// Imported or scanned, rather than found already in the library. Only
-    /// filled in for the review queues and the detail.
+    /// Imported or scanned; only filled in for the review queues and the detail.
     var fromOutside = false
 
     var tags: [Tag] = []

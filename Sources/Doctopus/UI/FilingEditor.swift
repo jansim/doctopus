@@ -19,7 +19,6 @@ struct FilingEditor: View {
     @Environment(AppModel.self) private var model
     let detail: DocumentDetail
     let mode: Mode
-    /// Nil in the sheet, which files without approving and so never rewrites.
     var version: KeptVersion?
 
     @State private var primary: String
@@ -45,7 +44,6 @@ struct FilingEditor: View {
         if case .review = mode { return detail.defaultFolder }
         return row.directory
     }
-    /// Anything the review would do to the bytes on approval.
     private var rewrites: Bool {
         guard let version else { return false }
         return (version == .optimized) != detail.isOptimized
@@ -79,12 +77,6 @@ struct FilingEditor: View {
             HStack(spacing: 0) {
                 Text("FILE IN")
                     .font(.caption2.weight(.semibold)).foregroundStyle(.secondary).kerning(0.5)
-                if case .review = mode {
-                    Text(arrivalNote)
-                        .font(.caption2).foregroundStyle(arrival.tint)
-                        .lineLimit(1)
-                        .padding(.leading, 6)
-                }
                 Spacer()
                 Text("Lives here").frame(width: 66)
                 Text("Also here").frame(width: 66)
@@ -142,22 +134,9 @@ struct FilingEditor: View {
         }
     }
 
-    /// The review colours by arrival; the File In… sheet keeps the accent colour.
     private var tint: Color {
         if case .review = mode { return arrival.tint }
         return .accentColor
-    }
-
-    private var arrivalNote: String {
-        switch arrival {
-        case .new:
-            if primary != row.directory { return "New — approving moves it" }
-            return detail.defaultFolder == row.directory ? "New — already where it belongs"
-                                                         : "New — stays where it is"
-        case .inLibrary:
-            return primary == row.directory ? "Already in library — stays where it is"
-                                            : "Already in library — moved only because you picked a folder"
-        }
     }
 
     private func choose(_ path: String) {

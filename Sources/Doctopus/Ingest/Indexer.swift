@@ -322,8 +322,7 @@ actor Indexer {
         return parts.joined(separator: " · ")
     }
 
-    /// Renames and moves only when `moving`; otherwise it just suggests. A folder
-    /// `chosen` for an import heads the suggestions, so the review keeps it there.
+    /// Renames and moves only when `moving`; a `chosen` folder heads the suggestions so the review keeps it.
     private func route(id: Int64, url: inout URL, text: String,
                        findings: DocumentAnalyzer.Findings, insight: DocumentInsight?,
                        moving: Bool, chosen: Bool, action: String) async {

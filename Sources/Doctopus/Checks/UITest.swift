@@ -518,7 +518,6 @@ enum UITest {
         guard let lib = model.libraries.first else { return }
         let fm = FileManager.default
         model.selection = .all
-        // The list reloads behind the selection, so wait for the full one.
         var sample: DocumentRow?
         _ = await settle({
             sample = model.documents.first {

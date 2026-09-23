@@ -18,9 +18,7 @@ extension Store {
         LEFT JOIN entities et ON et.id = m.doc_type_id
         """
 
-    /// Only a document Doctopus brought in itself — an import or a scan — is ever
-    /// logged as imported or routed by the pipeline; one found in the library is
-    /// logged as indexed. Apply to Existing also logs `routed`, under its own detail.
+    /// Only imports and scans are logged as imported or routed; Apply to Existing's `routed` is told apart by its detail.
     static let fromOutsideColumn = """
         EXISTS (SELECT 1 FROM events o WHERE o.doc_id = d.id
                 AND (o.action = 'imported'

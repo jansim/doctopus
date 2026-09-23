@@ -45,43 +45,29 @@ On the left, everything that was worked out — title, fields, date, tags and ta
 suggestions — is editable in place, or can be discarded in one go; the file is
 untouched and Analyze can fill it in again.
 
-The review colours every document by how it arrived — the same split as
-[From outside, or from inside](Ingestion.md#from-outside-or-from-inside). Green
-is *New*: imported or scanned, so Doctopus owns the copy and approving files it.
-Blue is *Already in library*: the user's own file, which approving leaves where
-and as it is. The colour marks the row in the list, the header of the review,
-the chosen folder and the approve button.
+Documents are coloured by [how they arrived](Ingestion.md#from-outside-or-from-inside):
+green for *New* (imported or scanned), blue for *Already in library*.
 
 On the right, every candidate folder — where it is now, the router's
 suggestions with their confidence, where similar documents already live, any
 other folder in the library, or a new one — has two controls: *Lives here* (one
 folder; the file is moved there) and *Also here* (any number; filed as Finder
-aliases). For a new document *Lives here* starts on its best suggestion, so
-approving without touching it files it there; one imported or scanned into a
-chosen folder has that folder as its best suggestion, so it stays. For a
-document already in the library it starts on where the file is now, however
-confident a suggestion is, so it only moves if someone picks another folder.
-One button applies, approves and moves on to the next document (⌘↩).
+aliases). *Lives here* starts on a new document's best suggestion (a chosen
+import folder counts as one), and on where the file is now for anything already
+in the library. One button applies, approves and moves on (⌘↩).
 
-Below what was worked out, a PDF shows its two versions side by side — the
-original and an optimized copy — with a switch between them. Either can be
-opened in Quick Look, and Compare opens both so the arrow keys flip between
-them. A file that has not been optimized is tried on a throwaway copy to show
-what optimizing would make of it; if it would not save enough, there is nothing
-to switch to. A new document starts on *Optimized*, and approving keeps only
-that; *Original* swaps the original back in. A document already in the library
-starts on *Original*, and choosing *Optimized* optimizes it on approval with
-its original kept on record so it can still be reverted.
+A PDF's original and optimized versions sit side by side behind a switch, each
+openable in Quick Look, with Compare to flip between them; an unoptimized file
+is previewed on a throwaway copy. New documents start on *Optimized* and keep
+only that; documents already in the library start as they are, and keep their
+original on record if optimized.
 
-Selecting several documents shows what approving them all would do, per kind:
-new ones filed in their best suggestion and kept optimized, ones already in the
-library left alone. Each kind's folder and version can be changed, and a mixed
-selection can treat them each by its default, all like new, or all like files
-already in the library. Before anything happens, each outcome — filed, staying,
-optimized, original kept, left as it is — is counted in green and blue.
+With several selected, each kind gets its own folder and version choice, a
+mixed selection can be treated each by its default, all like new or all like
+already in the library, and the outcome is counted in green and blue first.
 
 The same folder picker is available for any document as File In… in the
-context menu; it only files, and never approves or rewrites the file.
+context menu; it only files, never approves or rewrites.
 
 ## Inspector
 

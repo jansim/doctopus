@@ -13,7 +13,6 @@ struct ReviewPanel: View {
                 DocumentReview(detail: detail)
                     .id(detail.row.id)
             } else if model.selectedIDs.count > 1 {
-                // A new selection starts again from the defaults.
                 BulkReview(rows: model.selectedRows)
                     .id(model.selectedIDs)
             } else {
@@ -29,9 +28,7 @@ struct ReviewPanel: View {
     }
 }
 
-/// How the review tells arrivals apart, wherever it shows them: green for a
-/// document Doctopus has just brought in, which approving files in its best
-/// suggestion, and blue for one that was already in the library, which stays put.
+/// Green for a document Doctopus brought in, blue for one already in the library.
 enum Arrival: CaseIterable {
     case new, inLibrary
 

@@ -152,9 +152,7 @@ original is kept byte-for-byte.
 This is automatic only for files Doctopus brings in itself — the copy an
 import makes, and a scan. Anything already in the library is optimized only on
 request: Optimize in the context menu, or the review's *Optimized* version,
-which it never starts on for such a file. The review shows what optimizing
-would do by trying it on a temporary copy; the file itself is only rewritten on
-approval.
+which it never starts on for such a file.
 
 ## Naming
 

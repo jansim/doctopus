@@ -11,7 +11,7 @@ out what each gets. Concretely:
   just indexes them in place. One that is new to the index is read and waits
   in Needs Review with suggested folders, but the review starts on the folder
   it is in and on its original version — nothing happens to the file unless
-  someone picks otherwise there, one document or a whole selection at a time.
+  someone picks otherwise there.
 - Importing or scanning into a chosen folder (the folder's context menu, or
   with that folder selected) leaves the file there; it still gets suggested
   folders for the review. Imports from outside the library are copied; the

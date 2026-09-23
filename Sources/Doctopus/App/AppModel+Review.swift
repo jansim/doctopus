@@ -1,48 +1,47 @@
 import Foundation
 
-/// Which bytes a reviewed document keeps.
 enum KeptVersion: Hashable, Sendable {
     case original, optimized
 }
 
-/// What approving does to one kind of document when several are approved at once.
+/// What a batch approval does to one kind of document; a nil version leaves the bytes alone.
 struct ReviewTreatment: Hashable, Sendable {
     var move: Bool
-    /// Nil leaves each file's bytes as they are.
     var version: KeptVersion?
 
-    /// A new arrival goes to its best suggestion and is optimized; nothing
-    /// already in the library is moved or rewritten unless someone asks.
     static func `default`(fromOutside: Bool) -> ReviewTreatment {
-        fromOutside ? ReviewTreatment(move: true, version: .optimized)
-                    : ReviewTreatment(move: false, version: nil)
+        ReviewTreatment(move: fromOutside, version: fromOutside ? .optimized : nil)
     }
 }
 
 struct OptimizationPreview: Sendable {
     var url: URL
-    var originalSize: Int64
     var newSize: Int64
 
-    /// The trial copy sits alone in its own folder.
     func discard() { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
 }
 
 extension DocumentDetail {
-    /// The folder a review files a document in when nobody picks one: a new
-    /// arrival's best suggestion, or where a file already in the library is now.
-    /// The router never suggests a folder outside the library.
+    /// New arrivals start on their best suggestion; anything already in the library stays put.
     var defaultFolder: String {
         row.fromOutside ? pathSuggestions.first?.path ?? row.directory : row.directory
     }
 
-    /// Optimized already, whether or not its original is still on record.
     var isOptimized: Bool { row.originalSize != nil }
 
-    /// What the review starts on: new arrivals optimized, anything already in the
-    /// library as it is now.
-    var defaultVersion: KeptVersion {
-        row.fromOutside ? .optimized : isOptimized ? .optimized : .original
+    var defaultVersion: KeptVersion { row.fromOutside || isOptimized ? .optimized : .original }
+}
+
+private enum KeepOutcome {
+    case unchanged, optimized(saved: Int64), compact, restored
+
+    var note: String? {
+        switch self {
+        case .unchanged: return nil
+        case .optimized(let saved): return "optimized, saving \(ByteFormat.string(saved))"
+        case .compact: return "already compact, so not optimized"
+        case .restored: return "restored to the original"
+        }
     }
 }
 
@@ -81,7 +80,6 @@ extension AppModel {
         }
     }
 
-    /// `version` is applied only on approval; nil leaves the file's bytes alone.
     func file(_ row: DocumentRow, in primary: URL, alsoIn secondaries: Set<String>,
               approve: Bool, version: KeptVersion? = nil, advance: Bool = false) {
         guard let lib = library(of: row) else { return }
@@ -154,8 +152,6 @@ extension AppModel {
         }
     }
 
-    /// Approves a batch the way the review would one at a time: each document is
-    /// treated as its kind asks, new arrivals and files already in the library apart.
     func approve(_ rows: [DocumentRow], newArrivals: ReviewTreatment, alreadyInLibrary: ReviewTreatment) {
         Task {
             var moved = 0, optimized = 0, restored = 0, failed = 0
@@ -163,7 +159,7 @@ extension AppModel {
             for (lib, rows) in grouped(rows) {
                 for row in rows {
                     let treatment = row.fromOutside ? newArrivals : alreadyInLibrary
-                    if treatment.move, let best = await suggestedFolder(for: row, in: lib) {
+                    if treatment.move, let best = await suggestedFolder(for: row) {
                         if await lib.indexer.move(ids: [row.doc], to: URL(fileURLWithPath: best, isDirectory: true)) == 1 {
                             moved += 1
                         } else {
@@ -171,11 +167,11 @@ extension AppModel {
                         }
                     }
                     try? await lib.store.setDocumentApproved(row.doc, true)
-                    if let version = treatment.version {
-                        let outcome = await keep(version, of: row, in: lib)
-                        if outcome.saved != nil { optimized += 1 }
-                        saved += outcome.saved ?? 0
-                        if outcome.restored { restored += 1 }
+                    guard let version = treatment.version else { continue }
+                    switch await keep(version, of: row, in: lib) {
+                    case .optimized(let bytes): optimized += 1; saved += bytes
+                    case .restored: restored += 1
+                    case .unchanged, .compact: break
                     }
                 }
             }
@@ -193,44 +189,33 @@ extension AppModel {
         }
     }
 
-    /// The best suggestion, when it is somewhere other than where the file is.
     func suggestedFolder(for row: DocumentRow) async -> String? {
         guard let lib = library(of: row) else { return nil }
-        return await suggestedFolder(for: row, in: lib)
-    }
-
-    private func suggestedFolder(for row: DocumentRow, in lib: Library) async -> String? {
         let suggestions = (try? await lib.store.pathSuggestions(for: row.doc)) ?? []
         guard let best = suggestions.first(where: { lib.owns(path: $0.path) }),
               Store.canonical(best.path) != Store.canonical(row.directory) else { return nil }
         return best.path
     }
 
-    /// Brings the file to `version`. A new arrival keeps only the version chosen;
-    /// a file that was already in the library keeps its original on record either
-    /// way, so choosing Optimized for it can still be reverted.
-    private func keep(_ version: KeptVersion, of row: DocumentRow,
-                      in lib: Library) async -> (note: String?, saved: Int64?, restored: Bool) {
-        let stashed = (try? await lib.store.originalFileURL(for: row.doc)) != nil
+    /// Only a new arrival drops its original; one already in the library keeps it so it can be reverted.
+    private func keep(_ version: KeptVersion, of row: DocumentRow, in lib: Library) async -> KeepOutcome {
         switch version {
         case .original:
-            guard stashed, await lib.indexer.revertOptimization(ids: [row.doc]) > 0 else { return (nil, nil, false) }
-            return ("restored to the original", nil, true)
+            guard (try? await lib.store.originalFileURL(for: row.doc)) != nil,
+                  await lib.indexer.revertOptimization(ids: [row.doc]) > 0 else { return .unchanged }
+            return .restored
         case .optimized:
-            var result: (note: String?, saved: Int64?, restored: Bool) = (nil, nil, false)
+            var outcome = KeepOutcome.unchanged
             if row.originalSize == nil {
-                let optimized = await lib.indexer.optimize(ids: [row.doc])
-                result = optimized.count > 0
-                    ? ("optimized, saving \(ByteFormat.string(optimized.saved))", optimized.saved, false)
-                    : ("already compact, so not optimized", nil, false)
+                let result = await lib.indexer.optimize(ids: [row.doc])
+                outcome = result.count > 0 ? .optimized(saved: result.saved) : .compact
             }
             if row.fromOutside { try? await lib.store.deleteOriginalFile(for: row.doc) }
-            return result
+            return outcome
         }
     }
 
-    /// A trial run on a copy, so the review can show what Optimize would make of a
-    /// file without touching it. Nil when optimizing it would not be worth it.
+    /// Optimizes a throwaway copy, so the review can show the result; nil when it would not help.
     func optimizationPreview(of row: DocumentRow) async -> OptimizationPreview? {
         guard let lib = library(of: row) else { return nil }
         let options = lib.settings.optimizerOptions
@@ -247,7 +232,7 @@ extension AppModel {
                 try? fm.removeItem(at: dir)
                 return nil
             }
-            return OptimizationPreview(url: copy, originalSize: result.originalSize, newSize: result.newSize)
+            return OptimizationPreview(url: copy, newSize: result.newSize)
         }.value
     }
 
