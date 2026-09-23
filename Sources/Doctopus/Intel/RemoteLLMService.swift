@@ -435,10 +435,11 @@ actor RemoteLLMService {
 
 extension AppSettings {
     var remoteConfig: RemoteLLMConfig {
-        RemoteLLMConfig(endpoint: remoteEndpoint, model: remoteModel, apiKey: remoteAPIKey,
-                        timeout: remoteTimeout, parallelRequests: remoteParallelRequests,
-                        vision: remoteVision, visionImageSize: remoteVisionImageSize)
+        let s = appWide
+        return RemoteLLMConfig(endpoint: s.remoteEndpoint, model: s.remoteModel, apiKey: s.remoteAPIKey,
+                               timeout: s.remoteTimeout, parallelRequests: s.remoteParallelRequests,
+                               vision: s.remoteVision, visionImageSize: s.remoteVisionImageSize)
     }
 
-    var sendsPageImage: Bool { llmBackend == .remote && remoteVision }
+    var sendsPageImage: Bool { appWide.llmBackend == .remote && appWide.remoteVision }
 }
