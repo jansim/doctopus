@@ -45,16 +45,29 @@ On the left, everything that was worked out — title, fields, date, tags and ta
 suggestions — is editable in place, or can be discarded in one go; the file is
 untouched and Analyze can fill it in again.
 
+Documents are coloured by [how they arrived](Ingestion.md#from-outside-or-from-inside):
+green for *New* (imported or scanned), blue for *Already in library*.
+
 On the right, every candidate folder — where it is now, the router's
 suggestions with their confidence, where similar documents already live, any
 other folder in the library, or a new one — has two controls: *Lives here* (one
 folder; the file is moved there) and *Also here* (any number; filed as Finder
-aliases). *Lives here* always starts on where the file is now, however
-confident a suggestion is, so approving without touching it moves nothing. A
-file that was not optimized on the way in offers *Optimize when approving*,
-unticked. One button applies, approves and moves on to the next document (⌘↩).
+aliases). *Lives here* starts on a new document's best suggestion (a chosen
+import folder counts as one), and on where the file is now for anything already
+in the library. One button applies, approves and moves on (⌘↩).
 
-The same picker is available for any document as File In… in the context menu.
+A PDF's original and optimized versions sit side by side behind a switch, each
+openable in Quick Look, with Compare to flip between them; an unoptimized file
+is previewed on a throwaway copy. New documents start on *Optimized* and keep
+only that; documents already in the library start as they are, and keep their
+original on record if optimized.
+
+With several selected, each kind gets its own folder and version choice, a
+mixed selection can be treated each by its default, all like new or all like
+already in the library, and the outcome is counted in green and blue first.
+
+The same folder picker is available for any document as File In… in the
+context menu; it only files, never approves or rewrites.
 
 ## Inspector
 

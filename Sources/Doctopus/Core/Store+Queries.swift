@@ -18,6 +18,13 @@ extension Store {
         LEFT JOIN entities et ON et.id = m.doc_type_id
         """
 
+    /// Only imports and scans are logged as imported or routed; Apply to Existing's `routed` is told apart by its detail.
+    static let fromOutsideColumn = """
+        EXISTS (SELECT 1 FROM events o WHERE o.doc_id = d.id
+                AND (o.action = 'imported'
+                     OR (o.action = 'routed' AND COALESCE(o.detail, '') NOT LIKE 'Applied rule %')))
+        """
+
     func documentRow(_ r: Database.Row) -> DocumentRow {
         DocumentRow(
             doc: r.int(0), path: absPath(r.string(1)), directory: absPath(r.string(2)),
@@ -196,7 +203,9 @@ extension Store {
 
         var joinQueue = ""
         var queueColumns = "NULL, NULL, NULL, NULL, NULL, NULL, NULL"
+        var originColumn = "0"
         if selection.isQueueMode {
+            originColumn = Store.fromOutsideColumn
             joinQueue = """
             LEFT JOIN processing p
                 ON p.id = (SELECT id FROM processing WHERE doc_id = d.id ORDER BY id DESC LIMIT 1)
@@ -243,7 +252,7 @@ extension Store {
 
         let sql = """
         SELECT \(Store.rowColumns),
-               \(snippetCol), \(queueColumns), m.amount, m.intent
+               \(snippetCol), \(queueColumns), m.amount, m.intent, \(originColumn)
         \(Store.rowTables)
         \(joinFTS)
         \(joinQueue)
@@ -262,6 +271,7 @@ extension Store {
                           rule: r.stringOrNil(25), approved: r.bool(26))
             }
             extras[row.doc] = (amount: r.stringOrNil(27), intent: r.stringOrNil(28))
+            row.fromOutside = r.bool(29)
             return row
         }
 
@@ -339,17 +349,19 @@ extension Store {
         guard let base = try db.first("""
             SELECT \(Store.rowColumns),
                    d.hash, m.intent, m.date_source, m.confidence, m.source, m.amount,
-                   s.confidence, s.words, s.source
+                   s.confidence, s.words, s.source, \(Store.fromOutsideColumn)
             \(Store.rowTables)
             LEFT JOIN ocr_stats s ON s.doc_id=d.id
             WHERE d.id=?
             """, [.int(id)], { r -> DocumentDetail in
-            DocumentDetail(
+            var d = DocumentDetail(
                 row: documentRow(r), hash: r.stringOrNil(19), intent: r.stringOrNil(20),
                 dateSource: r.stringOrNil(21), metadataSource: r.stringOrNil(23),
                 metadataConfidence: r.doubleOrNil(22), amount: r.stringOrNil(24),
                 ocrConfidence: r.doubleOrNil(25), ocrWords: r.intOrNil(26).map(Int.init),
                 ocrSource: r.stringOrNil(27))
+            d.row.fromOutside = r.bool(28)
+            return d
         }) else { return nil }
 
         var d = base

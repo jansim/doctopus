@@ -13,7 +13,7 @@ suggest metadata and folders, queue it for review — is the same either way.
 | OCR, metadata, model pass | Yes | Yes |
 | Suggested folders | Yes | Yes |
 | Moved or renamed by the rules | Only when no folder was chosen | Never |
-| Optimized | Yes | Only if ticked in the review |
+| Optimized | Yes | Only if chosen in the review |
 | Needs Review | Yes | Yes |
 
 **From outside.** Doctopus writes a new file into the library and owns it, so it
@@ -30,7 +30,7 @@ the index but not to the disk, and it is still the user's. It is read, analyzed 
 configured, sent through it; it gets suggested folders and waits in Needs
 Review. Its path is never changed: not by routing, not by a rule's rename, and
 not by the review, which starts on the folder it is in. Optimization is a
-checkbox in the review, off until ticked.
+switch in the review, left on the original until someone picks otherwise.
 
 The very first pass over a newly opened library is the exception to Needs
 Review: that is the existing archive rather than something that just arrived,
@@ -92,7 +92,8 @@ Every new document — imported, scanned or found in place — is run past the
 rules and the derived path, and whatever folders they propose are kept as its
 suggestions in `path_suggestions`, best first. Only an unspecified import or
 inbox scan is then moved; everything else stays where it is and waits in Needs
-Review with the suggestions on offer.
+Review with the suggestions on offer. An import or scan into a chosen folder
+has that folder put first, so approving it as it stands keeps it there.
 
 Unspecified imports and inbox scans are routed by the rules first. A rule that
 matches is certain, so the file moves to its folder — unless matching rules
@@ -150,8 +151,8 @@ original is kept byte-for-byte.
 
 This is automatic only for files Doctopus brings in itself — the copy an
 import makes, and a scan. Anything already in the library is optimized only on
-request: Optimize in the context menu, or *Optimize when approving* in the
-review, which is never ticked by default.
+request: Optimize in the context menu, or the review's *Optimized* version,
+which it never starts on for such a file.
 
 ## Naming
 

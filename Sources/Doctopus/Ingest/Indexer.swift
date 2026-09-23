@@ -284,6 +284,7 @@ actor Indexer {
         if isImport || isNew {
             await self.route(id: id, url: &url, text: extracted.text, findings: findings, insight: insight,
                              moving: isImport && route && settings.autoRouteImports,
+                             chosen: isImport && !route,
                              action: isImport ? "imported" : "indexed")
         }
 
@@ -321,10 +322,10 @@ actor Indexer {
         return parts.joined(separator: " · ")
     }
 
-    /// Renames and moves only when `moving`; otherwise it just suggests.
+    /// Renames and moves only when `moving`; a `chosen` folder heads the suggestions so the review keeps it.
     private func route(id: Int64, url: inout URL, text: String,
                        findings: DocumentAnalyzer.Findings, insight: DocumentInsight?,
-                       moving: Bool, action: String) async {
+                       moving: Bool, chosen: Bool, action: String) async {
         let router = Router(rules: (try? await store.rules()) ?? [],
                             threshold: settings.routingThreshold,
                             derivedTemplate: settings.derivedTemplate,
@@ -334,7 +335,14 @@ actor Indexer {
         let decision = router.evaluate(text: text, filename: url.lastPathComponent,
                                        findings: findings, insight: insight,
                                        currentDirectory: url.deletingLastPathComponent())
-        try? await store.setPathSuggestions(decision.candidates, for: id)
+        var candidates = decision.candidates
+        if chosen {
+            let here = url.deletingLastPathComponent()
+            candidates.removeAll { $0.destination.standardizedFileURL == here.standardizedFileURL }
+            candidates.insert(Router.Candidate(destination: here, confidence: 1, rule: "chosen",
+                                               explanation: "Chosen when it was brought in"), at: 0)
+        }
+        try? await store.setPathSuggestions(candidates, for: id)
 
         if let corr = decision.setCorrespondent {
             try? await store.storeMetadata(Store.MetadataPatch(docID: id, correspondent: corr, source: "rule"))

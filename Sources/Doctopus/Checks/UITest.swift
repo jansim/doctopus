@@ -55,6 +55,7 @@ enum UITest {
             await optionRevealsFolders(model)
             await secondLibraryMerges(model, alongside: library, snapshots: snapshots)
             await reviewPanelFiles(model, snapshots: snapshots)
+            await reviewBatchTreatsEachKindApart(model, snapshots: snapshots)
             await droppingAFolderImportsIt(model)
             await draggingOntoAFolderFilesOrMoves(model)
             Check.finish("ui checks")
@@ -510,6 +511,73 @@ enum UITest {
         let cleared = discarded != nil && discarded?.row.title == nil && discarded?.pathSuggestions.isEmpty == true
         Check.that("discarding generated info clears it and keeps the file", cleared
                    && fm.fileExists(atPath: discarded?.row.path ?? ""))
+        model.selection = .all
+    }
+
+    private static func reviewBatchTreatsEachKindApart(_ model: AppModel, snapshots: String?) async {
+        guard let lib = model.libraries.first else { return }
+        let fm = FileManager.default
+        model.selection = .all
+        var sample: DocumentRow?
+        _ = await settle({
+            sample = model.documents.first {
+                $0.ext.lowercased() == "pdf" && $0.library == lib.id && !$0.filename.hasPrefix("review-")
+            }
+            return sample != nil
+        }, timeout: 10)
+        guard let sample else {
+            Check.that("a document to stage a batch from", false)
+            return
+        }
+        let staging = fm.temporaryDirectory.appendingPathComponent("doctopus-batch-\(UUID().uuidString)")
+        try? fm.createDirectory(at: staging, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: staging) }
+        let outside = staging.appendingPathComponent("batch-new.pdf")
+        let inside = lib.root.appendingPathComponent("Work/batch-found.pdf")
+        try? fm.createDirectory(at: inside.deletingLastPathComponent(), withIntermediateDirectories: true)
+        guard copyAsNew(sample.url, to: outside), copyAsNew(sample.url, to: inside) else {
+            Check.that("a batch could be staged", false)
+            return
+        }
+        model.importFiles([outside, inside], into: nil)
+
+        model.selection = .needsReview
+        var rows: [DocumentRow] = []
+        _ = await settle({
+            rows = model.documents.filter { $0.filename.hasPrefix("batch-") }
+            return rows.count == 2
+        }, timeout: 60)
+        let newRow = rows.first { $0.filename.hasPrefix("batch-new") }
+        let foundRow = rows.first { $0.filename.hasPrefix("batch-found") }
+        Check.that("a batch in review tells new arrivals from files already in the library",
+                   newRow?.fromOutside == true && foundRow?.fromOutside == false,
+                   rows.map { "\($0.filename): \($0.fromOutside ? "new" : "in library")" }.joined(separator: ", "))
+        guard let newRow, let foundRow else { return }
+
+        model.selectedIDs = [newRow.id, foundRow.id]
+        let size = NSSize(width: 900, height: 660)
+        let (window, host) = host(DocumentListView().environment(model), size: size)
+        defer { window.orderOut(nil) }
+        try? await Task.sleep(for: .seconds(2))
+        if let dir = snapshots { snapshot(host, to: dir + "/review-batch.png") }
+        Check.that("the batch review draws under the list", inkedRows(host) > 100,
+                   "\(inkedRows(host)) rows with ink")
+
+        let planned = await model.suggestedFolder(for: newRow) ?? newRow.directory
+        let foundHash = FileScanner.hash(foundRow.url)
+        model.approve([newRow, foundRow], newArrivals: .default(fromOutside: true),
+                      alreadyInLibrary: .default(fromOutside: false))
+        let after = await poll(timeout: 30, {
+            (await model.loadDetail(newRow.id), await model.loadDetail(foundRow.id))
+        }) { $0.0?.row.approved == true && $0.1?.row.approved == true }
+        Check.that("approving the batch approves both",
+                   after.0?.row.approved == true && after.1?.row.approved == true)
+        Check.that("…files the new arrival in its best suggestion",
+                   after.0?.row.directory == planned, after.0?.row.directory ?? "gone")
+        Check.that("…and leaves the file already in the library where it was, byte for byte",
+                   after.1?.row.path == foundRow.path && foundHash != nil
+                       && after.1.flatMap { FileScanner.hash($0.row.url) } == foundHash,
+                   after.1?.row.path ?? "gone")
         model.selection = .all
     }
 
