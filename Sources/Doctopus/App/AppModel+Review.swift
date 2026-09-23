@@ -49,7 +49,10 @@ extension AppModel {
 
     func approveAll() {
         Task {
-            for lib in libraries { try? await lib.store.approveAllPending() }
+            for lib in libraries {
+                do { try await lib.store.approveAllPending() }
+                catch { report(error, "approve everything in \(lib.displayName)") }
+            }
             refreshAll()
             reloadDetail()
         }
@@ -58,7 +61,10 @@ extension AppModel {
     func setApproved(_ rows: [DocumentRow], _ approved: Bool) {
         Task {
             for (lib, rows) in grouped(rows) {
-                for row in rows { try? await lib.store.setDocumentApproved(row.doc, approved) }
+                for row in rows {
+                    do { try await lib.store.setDocumentApproved(row.doc, approved) }
+                    catch { report(error, "\(approved ? "approve" : "unapprove") “\(row.displayTitle)”") }
+                }
             }
             refreshAll()
             reloadDetail()
@@ -67,14 +73,18 @@ extension AppModel {
 
     func discardGeneratedInfo(_ rows: [DocumentRow]) {
         Task {
+            var failures: [String] = []
             for (lib, rows) in grouped(rows) {
                 for row in rows {
-                    try? await lib.store.discardGeneratedInfo(row.doc)
+                    do { try await lib.store.discardGeneratedInfo(row.doc) }
+                    catch { failures.append("“\(row.filename)”: \(error.localizedDescription)"); continue }
                     await lib.indexer.syncAliases(docID: row.doc, target: row.url)
                 }
             }
             refreshAll()
             reloadDetail()
+            report(failures: failures, "discard what was generated for")
+            guard failures.isEmpty else { return }
             notify(rows.count == 1 ? "Discarded what was generated for “\(rows[0].filename)”."
                                    : "Discarded what was generated for \(rows.count) documents.")
         }
@@ -105,15 +115,17 @@ extension AppModel {
                 let folder = (alias.path as NSString).deletingLastPathComponent
                 if wanted.contains(folder) { have.insert(folder); continue }
                 AliasManager.removeAlias(at: alias.path, pointingTo: row.url)
-                try? await lib.store.deleteAlias(id: alias.id)
+                do { try await lib.store.deleteAlias(id: alias.id) }
+                catch { report(error, "unfile “\(row.filename)” from “\((folder as NSString).lastPathComponent)”") }
             }
 
             var target = row.url
             var moved = false
             if Store.canonical(primary.standardizedFileURL.path) != Store.canonical(row.directory) {
-                guard await lib.indexer.move(ids: [row.doc], to: primary) == 1,
-                      let now = try? await lib.store.documentPath(row.doc) else {
+                let result = await lib.indexer.move(ids: [row.doc], to: primary)
+                guard result.done == 1, let now = try? await lib.store.documentPath(row.doc) else {
                     errorMessage = "Could not move “\(row.filename)” to “\(primary.lastPathComponent)”. It was left where it is."
+                        + (result.failures.first.map { "\n\n\($0)" } ?? "")
                     refreshAll()
                     return
                 }
@@ -122,10 +134,19 @@ extension AppModel {
             }
 
             var added: [String] = []
+            var notAdded: [String] = []
             for folder in wanted.subtracting(have).sorted() {
-                guard let created = try? AliasManager.createAlias(to: target, in: URL(fileURLWithPath: folder))
-                else { continue }
-                try? await lib.store.recordAlias(docID: row.doc, tagID: nil, path: created.path)
+                let name = (folder as NSString).lastPathComponent
+                let created: URL
+                do {
+                    created = try AliasManager.createAlias(to: target, in: URL(fileURLWithPath: folder))
+                    do { try await lib.store.recordAlias(docID: row.doc, tagID: nil, path: created.path) }
+                    catch {
+                        // An alias the index does not know of could never be pruned.
+                        AliasManager.removeAlias(at: created.path, pointingTo: target)
+                        throw error
+                    }
+                } catch { notAdded.append("“\(name)”: \(error.localizedDescription)"); continue }
                 try? await lib.store.logProcessing(docID: row.doc, action: .aliased,
                                                    detail: "Also filed under \((folder as NSString).lastPathComponent)",
                                                    confidence: nil, rule: nil, from: target.path,
@@ -134,8 +155,10 @@ extension AppModel {
             }
 
             var kept: String?
+            var approved = approve
             if approve {
-                try? await lib.store.setDocumentApproved(row.doc, true)
+                do { try await lib.store.setDocumentApproved(row.doc, true) }
+                catch { approved = false; notAdded.append("approving it: \(error.localizedDescription)") }
                 if let version { kept = await keep(version, of: row, in: lib).note }
             }
             if moved || !added.isEmpty { offerUndo("File", of: [row], since: marks) }
@@ -147,8 +170,13 @@ extension AppModel {
             if moved { parts.append("Moved to “\(primary.lastPathComponent)”") }
             if !added.isEmpty { parts.append("also filed in \(added.map { "“\($0)”" }.joined(separator: ", "))") }
             if let kept { parts.append(kept) }
-            if parts.isEmpty { parts.append(approve ? "Approved" : "Nothing to change") }
-            else if approve { parts.append("approved") }
+            if !notAdded.isEmpty {
+                errorMessage = "Could not finish filing “\(row.filename)”:\n\n" + notAdded.joined(separator: "\n")
+            }
+            if parts.isEmpty {
+                guard notAdded.isEmpty else { return }
+                parts.append(approved ? "Approved" : "Nothing to change")
+            } else if approved { parts.append("approved") }
             let text = parts.joined(separator: ", ")
             notify(text.prefix(1).uppercased() + text.dropFirst() + ".", parts == ["Nothing to change"] ? .info : .success)
         }
@@ -158,17 +186,22 @@ extension AppModel {
         Task {
             var moved = 0, optimized = 0, restored = 0, failed = 0
             var saved: Int64 = 0
+            var failures: [String] = []
+            var notMoved: [String] = []
             for (lib, rows) in grouped(rows) {
                 for row in rows {
                     let treatment = row.fromOutside ? newArrivals : alreadyInLibrary
                     if treatment.move, let best = await suggestedFolder(for: row) {
-                        if await lib.indexer.move(ids: [row.doc], to: URL(fileURLWithPath: best, isDirectory: true)) == 1 {
+                        let result = await lib.indexer.move(ids: [row.doc], to: URL(fileURLWithPath: best, isDirectory: true))
+                        if result.done == 1 {
                             moved += 1
                         } else {
                             failed += 1
+                            notMoved += result.failures
                         }
                     }
-                    try? await lib.store.setDocumentApproved(row.doc, true)
+                    do { try await lib.store.setDocumentApproved(row.doc, true) }
+                    catch { failures.append("“\(row.filename)”: \(error.localizedDescription)"); continue }
                     guard let version = treatment.version else { continue }
                     switch await keep(version, of: row, in: lib) {
                     case .optimized(let bytes): optimized += 1; saved += bytes
@@ -180,7 +213,11 @@ extension AppModel {
             refreshAll()
             reloadDetail()
 
-            var parts = ["Approved \(rows.count) document\(rows.count == 1 ? "" : "s")"]
+            report(failures: notMoved, "file")
+            report(failures: failures, "approve")
+            let approvedCount = rows.count - failures.count
+            guard approvedCount > 0 else { return }
+            var parts = ["Approved \(approvedCount) document\(approvedCount == 1 ? "" : "s")"]
             if moved > 0 { parts.append("moved \(moved)") }
             if optimized > 0 { parts.append("optimized \(optimized), saving \(ByteFormat.string(saved))") }
             if restored > 0 { parts.append("restored \(restored) to the original") }
@@ -203,13 +240,17 @@ extension AppModel {
     private func keep(_ version: KeptVersion, of row: DocumentRow, in lib: Library) async -> KeepOutcome {
         switch version {
         case .original:
-            guard (try? await lib.store.originalFileURL(for: row.doc)) != nil,
-                  await lib.indexer.revertOptimization(ids: [row.doc]) > 0 else { return .unchanged }
-            return .restored
+            guard (try? await lib.store.originalFileURL(for: row.doc)) != nil else { return .unchanged }
+            let result = await lib.indexer.revertOptimization(ids: [row.doc])
+            report(failures: result.failures, "restore the original of")
+            return result.done > 0 ? .restored : .unchanged
         case .optimized:
             var outcome = KeepOutcome.unchanged
             if row.originalSize == nil {
                 let result = await lib.indexer.optimize(ids: [row.doc])
+                report(failures: result.failures, "optimize")
+                // One that could not be optimized keeps its original.
+                guard result.failures.isEmpty else { return .unchanged }
                 outcome = result.count > 0 ? .optimized(saved: result.saved) : .compact
             }
             if row.fromOutside { try? await lib.store.deleteOriginalFile(for: row.doc) }

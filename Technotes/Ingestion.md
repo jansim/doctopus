@@ -170,7 +170,9 @@ degrading readability or stripping text layers.
 A page is only ever rasterized if it has *no* text layer to lose; pages with
 real text are re-drawn into the output PDF context, which copies their text and
 vector operators through intact. If the result is not at least 15% smaller, the
-original is kept byte-for-byte.
+original is kept byte-for-byte. Nothing is optimized until a copy of the
+original is safely kept beside the index; when it cannot be, the file is left
+as it is and Doctopus says why.
 
 This is automatic only for files Doctopus brings in itself — the copy an
 import makes, and a scan. Anything already in the library is optimized only on

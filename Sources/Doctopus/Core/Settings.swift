@@ -8,15 +8,20 @@ extension StoredSettings {
     /// Decodes `data`, taking every key it does not carry from a fresh `Self`,
     /// so that adding a setting does not reset the ones already stored.
     static func decoded(from data: Data) -> Self {
+        decodedIfReadable(from: data) ?? Self()
+    }
+
+    /// Nil when `data` holds something that does not decode, so the caller can
+    /// keep it rather than save defaults over it. Nothing stored is a fresh start.
+    static func decodedIfReadable(from data: Data) -> Self? {
+        guard !data.isEmpty else { return Self() }
         guard let stored = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
               let defaults = try? JSONEncoder().encode(Self()),
               var merged = (try? JSONSerialization.jsonObject(with: defaults)) as? [String: Any]
-        else { return Self() }
+        else { return nil }
         merged.merge(stored) { _, written in written }
-        guard let data = try? JSONSerialization.data(withJSONObject: merged),
-              let decoded = try? JSONDecoder().decode(Self.self, from: data)
-        else { return Self() }
-        return decoded
+        guard let data = try? JSONSerialization.data(withJSONObject: merged) else { return nil }
+        return try? JSONDecoder().decode(Self.self, from: data)
     }
 }
 

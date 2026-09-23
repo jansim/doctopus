@@ -21,15 +21,19 @@ actor Indexer {
 
     private let onProgress: @Sendable (IndexProgress) -> Void
     private let onDataChanged: @Sendable () -> Void
+    /// A scan that could not do its job, said rather than passed off as a clean one.
+    private let onProblem: @Sendable (String) -> Void
 
     init(store: Store, intelligence: Intelligence, settings: AppSettings,
          onProgress: @escaping @Sendable (IndexProgress) -> Void,
-         onDataChanged: @escaping @Sendable () -> Void) {
+         onDataChanged: @escaping @Sendable () -> Void,
+         onProblem: @escaping @Sendable (String) -> Void = { _ in }) {
         self.store = store
         self.intelligence = intelligence
         self.settings = settings
         self.onProgress = onProgress
         self.onDataChanged = onDataChanged
+        self.onProblem = onProblem
     }
 
     func update(settings: AppSettings) async {
@@ -50,22 +54,38 @@ actor Indexer {
 
         onProgress(IndexProgress(phase: "Scanning", done: 0, total: 1))
 
+        let name = store.root.lastPathComponent
         // A new library's first pass is its existing archive, not new arrivals.
-        let firstPass = ((try? await store.documentCount()) ?? 0) == 0
+        // An index that cannot say how much it holds cannot say which that is.
+        let firstPass: Bool
+        let upserted: [(id: Int64, path: String, isNew: Bool, changed: Bool)]
         let found = FileScanner.scan(root: store.root).map { Self.facts($0) }
-        if cancelled { return nil }
-        await relinkMoved(found)
-        guard let upserted = try? await store.upsertDocuments(found) else { return nil }
+        do {
+            firstPass = try await store.documentCount() == 0
+            if cancelled { return nil }
+            await relinkMoved(found)
+            upserted = try await store.upsertDocuments(found)
+        } catch {
+            onProblem("Could not index \(name): \(error.localizedDescription)")
+            return nil
+        }
         var toProcess = upserted.filter(\.changed).map { ($0.id, $0.path) }
         let fresh = firstPass ? [] : Set(upserted.filter(\.isNew).map(\.id))
-        _ = try? await store.reconcileMissing(seenPaths: Set(found.map(\.path)))
 
-        _ = try? await store.purgeMissing()
-        _ = try? await store.purgeDeleted()
-
-        if let pending = try? await store.documentIDsNeedingOCR() {
+        var skipped: [String] = []
+        do { _ = try await store.reconcileMissing(seenPaths: Set(found.map(\.path))) }
+        catch { skipped.append("marking files that are gone as missing (\(error.localizedDescription))") }
+        do {
+            _ = try await store.purgeMissing()
+            _ = try await store.purgeDeleted()
+        } catch { skipped.append("forgetting files gone for good (\(error.localizedDescription))") }
+        do {
+            let pending = try await store.documentIDsNeedingOCR()
             let known = Set(toProcess.map(\.0))
             toProcess.append(contentsOf: pending.filter { !known.contains($0.id) }.map { ($0.id, $0.path) })
+        } catch { skipped.append("finding documents still waiting for their text (\(error.localizedDescription))") }
+        if !skipped.isEmpty {
+            onProblem("Indexing \(name) skipped " + skipped.joined(separator: "; ") + ".")
         }
 
         onDataChanged()
@@ -204,21 +224,35 @@ actor Indexer {
 
         try? await store.indexFinderTags(docID: id, entries: FinderTags.entries(url))
 
+        // What went wrong on the way, kept in the document's history so a
+        // half-read document says so rather than looking like a finished one.
+        var problems: [String] = []
+
         // 1. Optimize before OCR so the indexed text matches the stored bytes.
         // Imports only: an existing file is rewritten only when someone picks
         // Optimize for it.
         var optimized: Optimizer.Result?
         if isImport && settings.optimizeOnImport {
-            optimized = await optimizeFile(id: id, url: url)
+            do { optimized = try await optimizeFile(id: id, url: url) }
+            catch { problems.append(error.localizedDescription) }
         }
 
-        let extracted = (try? TextExtractor.extract(url: url)) ?? ExtractedText(source: "failed")
+        let extracted: ExtractedText
+        do {
+            extracted = try TextExtractor.extract(url: url)
+            if extracted.source == "unreadable" { problems.append("the file could not be opened to read its text") }
+        } catch {
+            extracted = ExtractedText(source: "failed")
+            problems.append("its text could not be read (\(error.localizedDescription))")
+        }
         if extracted.source == "failed" || extracted.source == "unreadable" {
             try? await store.markOCR(id, state: .failed)
         } else {
-            try? await store.storeOCR(docID: id, text: extracted.text, confidence: extracted.confidence,
-                                      words: extracted.words, source: extracted.source,
-                                      elapsedMS: extracted.elapsedMS, pageCount: extracted.pageCount)
+            do {
+                try await store.storeOCR(docID: id, text: extracted.text, confidence: extracted.confidence,
+                                         words: extracted.words, source: extracted.source,
+                                         elapsedMS: extracted.elapsedMS, pageCount: extracted.pageCount)
+            } catch { problems.append("its text could not be saved (\(error.localizedDescription))") }
         }
 
         let known = (try? await store.facets(column: "correspondent"))?.map(\.value) ?? []
@@ -252,21 +286,27 @@ actor Indexer {
             let topTags = (try? await store.tags())?.prefix(10).map(\.name) ?? []
             insight = await intelligence.enrich(text: extracted.text, filename: name, url: url,
                                                 pageCount: extracted.pageCount, candidateTags: topTags)
+            if insight == nil, !settings.predictedFields.isEmpty,
+               extracted.text.count >= LLMPrompt.minimumCharacters {
+                problems.append("the model gave no answer, so only what was read off the document is used")
+            }
         }
 
-        try? await store.storeMetadata(Store.MetadataPatch(
-            docID: id,
-            title: insight?.title ?? findings.title,
-            correspondent: insight?.correspondent ?? findings.correspondent,
-            docType: insight?.docType ?? findings.docType,
-            language: insight?.language ?? extracted.language,
-            summary: insight?.summary,
-            intent: insight?.intent,
-            docDate: findings.date,
-            dateSource: findings.dateSource,
-            confidence: max(findings.confidence, insight?.confidence ?? 0),
-            source: insight?.source ?? "heuristic",
-            amount: findings.amount))
+        do {
+            try await store.storeMetadata(Store.MetadataPatch(
+                docID: id,
+                title: insight?.title ?? findings.title,
+                correspondent: insight?.correspondent ?? findings.correspondent,
+                docType: insight?.docType ?? findings.docType,
+                language: insight?.language ?? extracted.language,
+                summary: insight?.summary,
+                intent: insight?.intent,
+                docDate: findings.date,
+                dateSource: findings.dateSource,
+                confidence: max(findings.confidence, insight?.confidence ?? 0),
+                source: insight?.source ?? "heuristic",
+                amount: findings.amount))
+        } catch { problems.append("what was read off it could not be saved (\(error.localizedDescription))") }
 
         for tag in (insight?.tags ?? []).prefix(4) {
             try? await store.suggestTag(tag, for: id, autoAcceptMatching: settings.autoAcceptMatchingTagSuggestions)
@@ -287,6 +327,11 @@ actor Indexer {
                                            detail: summaryLine(extracted, findings, insight),
                                            confidence: findings.confidence, rule: nil,
                                            from: nil, to: nil, approved: true)
+        }
+        if !problems.isEmpty {
+            try? await store.logProcessing(docID: id, action: .indexed,
+                                           detail: "Indexed with problems: " + problems.joined(separator: "; "),
+                                           confidence: nil, rule: nil, from: nil, to: nil, approved: true)
         }
         return name
     }
@@ -410,10 +455,16 @@ actor Indexer {
                 language: insight?.language, counter: nil,
                 originalStem: url.deletingPathExtension().lastPathComponent, ext: url.pathExtension,
                 options: settings.namingOptions))
-            if name != url.lastPathComponent,
-               let target = try? await relocate(id, from: url, into: url.deletingLastPathComponent(), named: name,
-                                                action: .renamed, detail: name, rule: decision.rule) {
-                url = target
+            if name != url.lastPathComponent {
+                do {
+                    url = try await relocate(id, from: url, into: url.deletingLastPathComponent(), named: name,
+                                             action: .renamed, detail: name, rule: decision.rule)
+                } catch {
+                    try? await store.logProcessing(docID: id, action: action,
+                                                   detail: "Could not rename to “\(name)”: \(error.localizedDescription)",
+                                                   confidence: decision.confidence, rule: decision.rule,
+                                                   from: url.path, to: url.path, approved: false)
+                }
             }
         }
 
@@ -473,7 +524,10 @@ actor Indexer {
         }
     }
 
-    func promoteClosestAlias(docID: Int64) async -> URL? {
+    /// Nil when there is no placement to move into; throws when there was one
+    /// but the move failed, which leaves the document and that placement as
+    /// they were, and is no reason to send the document to the Trash instead.
+    func promoteClosestAlias(docID: Int64) async throws -> URL? {
         guard let path = try? await store.documentPath(docID) else { return nil }
         let url = URL(fileURLWithPath: path)
         let home = url.deletingLastPathComponent()
@@ -508,10 +562,21 @@ actor Indexer {
             // ours to take away; anything else at that path is the user's own
             // file, and the placement is skipped for the next one along.
             guard AliasManager.removeAlias(at: alias.path, pointingTo: url) else { continue }
-            try? await store.deleteAlias(id: alias.id)
-            return try? await relocate(docID, from: url, into: folder, named: url.lastPathComponent,
-                                       action: .promoted,
-                                       detail: "Deleted from \(home.lastPathComponent); kept where it was also filed")
+            var unregistered = false
+            do {
+                try await store.deleteAlias(id: alias.id)
+                unregistered = true
+                return try await relocate(docID, from: url, into: folder, named: url.lastPathComponent,
+                                          action: .promoted,
+                                          detail: "Deleted from \(home.lastPathComponent); kept where it was also filed")
+            } catch {
+                // Nothing logged the alias's removal, so Undo could not bring it back.
+                if let again = try? AliasManager.createAlias(to: url, in: folder),
+                   unregistered || again.path != alias.path {
+                    try? await store.recordAlias(docID: docID, tagID: nil, path: again.path)
+                }
+                throw error
+            }
         }
         return nil
     }
@@ -633,6 +698,13 @@ actor Indexer {
         var duplicates = 0
         var duplicateNames: [String] = []
         var failed = 0
+        /// Why, one line per file that failed.
+        var failures: [String] = []
+
+        mutating func fail(_ name: String, _ reason: String) {
+            failed += 1
+            failures.append("“\(name)”: \(reason)")
+        }
     }
 
     /// A file from outside the library is copied in and the original left alone —
@@ -651,8 +723,12 @@ actor Indexer {
         for url in FileScanner.importable(urls) {
             let path = Store.canonical(url.standardizedFileURL.path)
             if path == rootPath || path.hasPrefix(rootPath + "/") {
-                guard let facts = Self.facts(URL(fileURLWithPath: path)),
-                      let r = try? await store.upsertDocument(facts, origin: .inLibrary) else { summary.failed += 1; continue }
+                guard let facts = Self.facts(URL(fileURLWithPath: path)) else {
+                    summary.fail(url.lastPathComponent, "it could not be read"); continue
+                }
+                let r: (id: Int64, isNew: Bool, changed: Bool)
+                do { r = try await store.upsertDocument(facts, origin: .inLibrary) }
+                catch { summary.fail(url.lastPathComponent, error.localizedDescription); continue }
                 summary.alreadyInLibrary += 1
                 if r.changed { inPlace.append((r.id, path)) }
                 if r.isNew { fresh.insert(r.id) }
@@ -679,12 +755,14 @@ actor Indexer {
                     try FileManager.default.copyItem(at: url, to: target)
                 }
                 let origin: DocumentOrigin = movingSource ? .scanned : .imported(from: path)
-                guard let facts = Self.facts(target),
-                      let r = try? await store.upsertDocument(facts, origin: origin) else { summary.failed += 1; continue }
+                guard let facts = Self.facts(target) else {
+                    summary.fail(url.lastPathComponent, "its copy could not be read"); continue
+                }
+                let r = try await store.upsertDocument(facts, origin: origin)
                 imported.append((r.id, target.path))
                 summary.imported += 1
             } catch {
-                summary.failed += 1
+                summary.fail(url.lastPathComponent, error.localizedDescription)
             }
         }
         await process(documents: inPlace, phase: "Indexing", isImport: false, found: fresh)
@@ -717,8 +795,18 @@ actor Indexer {
                         created: f.created, fileID: f.fileID)
     }
 
-    func rename(ids: [Int64], template: String) async -> Int {
-        var renamed = 0
+    /// How many of a batch of file changes were made, and why the rest were not.
+    struct FileChanges: Sendable {
+        var done = 0
+        var failures: [String] = []
+
+        mutating func fail(_ name: String, _ error: Error) {
+            failures.append("“\(name)”: \(error.localizedDescription)")
+        }
+    }
+
+    func rename(ids: [Int64], template: String) async -> FileChanges {
+        var result = FileChanges()
         for id in ids {
             guard let detail = try? await store.detail(id) else { continue }
             let url = detail.row.url
@@ -728,60 +816,90 @@ actor Indexer {
                                      title: detail.row.title,
                                      docType: detail.row.docType,
                                      language: detail.row.language,
-                                     counter: renamed + 1,
+                                     counter: result.done + 1,
                                      originalStem: url.deletingPathExtension().lastPathComponent,
                                      ext: url.pathExtension,
                                      options: settings.namingOptions)
             let newName = Naming.render(template, ctx)
             guard newName != url.lastPathComponent else { continue }
-            if (try? await relocate(id, from: url, into: url.deletingLastPathComponent(), named: newName,
-                                    action: .renamed, detail: newName, rule: template)) != nil {
-                renamed += 1
-            }
+            do {
+                try await relocate(id, from: url, into: url.deletingLastPathComponent(), named: newName,
+                                   action: .renamed, detail: newName, rule: template)
+                result.done += 1
+            } catch { result.fail(url.lastPathComponent, error) }
         }
         onDataChanged()
-        return renamed
+        return result
     }
 
-    func move(ids: [Int64], to destination: URL) async -> Int {
-        var moved = 0
+    func move(ids: [Int64], to destination: URL) async -> FileChanges {
+        var result = FileChanges()
         for id in ids {
             guard let path = try? await store.documentPath(id) else { continue }
             let url = URL(fileURLWithPath: path)
             guard url.deletingLastPathComponent().path != destination.path else { continue }
-            if (try? await relocate(id, from: url, into: destination, named: url.lastPathComponent,
-                                    action: .moved, detail: destination.lastPathComponent)) != nil {
-                moved += 1
-            }
+            do {
+                try await relocate(id, from: url, into: destination, named: url.lastPathComponent,
+                                   action: .moved, detail: destination.lastPathComponent)
+                result.done += 1
+            } catch { result.fail(url.lastPathComponent, error) }
         }
         onDataChanged()
-        return moved
+        return result
     }
 
-    func optimize(ids: [Int64]) async -> (count: Int, saved: Int64) {
+    func optimize(ids: [Int64]) async -> (count: Int, saved: Int64, failures: [String]) {
         var count = 0
         var saved: Int64 = 0
+        var failures: [String] = []
         for id in ids {
-            guard let path = try? await store.documentPath(id),
-                  let result = await optimizeFile(id: id, url: URL(fileURLWithPath: path)) else { continue }
-            count += 1
-            saved += result.originalSize - result.newSize
+            guard let path = try? await store.documentPath(id) else { continue }
+            let url = URL(fileURLWithPath: path)
+            do {
+                guard let result = try await optimizeFile(id: id, url: url) else { continue }
+                count += 1
+                saved += result.originalSize - result.newSize
+            } catch { failures.append("“\(url.lastPathComponent)”: \(error.localizedDescription)") }
         }
         onDataChanged()
-        return (count, saved)
+        return (count, saved, failures)
     }
 
-    private func optimizeFile(id: Int64, url: URL) async -> Optimizer.Result? {
-        var savedOriginal: String?
-        if let preHash = FileScanner.hash(url),
-           (try? await store.saveOriginalFile(for: id, from: url, hash: preHash)) == true {
-            savedOriginal = preHash
+    enum OptimizeError: LocalizedError {
+        case originalUnreadable
+        case originalNotKept(String)
+        case unrecorded(String)
+
+        var errorDescription: String? {
+            switch self {
+            case .originalUnreadable:
+                return "its original could not be read to keep a copy, so it was left as it is"
+            case .originalNotKept(let reason):
+                return "its original could not be kept (\(reason)), so it was left as it is"
+            case .unrecorded(let reason):
+                return "it was optimized, but the index could not record where its original is kept (\(reason)), so it cannot be reverted"
+            }
         }
+    }
+
+    /// Nil when optimizing would not help. Throws, before touching the file,
+    /// when its original cannot be kept: without it the change could never
+    /// be taken back.
+    private func optimizeFile(id: Int64, url: URL) async throws -> Optimizer.Result? {
+        guard let preHash = FileScanner.hash(url) else { throw OptimizeError.originalUnreadable }
+        // False when an identical original is already kept, which will do.
+        let savedOriginal: String?
+        do {
+            savedOriginal = try await store.saveOriginalFile(for: id, from: url, hash: preHash) ? preHash : nil
+        } catch { throw OptimizeError.originalNotKept(error.localizedDescription) }
         guard let result = try? Optimizer.optimize(url: url, options: settings.optimizerOptions) else {
             if let savedOriginal { await store.discardOriginalFile(hash: savedOriginal, ext: url.pathExtension) }
             return nil
         }
-        try? await store.setSizes(id, size: result.newSize, originalSize: result.originalSize)
+        // `original_size` is what finds the kept original again, so a revert
+        // is only possible once this is on record.
+        do { try await store.setSizes(id, size: result.newSize, originalSize: result.originalSize) }
+        catch { throw OptimizeError.unrecorded(error.localizedDescription) }
         try? await store.logProcessing(
             docID: id, action: .optimized,
             detail: String(format: "%.0f%% smaller (%d page%@ rasterized)",
@@ -792,9 +910,9 @@ actor Indexer {
         return result
     }
 
-    func revertOptimization(ids: [Int64]) async -> Int {
+    func revertOptimization(ids: [Int64]) async -> FileChanges {
         let fm = FileManager.default
-        var count = 0
+        var result = FileChanges()
         for id in ids {
             guard let saved = try? await store.savedOriginal(id) else { continue }
             // Staged beside the live file and swapped in, so a failing copy can
@@ -811,16 +929,17 @@ actor Indexer {
                 try await store.markReverted(id, size: saved.size)
             } catch {
                 try? fm.removeItem(at: staged)
+                result.fail(saved.current.lastPathComponent, error)
                 continue
             }
             try? await store.logProcessing(docID: id, action: .revertedOptimization,
                                            detail: "Reverted to original pre-optimization file",
                                            confidence: nil, rule: nil, from: nil, to: saved.current.path,
                                            approved: true)
-            count += 1
+            result.done += 1
         }
-        if count > 0 { onDataChanged() }
-        return count
+        if result.done > 0 || !result.failures.isEmpty { onDataChanged() }
+        return result
     }
 
     /// Every move of a document's file ends here: the file, its row, the folder
@@ -833,7 +952,16 @@ actor Indexer {
         let target = Naming.uniqueURL(in: folder, filename: name,
                                       separator: settings.filenameUnderscoresForSpaces ? "_" : " ")
         try FileManager.default.moveItem(at: url, to: target)
-        try? await store.updatePath(id, to: target.path)
+        do {
+            try await store.updatePath(id, to: target.path)
+        } catch {
+            // The row still says where the file was, so that is where it goes
+            // back to, rather than somewhere the index and Undo know nothing of.
+            do { try FileManager.default.moveItem(at: target, to: url) } catch {
+                throw UnrecordedMove(target: target, reason: error.localizedDescription)
+            }
+            throw error
+        }
         FileScanner.pruneEmptyDirectories(startingFrom: url.deletingLastPathComponent(), upTo: store.root)
         if let action {
             try? await store.logProcessing(docID: id, action: action, detail: detail, confidence: confidence,
@@ -841,6 +969,15 @@ actor Indexer {
         }
         await syncAliases(docID: id, target: target)
         return target
+    }
+
+    struct UnrecordedMove: LocalizedError {
+        let target: URL
+        let reason: String
+        var errorDescription: String? {
+            "It was moved to “\(target.path)”, which the index could not record, "
+                + "and could not be put back (\(reason)). The next scan will find it there."
+        }
     }
 
     /// Takes back every file change made to these documents since `mark`,
@@ -887,7 +1024,9 @@ actor Indexer {
                 try? await store.recordAlias(docID: event.docID, tagID: nil, path: alias.path)
             }
         }
-        try? await store.deleteEvent(event.id)
+        // An event that stays on record would be handed straight back by
+        // `lastUndoableEvent`, and `undo` would loop on it forever.
+        do { try await store.deleteEvent(event.id) } catch { return false }
         return true
     }
 
@@ -897,6 +1036,7 @@ actor Indexer {
         var renamed = 0
         var tagged = 0
         var metadataUpdated = 0
+        var failures: [String] = []
     }
 
     /// A rule, saved or still a draft, applied on request to the documents
@@ -915,27 +1055,30 @@ actor Indexer {
                 }
                 result.tagged += 1
             }
+            var url = URL(fileURLWithPath: doc.path)
             var patch = Store.MetadataPatch(docID: doc.id)
             patch.correspondent = rule.setCorrespondent
             patch.docType = rule.setDocType
-            if patch.correspondent != nil || patch.docType != nil,
-               (try? await store.storeMetadata(patch)) != nil {
-                result.metadataUpdated += 1
+            if patch.correspondent != nil || patch.docType != nil {
+                do {
+                    try await store.storeMetadata(patch)
+                    result.metadataUpdated += 1
+                } catch { result.failures.append("“\(url.lastPathComponent)”: \(error.localizedDescription)") }
             }
 
-            var url = URL(fileURLWithPath: doc.path)
             let correspondent = rule.setCorrespondent ?? doc.subject.correspondent
             let docType = rule.setDocType ?? doc.subject.docType
             let date = doc.docDate ?? doc.created
             if let template = rule.destination {
                 let folder = router.expand(template, correspondent: correspondent, docType: docType, date: date)
                 if router.isInsideLibrary(folder),
-                   url.deletingLastPathComponent().standardizedFileURL != folder.standardizedFileURL,
-                   let target = try? await relocate(doc.id, from: url, into: folder, named: url.lastPathComponent,
-                                                    action: .routed, detail: "Applied rule “\(rule.name)”",
-                                                    rule: rule.name, confidence: 1) {
-                    url = target
-                    result.moved += 1
+                   url.deletingLastPathComponent().standardizedFileURL != folder.standardizedFileURL {
+                    do {
+                        url = try await relocate(doc.id, from: url, into: folder, named: url.lastPathComponent,
+                                                 action: .routed, detail: "Applied rule “\(rule.name)”",
+                                                 rule: rule.name, confidence: 1)
+                        result.moved += 1
+                    } catch { result.failures.append("“\(url.lastPathComponent)”: \(error.localizedDescription)") }
                 }
             }
             if let template = rule.rename {
@@ -944,10 +1087,12 @@ actor Indexer {
                     language: doc.language, counter: nil,
                     originalStem: url.deletingPathExtension().lastPathComponent, ext: url.pathExtension,
                     options: settings.namingOptions))
-                if name != url.lastPathComponent,
-                   (try? await relocate(doc.id, from: url, into: url.deletingLastPathComponent(), named: name,
-                                        action: .renamed, detail: name, rule: rule.name)) != nil {
-                    result.renamed += 1
+                if name != url.lastPathComponent {
+                    do {
+                        try await relocate(doc.id, from: url, into: url.deletingLastPathComponent(), named: name,
+                                           action: .renamed, detail: name, rule: rule.name)
+                        result.renamed += 1
+                    } catch { result.failures.append("“\(url.lastPathComponent)”: \(error.localizedDescription)") }
                 }
             }
         }

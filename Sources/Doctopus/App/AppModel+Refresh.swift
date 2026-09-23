@@ -7,6 +7,11 @@ extension AppModel {
         return try? JSONDecoder().decode(T.self, from: data)
     }
 
+    nonisolated static func attempt<T: Sendable>(
+        _ body: @Sendable () async throws -> T) async -> Result<T, Error> {
+        do { return .success(try await body()) } catch { return .failure(error) }
+    }
+
     func refreshAll() {
         reloadTask?.cancel()
         let libs = libraries
@@ -22,6 +27,7 @@ extension AppModel {
             var queue: [ProcessingEntry] = []
             var stats = Store.Stats()
             var finderLabels: [String: Int] = [:]
+            var unreadable: [String] = []
 
             for lib in libs {
                 let store = lib.store
@@ -31,10 +37,19 @@ extension AppModel {
                 async let finder = (try? await store.finderTags()) ?? []
                 async let labels = (try? await store.finderTagLabels()) ?? [:]
                 async let q = (try? await store.processingQueue()) ?? []
-                async let s = (try? await store.stats()) ?? Store.Stats()
+                // Stands for the rest: an index that cannot answer this cannot
+                // answer any of them, and should not pass for an empty library.
+                async let s = Self.attempt { try await store.stats() }
                 async let svList = (try? await store.savedViews()) ?? []
 
-                let (t, tg, fs, ftg, lbl, qq, ss, svs) = await (tree, tagList, fieldList, finder, labels, q, s, svList)
+                let (t, tg, fs, ftg, lbl, qq, counted, svs) = await (tree, tagList, fieldList, finder, labels, q, s, svList)
+                let ss: Store.Stats
+                switch counted {
+                case .success(let value): ss = value
+                case .failure(let error):
+                    ss = Store.Stats()
+                    unreadable.append("\(lib.displayName) (\(error.localizedDescription))")
+                }
                 var facetMap: [String: [Facet]] = [:]
                 for field in fs { facetMap[field.key] = (try? await store.facets(field: field)) ?? [] }
 
@@ -66,6 +81,13 @@ extension AppModel {
             queue.sort { $0.at > $1.at }
 
             guard !Task.isCancelled else { return }
+            let problem = unreadable.isEmpty ? nil
+                : "Could not read the index of " + unreadable.joined(separator: ", ")
+                    + ". What is shown may be incomplete."
+            if problem != self.refreshProblem {
+                self.refreshProblem = problem
+                if let problem { self.errorMessage = problem }
+            }
             self.folders = folders
             self.tags = tags
             self.savedViews = allSavedViews
