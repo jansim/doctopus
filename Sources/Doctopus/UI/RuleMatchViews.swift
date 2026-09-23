@@ -1,14 +1,14 @@
 import SwiftUI
 
-/// Filter lines for one rule; an X when several rules want the same document,
-/// which is worth a look even when they agree.
+/// Filter lines for a rule match; an X when matching rules disagree, which
+/// needs a choice before anything is applied.
 struct RuleMatchBadge: View {
     var size: CGFloat = 14
     var muted = false
-    var multiple = false
+    var conflicting = false
 
     var body: some View {
-        Image(systemName: multiple ? "xmark" : "line.3.horizontal.decrease")
+        Image(systemName: conflicting ? "xmark" : "line.3.horizontal.decrease")
             .font(.system(size: size * 0.52, weight: .bold))
             .foregroundStyle(.white)
             .frame(width: size, height: size)
@@ -88,7 +88,7 @@ struct RuleMatchesNotice: View {
         let settled = conflicts.allSatisfy(choices.isSettled)
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
-                RuleMatchBadge(size: 16, multiple: true)
+                RuleMatchBadge(size: 16, conflicting: !conflicts.isEmpty)
                 Text("Matches \(matches.count) rules")
                     .font(.callout.weight(.semibold))
                 Spacer(minLength: 0)

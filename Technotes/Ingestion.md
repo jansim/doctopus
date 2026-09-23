@@ -141,11 +141,11 @@ to those actions — and then suppresses the rule for that document, so what was
 left is never pointed out again. Which documents a rule would still change is
 worked out in memory, so the app hands the list to the Needs Review query.
 
-A document more than one rule would still change gets an X in the badge
-instead, and a purple box above the matches names the rules. Tags add up, so
-rules that only differ there can be applied together; rules that want
-different folders, names, correspondents or types conflict, and none of them
-can be applied until one is picked for each. The others are then treated
+A document more than one rule would still change gets a purple box above the
+matches naming the rules. Tags add up, so rules that only differ there can be
+applied together; rules that want different folders, names, correspondents or
+types conflict, which puts an X in the badge, and none of them can be applied
+until one is picked for each. The others are then treated
 as a partial match: what they still agree on is applied and they are
 suppressed for that document.
 

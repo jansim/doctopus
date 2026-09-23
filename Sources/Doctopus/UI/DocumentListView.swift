@@ -173,7 +173,7 @@ private struct DocumentTableView: View {
                     let pending = model.pendingRuleMatches(for: row)
                     if !pending.isEmpty {
                         Spacer(minLength: 4)
-                        RuleMatchBadge(size: 16, multiple: pending.count > 1)
+                        RuleMatchBadge(size: 16, conflicting: !RuleMatch.conflicts(among: pending).isEmpty)
                             .help(RuleMatchBadge.help(pending))
                     }
                 }
@@ -451,7 +451,7 @@ private struct GalleryCell: View {
                 .overlay(alignment: .bottomTrailing) {
                     let pending = model.pendingRuleMatches(for: row)
                     if !pending.isEmpty {
-                        RuleMatchBadge(size: 20, multiple: pending.count > 1)
+                        RuleMatchBadge(size: 20, conflicting: !RuleMatch.conflicts(among: pending).isEmpty)
                             .help(RuleMatchBadge.help(pending))
                             .padding(9)
                     }
