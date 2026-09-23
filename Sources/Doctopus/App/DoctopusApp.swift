@@ -119,7 +119,7 @@ private struct LibraryWindow: View {
                         model.window?.close()
                     }
                 } else {
-                    await workspace.restore(into: model)
+                    workspace.restore(into: model)
                 }
             }
     }

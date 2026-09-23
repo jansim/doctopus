@@ -65,7 +65,7 @@ extension AppModel {
             results.append(GlobalSearchResult(id: "sv-\(sv.id)", category: .savedView, title: sv.name, subtitle: sv.query, icon: sv.icon, savedViewID: sv.id))
         }
 
-        for tag in distinctTags where tag.name.lowercased().contains(query) {
+        for tag in tags where tag.name.lowercased().contains(query) {
             results.append(GlobalSearchResult(id: "tag-\(tag.tagID)", category: .tag, title: tag.name, subtitle: "\(tag.count) document(s)", icon: "tag", tag: tag.id))
         }
 

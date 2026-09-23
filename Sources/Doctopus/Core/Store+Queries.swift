@@ -427,13 +427,6 @@ extension Store {
         var bytes: Int64 = 0
         var saved: Int64 = 0
         var deleted = 0
-
-        static func + (a: Stats, b: Stats) -> Stats {
-            Stats(total: a.total + b.total, pending: a.pending + b.pending,
-                  failed: a.failed + b.failed, needsReview: a.needsReview + b.needsReview,
-                  bytes: a.bytes + b.bytes, saved: a.saved + b.saved,
-                  deleted: a.deleted + b.deleted)
-        }
     }
 
     func stats() throws -> Stats {

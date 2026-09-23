@@ -31,8 +31,10 @@ final class AppModel {
     var library: Library?
     /// While a library is on its way into this window.
     var isOpening = false
+    /// Once the window has gone, so a library still being opened is let go.
+    var isClosed = false
     /// Free to take a library.
-    var isEmpty: Bool { library == nil && !isOpening }
+    var isEmpty: Bool { library == nil && !isOpening && !isClosed }
 
     var settings = AppSettings() {
         didSet {
@@ -94,13 +96,7 @@ final class AppModel {
     var savedViews: [SavedView] { library?.savedViews ?? [] }
     var finderTags: [Facet] { library?.finderTags ?? [] }
     var fields: [Field] { library?.fields ?? [] }
-    var distinctTags: [Tag] {
-        var seen = Set<String>()
-        return tags
-            .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
-            .filter { seen.insert($0.name.lowercased()).inserted }
-    }
-    var tagNames: [String] { distinctTags.map(\.name) }
+    var tagNames: [String] { tags.map(\.name) }
     var facets: [String: [Facet]] { library?.facets ?? [:] }
     var queue: [ProcessingEntry] { library?.queue ?? [] }
     var stats: Store.Stats { library?.stats ?? Store.Stats() }
@@ -272,12 +268,8 @@ final class AppModel {
     }
     var selectedRows: [DocumentRow] { documents.filter { selectedIDs.contains($0.id) } }
 
-    private let explicitLibrary: URL?
-
-    /// `url` is for the headless checks, which host panes without a window.
-    init(openingLibraryAt url: URL? = nil) {
+    init() {
         self.intelligence = Workspace.shared.intelligence
-        self.explicitLibrary = url
         self.settings = AppSettings(appWide: Preferences.appWide)
     }
 
@@ -294,10 +286,6 @@ final class AppModel {
             sort = field
             sortAscending = saved.ascending
             batchingSort = false
-        }
-
-        if let explicit = explicitLibrary {
-            await openLibrary(container: explicit, quietly: true)
         }
     }
 }

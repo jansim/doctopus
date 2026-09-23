@@ -9,13 +9,15 @@ extension AppModel {
     /// showing a library hands the request on to a window of its own.
     @discardableResult
     func openLibrary(container: URL, rootBookmark: Data? = nil,
-                     quietly: Bool = false, index: Bool = true) async -> OpenOutcome {
+                     quietly: Bool = false) async -> OpenOutcome {
         let workspace = Workspace.shared
+        guard !isClosed else { return .failed }
         guard isEmpty else {
             workspace.open(container, from: self)
             return .elsewhere
         }
-        let silent = workspace.takeQuiet(container) || quietly
+        let silent = quietly || workspace.isReopening(container)
+        defer { workspace.doneReopening(container) }
         let root = container.deletingLastPathComponent()
         let bookmark = rootBookmark ?? (try? root.bookmarkData(
             includingResourceValuesForKeys: nil, relativeTo: nil))
@@ -54,6 +56,8 @@ extension AppModel {
         if (try? await store.rules())?.isEmpty ?? true {
             for rule in Rule.starters { _ = try? await store.upsertRule(rule) }
         }
+        // Closed while the library was on its way in: nothing is left to show it.
+        guard !isClosed else { return .failed }
 
         library = lib
         Preferences.noteRecentLibrary(lib.container)
@@ -65,7 +69,6 @@ extension AppModel {
 
         refreshAll()
         workspace.persistOpenLibraries()
-        guard index else { return .opened }
         let indexed = await lib.indexer.indexAll()
         if !silent, let indexed {
             notify(indexed == 0 ? "Opened \(lib.displayName)."
@@ -169,6 +172,7 @@ extension AppModel {
     func windowClosed() {
         let workspace = Workspace.shared
         let last = workspace.windows.count <= 1
+        isClosed = true
         if let lib = library { stopLibrary(lib) }
         workspace.unregister(self)
         if !last { workspace.persistOpenLibraries() }

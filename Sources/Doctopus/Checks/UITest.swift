@@ -29,8 +29,9 @@ enum UITest {
             try? FileManager.default.copyItem(at: library, to: root)
             let container = root.appendingPathComponent("library.doctopus", isDirectory: true)
 
-            let model = AppModel(openingLibraryAt: container)
+            let model = AppModel()
             await model.bootstrap()
+            await model.openLibrary(container: container, quietly: true)
             guard await settle({ !model.documents.isEmpty }) else {
                 print("  ✗ indexed the library"); exit(1)
             }
