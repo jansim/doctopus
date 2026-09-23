@@ -500,6 +500,9 @@ actor Indexer {
         guard settings.llmBackend != .off else {
             return AnalyzeSummary(blocked: "No model is selected in Settings › Intelligence.")
         }
+        guard !settings.predictedFields.isEmpty else {
+            return AnalyzeSummary(blocked: "Every field is switched off under Suggestions in Settings › Intelligence.")
+        }
         let status = await intelligence.status()
         guard status.isReady else { return AnalyzeSummary(blocked: status.label) }
         guard !ids.isEmpty else { return AnalyzeSummary() }

@@ -48,12 +48,12 @@ actor RemoteLLMService {
             }
         }
 
-        var body: [String: Any]? {
+        func body(_ question: LLMPrompt.Question) -> [String: Any]? {
             switch self {
             case .schema:
                 return ["type": "json_schema",
                         "json_schema": ["name": "document_insight", "strict": true,
-                                        "schema": LLMPrompt.jsonSchema]]
+                                        "schema": question.jsonSchema]]
             case .jsonObject:
                 return ["type": "json_object"]
             case .plain:
@@ -121,7 +121,8 @@ actor RemoteLLMService {
         return list.compactMap { $0["id"] as? String }.sorted()
     }
 
-    func enrich(text: String, filename: String, pageImage: PageImage.Rendered? = nil,
+    func enrich(text: String, filename: String, question: LLMPrompt.Question = .init(),
+                pageImage: PageImage.Rendered? = nil,
                 pageCount: Int? = nil, config: RemoteLLMConfig, limit: Int,
                 candidateTags: [String] = []) async -> DocumentInsight? {
         guard let base = config.baseURL, config.isConfigured else { return nil }
@@ -135,8 +136,8 @@ actor RemoteLLMService {
                                         candidateTags: candidateTags, pageCount: pageCount,
                                         hasPageImage: image != nil)
             do {
-                let reply = try await complete(prompt: prompt, image: image, config: config,
-                                               base: base, format: format)
+                let reply = try await complete(prompt: prompt, question: question, image: image,
+                                               config: config, base: base, format: format)
                 // Remembered only once it has actually answered, so a 400 for
                 // some unrelated reason cannot talk us out of a format the
                 // server does support.
@@ -144,7 +145,8 @@ actor RemoteLLMService {
                 if reply.truncated {
                     Self.log("\(filename): the reply was cut off at \(reply.tokens ?? 0) tokens")
                 }
-                guard let insight = Self.parse(reply.content, model: config.trimmedModel,
+                guard let insight = Self.parse(reply.content, fields: question.fields,
+                                               model: config.trimmedModel,
                                                vision: image != nil) else {
                     Self.log("\(filename): could not read a document from \(format.rawValue) reply: \(reply.content.prefix(400))")
                     return nil
@@ -197,10 +199,11 @@ actor RemoteLLMService {
         return ["role": "user", "content": parts]
     }
 
-    private func complete(prompt: String, image: PageImage.Rendered?, config: RemoteLLMConfig,
-                          base: URL, format: ResponseFormat) async throws -> Reply {
+    private func complete(prompt: String, question: LLMPrompt.Question, image: PageImage.Rendered?,
+                          config: RemoteLLMConfig, base: URL,
+                          format: ResponseFormat) async throws -> Reply {
         let messages: [[String: Any]] = [
-            ["role": "system", "content": LLMPrompt.jsonInstructions(withPageImage: image != nil)],
+            ["role": "system", "content": question.instructions(withPageImage: image != nil)],
             Self.userMessage(prompt: prompt, image: image),
         ]
         var body: [String: Any] = [
@@ -214,7 +217,7 @@ actor RemoteLLMService {
             "max_tokens": 4000,
             "stream": false,
         ]
-        body["response_format"] = format.body
+        body["response_format"] = format.body(question)
 
         var request = URLRequest(url: base.appendingPathComponent("chat/completions"))
         request.httpMethod = "POST"
@@ -323,7 +326,9 @@ actor RemoteLLMService {
         return (error as NSError).localizedDescription
     }
 
-    static func parse(_ content: String, model: String? = nil, vision: Bool = false) -> DocumentInsight? {
+    /// Also reads the on-device backend's JSON, so both clean up a reply the same way.
+    static func parse(_ content: String, fields: Set<InsightField> = Set(InsightField.allCases),
+                      model: String? = nil, vision: Bool = false) -> DocumentInsight? {
         guard let data = jsonObject(in: content),
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return nil }
@@ -347,10 +352,13 @@ actor RemoteLLMService {
         insight.source = "\(vision ? "vlm" : "remote")\(modelPart):v\(LLMPrompt.promptVersion)"
         insight.confidence = 0.9
 
+        insight = insight.keeping(fields)
         // A response where every field came back empty is a failure dressed up
         // as a success, and storing it would overwrite real heuristic findings.
         guard insight.summary != nil || insight.correspondent != nil
-                || insight.docType != nil || insight.title != nil else { return nil }
+                || insight.docType != nil || insight.title != nil
+                || insight.language != nil || insight.intent != nil
+                || !insight.tags.isEmpty else { return nil }
         return insight
     }
 
@@ -389,7 +397,7 @@ actor RemoteLLMService {
     /// last `}` is often not the one that closes the first `{`.
     static func jsonObject(in content: String) -> Data? {
         let chars = Array(content)
-        let wanted = Set(LLMPrompt.fields.map(\.key) + ["tags"])
+        let wanted = Set(InsightField.allCases.map(\.rawValue))
         var best: Data?
         var start: Int?
         var depth = 0
