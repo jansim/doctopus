@@ -547,6 +547,18 @@ enum SelfTest {
             Check.that("importing copies and leaves the original alone",
                        FileManager.default.fileExists(atPath: outside.path) && copied != nil)
 
+            let source = Store.canonical(outside.standardizedFileURL.path)
+            let importedOrigin = try? await store.history(for: copied?.doc ?? 0, limit: 10_000)
+                .last { $0.action == "added" }
+            Check.that("an import records where it was imported from",
+                       importedOrigin?.fromPath == source,
+                       importedOrigin?.detail ?? "no origin")
+            let scannedOrigin = try? await store.history(for: sample.doc, limit: 10_000)
+                .last { $0.action == "added" }
+            Check.that("a file first seen in the library records where it was",
+                       scannedOrigin?.detail == "In library at \(store.relPath(sample.url.path))",
+                       scannedOrigin?.detail ?? "no origin")
+
             let dupResult = await indexer.importFiles([outside], into: root.appendingPathComponent("Inbox"))
             Check.that("re-importing a byte-identical document is skipped as duplicate",
                        dupResult.imported == 0 && dupResult.duplicates == 1)

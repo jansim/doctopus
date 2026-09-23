@@ -60,7 +60,7 @@ actor Indexer {
             seen.insert(f.url.path)
             let facts = Store.FileFacts(path: f.url.path,
                                         size: f.size, mtime: f.mtime, created: f.created)
-            guard let result = try? await store.upsertDocument(facts) else { continue }
+            guard let result = try? await store.upsertDocument(facts, origin: .inLibrary) else { continue }
             if result.changed { toProcess.append((result.id, f.url.path)) }
         }
         _ = try? await store.reconcileMissing(seenPaths: seen)
@@ -118,7 +118,7 @@ actor Indexer {
             let facts = Store.FileFacts(path: path, size: Int64(v.fileSize ?? 0),
                                         mtime: v.contentModificationDate ?? Date(),
                                         created: v.creationDate ?? Date())
-            if let result = try? await store.upsertDocument(facts), result.changed {
+            if let result = try? await store.upsertDocument(facts, origin: .inLibrary), result.changed {
                 toProcess.append((result.id, path))
             }
             touched = true
@@ -134,7 +134,7 @@ actor Indexer {
         for f in FileScanner.scan(root: directory) {
             let facts = Store.FileFacts(path: f.url.path, size: f.size,
                                         mtime: f.mtime, created: f.created)
-            if let r = try? await store.upsertDocument(facts), r.changed {
+            if let r = try? await store.upsertDocument(facts, origin: .inLibrary), r.changed {
                 toProcess.append((r.id, f.url.path))
             }
         }
@@ -600,7 +600,7 @@ actor Indexer {
             let path = Store.canonical(url.standardizedFileURL.path)
             if path == rootPath || path.hasPrefix(rootPath + "/") {
                 guard let facts = Self.facts(URL(fileURLWithPath: path)),
-                      let r = try? await store.upsertDocument(facts) else { summary.failed += 1; continue }
+                      let r = try? await store.upsertDocument(facts, origin: .inLibrary) else { summary.failed += 1; continue }
                 summary.alreadyInLibrary += 1
                 if r.changed { inPlace.append((r.id, path)) }
                 continue
@@ -625,8 +625,9 @@ actor Indexer {
                 } else {
                     try FileManager.default.copyItem(at: url, to: target)
                 }
+                let origin: DocumentOrigin = movingSource ? .scanned : .imported(from: path)
                 guard let facts = Self.facts(target),
-                      let r = try? await store.upsertDocument(facts) else { summary.failed += 1; continue }
+                      let r = try? await store.upsertDocument(facts, origin: origin) else { summary.failed += 1; continue }
                 imported.append((r.id, target.path))
                 summary.imported += 1
             } catch {
