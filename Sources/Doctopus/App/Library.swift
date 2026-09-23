@@ -23,6 +23,8 @@ final class Library: Identifiable {
     var facets: [String: [Facet]] = [:]
     var queue: [ProcessingEntry] = []
     var stats = Store.Stats()
+    var ruleMatches: [Int64: [RuleMatch]] = [:]
+    var outlierRevision = 0
 
     var displayName: String { root.lastPathComponent }
 

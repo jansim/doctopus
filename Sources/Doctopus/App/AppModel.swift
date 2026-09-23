@@ -18,6 +18,7 @@ final class AppModel {
     var activeLibrary: Library? {
         switch selection {
         case .tag(let ref): return library(ref.library) ?? libraries.first
+        case .outliers(let id, _): return library(id) ?? libraries.first
         case .folder(let path): return libraries.first { $0.owns(path: path) } ?? libraries.first
         default: return libraries.first
         }
@@ -242,6 +243,9 @@ final class AppModel {
     // AppModel+Libraries, undo
     /// The window's, so a file change can be taken back with Edit › Undo.
     @ObservationIgnored weak var undoManager: UndoManager?
+
+    // AppModel+Rules
+    var ruleMatchTask: Task<Void, Never>?
 
     // AppModel+Import, continuous scanning
     var scanSession: ScanSession?
