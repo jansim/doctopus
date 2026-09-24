@@ -14,6 +14,14 @@ struct ReviewTreatment: Hashable, Sendable {
     }
 }
 
+/// What to take from one rule when accepting a review.
+struct RuleDecision: Hashable, Sendable {
+    var match: RuleMatch
+    var accepted: Set<RuleMatch.Change>
+
+    var isPartial: Bool { accepted != Set(match.changes) }
+}
+
 struct OptimizationPreview: Sendable {
     var url: URL
     var newSize: Int64
@@ -89,94 +97,146 @@ extension AppModel {
 
     func file(_ row: DocumentRow, in primary: URL, alsoIn secondaries: Set<String>,
               approve: Bool, version: KeptVersion? = nil, advance: Bool = false) {
-        guard let lib = library else { return }
+        guard let lib = library, canFile(in: primary, alsoIn: secondaries, lib) else { return }
+        let next = advance ? rowAfter(row) : nil
+        Task {
+            let mark = await eventMark()
+            await file(row, in: primary, alsoIn: secondaries, approve: approve, version: version,
+                       lib: lib, since: mark, next: next)
+        }
+    }
+
+    /// The whole review of one document in one go: the rule changes left ticked,
+    /// where it lives, and approval. A rule's move is the folder choice, so it
+    /// is never applied on its own; a rule whose folder was not picked, or with
+    /// any change unticked, is suppressed so it stops pointing out the rest.
+    func accept(_ row: DocumentRow, in primary: URL, alsoIn secondaries: Set<String>,
+                rules decisions: [RuleDecision], version: KeptVersion? = nil, advance: Bool = false) {
+        guard let lib = library, canFile(in: primary, alsoIn: secondaries, lib) else { return }
+        let next = advance ? rowAfter(row) : nil
+        Task {
+            let mark = await eventMark()
+            var notes: [String] = []
+            if !decisions.isEmpty {
+                let rules = (try? await lib.store.rules()) ?? []
+                for decision in decisions {
+                    let name = decision.match.ruleName
+                    let kinds = Set(decision.accepted.map(\.kind)).subtracting([.moveFile])
+                    if !kinds.isEmpty, let rule = rules.first(where: { $0.id == decision.match.ruleID }) {
+                        let limited = rule.limited(to: kinds)
+                        if limited.hasEffect {
+                            let result = await lib.indexer.applyRule(limited, onlyTo: row.doc)
+                            report(failures: result.failures, "apply “\(name)” to")
+                        }
+                    }
+                    if decision.isPartial {
+                        await setRuleSuppressed(true, rule: decision.match.ruleID, name: name,
+                                                doc: row.doc, in: lib)
+                        notes.append(decision.accepted.isEmpty ? "left “\(name)” out"
+                                                               : "applied part of “\(name)”")
+                    } else {
+                        notes.append("applied “\(name)”")
+                    }
+                }
+            }
+            // A rule may have renamed it, so file what is on disk now.
+            let current = await loadDetail(row.id)?.row ?? row
+            await file(current, in: primary, alsoIn: secondaries, approve: true, version: version,
+                       lib: lib, since: mark, next: next, notes: notes)
+        }
+    }
+
+    private func canFile(in primary: URL, alsoIn secondaries: Set<String>, _ lib: Library) -> Bool {
         guard lib.owns(path: primary.path) else {
             errorMessage = "“\(primary.lastPathComponent)” is outside \(lib.displayName). A document can only be filed within its own library."
-            return
+            return false
         }
         let outside = secondaries.filter { !lib.owns(path: $0) }
         guard outside.isEmpty else {
             errorMessage = "“\((outside.first! as NSString).lastPathComponent)” is outside \(lib.displayName). A document can only be filed within its own library."
-            return
+            return false
         }
-        let next = advance ? rowAfter(row) : nil
-        Task {
-            let mark = await eventMark()
-            let wanted = secondaries.subtracting([primary.path])
-            let existing = ((try? await lib.store.aliases(for: row.doc)) ?? []).filter { $0.tagID == nil }
-            var have: Set<String> = []
+        return true
+    }
 
-            // Unwanted aliases go first, so one sitting in the folder the file
-            // is about to move into cannot push it to "name 2.pdf".
-            for alias in existing {
-                let folder = (alias.path as NSString).deletingLastPathComponent
-                if wanted.contains(folder) { have.insert(folder); continue }
-                AliasManager.removeAlias(at: alias.path, pointingTo: row.url)
-                do { try await lib.store.deleteAlias(id: alias.id) }
-                catch { report(error, "unfile “\(row.filename)” from “\((folder as NSString).lastPathComponent)”") }
+    private func file(_ row: DocumentRow, in primary: URL, alsoIn secondaries: Set<String>,
+                      approve: Bool, version: KeptVersion?, lib: Library,
+                      since mark: Int64, next: Int64?, notes: [String] = []) async {
+        let wanted = secondaries.subtracting([primary.path])
+        let existing = ((try? await lib.store.aliases(for: row.doc)) ?? []).filter { $0.tagID == nil }
+        var have: Set<String> = []
+
+        // Unwanted aliases go first, so one sitting in the folder the file
+        // is about to move into cannot push it to "name 2.pdf".
+        for alias in existing {
+            let folder = (alias.path as NSString).deletingLastPathComponent
+            if wanted.contains(folder) { have.insert(folder); continue }
+            AliasManager.removeAlias(at: alias.path, pointingTo: row.url)
+            do { try await lib.store.deleteAlias(id: alias.id) }
+            catch { report(error, "unfile “\(row.filename)” from “\((folder as NSString).lastPathComponent)”") }
+        }
+
+        var target = row.url
+        var moved = false
+        if Store.canonical(primary.standardizedFileURL.path) != Store.canonical(row.directory) {
+            let result = await lib.indexer.move(ids: [row.doc], to: primary)
+            guard result.done == 1, let now = try? await lib.store.documentPath(row.doc) else {
+                errorMessage = "Could not move “\(row.filename)” to “\(primary.lastPathComponent)”. It was left where it is."
+                    + (result.failures.first.map { "\n\n\($0)" } ?? "")
+                refreshAll()
+                return
             }
+            target = URL(fileURLWithPath: now)
+            moved = true
+        }
 
-            var target = row.url
-            var moved = false
-            if Store.canonical(primary.standardizedFileURL.path) != Store.canonical(row.directory) {
-                let result = await lib.indexer.move(ids: [row.doc], to: primary)
-                guard result.done == 1, let now = try? await lib.store.documentPath(row.doc) else {
-                    errorMessage = "Could not move “\(row.filename)” to “\(primary.lastPathComponent)”. It was left where it is."
-                        + (result.failures.first.map { "\n\n\($0)" } ?? "")
-                    refreshAll()
-                    return
+        var added: [String] = []
+        var notAdded: [String] = []
+        for folder in wanted.subtracting(have).sorted() {
+            let name = (folder as NSString).lastPathComponent
+            let created: URL
+            do {
+                created = try AliasManager.createAlias(to: target, in: URL(fileURLWithPath: folder))
+                do { try await lib.store.recordAlias(docID: row.doc, tagID: nil, path: created.path) }
+                catch {
+                    // An alias the index does not know of could never be pruned.
+                    AliasManager.removeAlias(at: created.path, pointingTo: target)
+                    throw error
                 }
-                target = URL(fileURLWithPath: now)
-                moved = true
-            }
-
-            var added: [String] = []
-            var notAdded: [String] = []
-            for folder in wanted.subtracting(have).sorted() {
-                let name = (folder as NSString).lastPathComponent
-                let created: URL
-                do {
-                    created = try AliasManager.createAlias(to: target, in: URL(fileURLWithPath: folder))
-                    do { try await lib.store.recordAlias(docID: row.doc, tagID: nil, path: created.path) }
-                    catch {
-                        // An alias the index does not know of could never be pruned.
-                        AliasManager.removeAlias(at: created.path, pointingTo: target)
-                        throw error
-                    }
-                } catch { notAdded.append("“\(name)”: \(error.localizedDescription)"); continue }
-                try? await lib.store.logProcessing(docID: row.doc, action: .aliased,
-                                                   detail: "Also filed under \((folder as NSString).lastPathComponent)",
-                                                   confidence: nil, rule: nil, from: target.path,
-                                                   to: created.path, approved: true)
-                added.append((folder as NSString).lastPathComponent)
-            }
-
-            var kept: String?
-            var approved = approve
-            if approve {
-                do { try await lib.store.setDocumentApproved(row.doc, true) }
-                catch { approved = false; notAdded.append("approving it: \(error.localizedDescription)") }
-                if let version { kept = await keep(version, of: row, in: lib).note }
-            }
-            if moved || !added.isEmpty { offerUndo("File", of: [row], since: mark) }
-            if let next { selectedIDs = [next] }
-            refreshAll()
-            reloadDetail()
-
-            var parts: [String] = []
-            if moved { parts.append("Moved to “\(primary.lastPathComponent)”") }
-            if !added.isEmpty { parts.append("also filed in \(added.map { "“\($0)”" }.joined(separator: ", "))") }
-            if let kept { parts.append(kept) }
-            if !notAdded.isEmpty {
-                errorMessage = "Could not finish filing “\(row.filename)”:\n\n" + notAdded.joined(separator: "\n")
-            }
-            if parts.isEmpty {
-                guard notAdded.isEmpty else { return }
-                parts.append(approved ? "Approved" : "Nothing to change")
-            } else if approved { parts.append("approved") }
-            let text = parts.joined(separator: ", ")
-            notify(text.prefix(1).uppercased() + text.dropFirst() + ".", parts == ["Nothing to change"] ? .info : .success)
+            } catch { notAdded.append("“\(name)”: \(error.localizedDescription)"); continue }
+            try? await lib.store.logProcessing(docID: row.doc, action: .aliased,
+                                               detail: "Also filed under \((folder as NSString).lastPathComponent)",
+                                               confidence: nil, rule: nil, from: target.path,
+                                               to: created.path, approved: true)
+            added.append((folder as NSString).lastPathComponent)
         }
+
+        var kept: String?
+        var approved = approve
+        if approve {
+            do { try await lib.store.setDocumentApproved(row.doc, true) }
+            catch { approved = false; notAdded.append("approving it: \(error.localizedDescription)") }
+            if let version { kept = await keep(version, of: row, in: lib).note }
+        }
+        if moved || !added.isEmpty || !notes.isEmpty { offerUndo("File", of: [row], since: mark) }
+        if let next { selectedIDs = [next] }
+        refreshAll()
+        reloadDetail()
+
+        var parts: [String] = []
+        if moved { parts.append("Moved to “\(primary.lastPathComponent)”") }
+        if !added.isEmpty { parts.append("also filed in \(added.map { "“\($0)”" }.joined(separator: ", "))") }
+        parts += notes
+        if let kept { parts.append(kept) }
+        if !notAdded.isEmpty {
+            errorMessage = "Could not finish filing “\(row.filename)”:\n\n" + notAdded.joined(separator: "\n")
+        }
+        if parts.isEmpty {
+            guard notAdded.isEmpty else { return }
+            parts.append(approved ? "Approved" : "Nothing to change")
+        } else if approved { parts.append("approved") }
+        let text = parts.joined(separator: ", ")
+        notify(text.prefix(1).uppercased() + text.dropFirst() + ".", parts == ["Nothing to change"] ? .info : .success)
     }
 
     func approve(_ rows: [DocumentRow], newArrivals: ReviewTreatment, alreadyInLibrary: ReviewTreatment) {

@@ -1728,6 +1728,7 @@ enum SelfTest {
         Check.that("applying the rule to the one document settles the match",
                    applied.matched == 1 && appliedTagged && after == nil)
         await partialRuleMatch(store: store, indexer: indexer, payslip: payslip)
+        await conflictingRuleMatches(store: store, payslip: payslip)
 
         let original = try? await store.detail(payslip.doc)
         let tagsBefore = Set(((try? await store.tags()) ?? []).map(\.tagID))
@@ -1790,6 +1791,41 @@ enum SelfTest {
 
         try? await store.deleteRule(id)
         if let tag = try? await store.tagID(named: "partial-check") { try? await store.deleteTag(tag) }
+    }
+
+    /// Two rules both wanting a document: the folders they disagree on are a
+    /// conflict to choose from, the tags they add together are not.
+    private static func conflictingRuleMatches(store: Store, payslip: DocumentRow) async {
+        func rule(_ name: String, folder: String, tag: String) -> Rule {
+            Rule(id: 0, name: name, priority: 1,
+                 conditions: [RuleCondition(field: .filename, pattern: "gehaltsabrechnung")],
+                 actions: [RuleAction(kind: .moveFile, value: folder),
+                           RuleAction(kind: .addTags, value: tag)])
+        }
+        guard let first = try? await store.upsertRule(rule("Conflict A", folder: "Conflict A", tag: "conflict-a")),
+              let second = try? await store.upsertRule(rule("Conflict B", folder: "Conflict B", tag: "conflict-b"))
+        else {
+            Check.that("two rules to conflict are saved", false)
+            return
+        }
+        let matches = ((try? await store.ruleMatches()) ?? [:])[payslip.doc]?
+            .filter { [first, second].contains($0.ruleID) } ?? []
+        let conflicts = RuleMatch.conflicts(among: matches)
+        Check.that("rules moving a document to different folders conflict, and their tags do not",
+                   matches.count == 2 && conflicts.map(\.kind) == [.moveFile]
+                       && Set(conflicts.first?.options.map(\.ruleID) ?? []) == [first, second],
+                   conflicts.map(\.summary).joined(separator: "; "))
+
+        var choices = RuleMatchChoices()
+        let unsettled = conflicts.allSatisfy(choices.isSettled)
+        if let conflict = conflicts.first { choices.choose(first, in: conflict) }
+        let loser = matches.first { $0.ruleID == second }
+        Check.that("choosing one rule settles the conflict and leaves the other's tags",
+                   !unsettled && conflicts.allSatisfy(choices.isSettled)
+                       && loser.map(choices.accepted) == [.addTags(["conflict-b"])])
+
+        try? await store.deleteRule(first)
+        try? await store.deleteRule(second)
     }
 
     private static func ruleMigration() {

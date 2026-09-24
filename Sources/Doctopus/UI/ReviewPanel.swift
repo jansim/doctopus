@@ -78,15 +78,12 @@ private struct DocumentReview: View {
         VStack(spacing: 0) {
             header
             Divider()
-            if !model.pendingRuleMatches(for: row).isEmpty {
-                RuleMatchReview(row: row)
-                Divider()
-            }
             HStack(alignment: .top, spacing: 0) {
                 GeneratedInfoEditor(detail: detail, version: $version)
                     .frame(minWidth: 250, idealWidth: 330, maxWidth: 400)
                 Divider()
-                FilingEditor(detail: detail, mode: .review, version: version)
+                FilingEditor(detail: detail, mode: .review, version: version,
+                             ruleMatches: model.pendingRuleMatches(for: row))
                     .frame(maxWidth: .infinity)
             }
         }
@@ -111,20 +108,25 @@ private struct DocumentReview: View {
             }
             Spacer(minLength: 8)
             ArrivalBadge(arrival: arrival)
-            if !model.pendingRuleMatches(for: row).isEmpty {
-                Badge("Rule match", tint: .purple)
-            }
-            if row.approved {
-                Badge("Approved")
-            } else {
-                Badge("Needs review", tint: .orange)
-            }
+            Badge(status.text, tint: status.tint)
+                .help(status.help)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .overlay(alignment: .leading) {
             Rectangle().fill(arrival.tint).frame(width: 3)
         }
+    }
+
+    /// One status: an approved document is back in review only because a rule would change it.
+    private var status: (text: String, tint: Color, help: String) {
+        let rules = model.pendingRuleMatches(for: row)
+        if !row.approved { return ("Needs review", Color.orange, "Accept to file and approve it") }
+        if let rule = rules.first {
+            return ("Rule update", Color.purple,
+                    "Approved earlier, but “\(rule.ruleName)”\(rules.count > 1 ? " and \(rules.count - 1) more" : "") would still change it")
+        }
+        return ("Approved", Color.secondary, "Nothing left to review")
     }
 }
 

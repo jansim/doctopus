@@ -48,40 +48,65 @@ extension AppModel {
     /// Accepting only some of a match's changes applies those and marks the
     /// document as an outlier, so the rule stops pointing out the rest.
     func applyRule(_ match: RuleMatch, to row: DocumentRow, accepting accepted: Set<RuleMatch.Change>? = nil) {
-        guard let lib = library else { return }
-        let accepted = accepted ?? Set(match.changes)
-        let partial = accepted != Set(match.changes)
+        applyRules([(match, accepted ?? Set(match.changes))], to: row)
+    }
+
+    /// Settles several matches as one step, which is how a choice between
+    /// conflicting rules lands: each applies what was accepted of it, in turn,
+    /// and one with anything left out is suppressed like a partial match.
+    func applyRules(_ plan: [(match: RuleMatch, accepted: Set<RuleMatch.Change>)], to row: DocumentRow) {
+        guard let lib = library, !plan.isEmpty else { return }
         Task {
-            guard var rule = try? await lib.store.rules().first(where: { $0.id == match.ruleID }) else { return }
-            let name = rule.name
-            if partial { rule = rule.limited(to: Set(accepted.map(\.kind))) }
+            let rules = (try? await lib.store.rules()) ?? []
             let mark = await eventMark()
-            var result = Indexer.RuleApplyResult()
-            if rule.hasEffect {
-                result = await lib.indexer.applyRule(rule, onlyTo: row.doc)
+            var total = Indexer.RuleApplyResult()
+            var suppressed = 0
+            for (match, accepted) in plan {
+                guard var rule = rules.first(where: { $0.id == match.ruleID }) else { continue }
+                let name = rule.name
+                let partial = accepted != Set(match.changes)
+                if partial { rule = rule.limited(to: Set(accepted.map(\.kind))) }
+                var result = Indexer.RuleApplyResult()
+                if rule.hasEffect {
+                    result = await lib.indexer.applyRule(rule, onlyTo: row.doc)
+                }
+                total.matched += result.matched
+                total.moved += result.moved
+                total.renamed += result.renamed
+                report(failures: result.failures, "apply “\(name)” to")
+                if result.matched > 0,
+                   let path = try? await lib.store.documentPath(row.doc) {
+                    await lib.indexer.syncAliases(docID: row.doc, target: URL(fileURLWithPath: path))
+                }
+                if partial {
+                    await setRuleSuppressed(true, rule: match.ruleID, name: name, doc: row.doc, in: lib)
+                    suppressed += 1
+                }
             }
-            if result.moved + result.renamed > 0 { offerUndo("Apply Rule", of: [row], since: mark) }
-            report(failures: result.failures, "apply “\(name)” to")
-            if result.matched > 0,
-               let path = try? await lib.store.documentPath(row.doc) {
-                await lib.indexer.syncAliases(docID: row.doc, target: URL(fileURLWithPath: path))
-            }
-            if partial {
-                await setRuleSuppressed(true, rule: match.ruleID, name: name, doc: row.doc, in: lib)
-            }
+            if total.moved + total.renamed > 0 { offerUndo("Apply Rule", of: [row], since: mark) }
             refreshAll()
             reloadDetail()
-            if partial {
-                notify(accepted.isEmpty
-                       ? "Suppressed “\(name)” for “\(row.displayTitle)”."
-                       : "Applied \(accepted.count) of \(match.changes.count) changes from “\(name)” to “\(row.displayTitle)” and suppressed the rest.",
-                       .success)
-            } else {
-                notify(result.matched > 0 ? "Applied “\(name)” to “\(row.displayTitle)”."
-                                          : "“\(name)” no longer matches “\(row.displayTitle)”.",
-                       result.matched > 0 ? .success : .info)
-            }
+            notify(Self.applyMessage(plan, matched: total.matched, suppressed: suppressed, row: row),
+                   total.matched > 0 || suppressed > 0 ? .success : .info)
         }
+    }
+
+    private static func applyMessage(_ plan: [(match: RuleMatch, accepted: Set<RuleMatch.Change>)],
+                                     matched: Int, suppressed: Int, row: DocumentRow) -> String {
+        guard plan.count == 1, let only = plan.first else {
+            return suppressed == 0
+                ? "Applied \(plan.count) rules to “\(row.displayTitle)”."
+                : "Applied your choice from \(plan.count) rules to “\(row.displayTitle)” and suppressed what you left out."
+        }
+        let (match, accepted) = only
+        let name = match.ruleName
+        if accepted == Set(match.changes) {
+            return matched > 0 ? "Applied “\(name)” to “\(row.displayTitle)”."
+                               : "“\(name)” no longer matches “\(row.displayTitle)”."
+        }
+        return accepted.isEmpty
+            ? "Suppressed “\(name)” for “\(row.displayTitle)”."
+            : "Applied \(accepted.count) of \(match.changes.count) changes from “\(name)” to “\(row.displayTitle)” and suppressed the rest."
     }
 
     func setRuleSuppressed(_ suppressed: Bool, _ match: RuleMatch, for row: DocumentRow) {
