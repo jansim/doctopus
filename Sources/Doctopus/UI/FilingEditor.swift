@@ -48,7 +48,7 @@ struct FilingEditor: View {
         guard let version else { return false }
         return (version == .optimized) != detail.isOptimized
     }
-    private var library: Library? { model.library(row.library) }
+    private var library: Library? { model.library }
     private var existingSecondaries: Set<String> {
         Set(detail.folderAliases.map { ($0 as NSString).deletingLastPathComponent })
     }

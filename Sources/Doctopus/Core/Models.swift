@@ -2,17 +2,6 @@ import Foundation
 
 typealias LibraryID = String
 
-/// Composite document identity: a row id is only unique within one library, so
-/// everything above `Store` addresses documents by `(library, doc)`.
-struct DocumentRef: Hashable, Codable, Sendable {
-    var library: LibraryID
-    var doc: Int64
-}
-
-struct TagRef: Hashable, Codable, Sendable {
-    var library: LibraryID
-    var tag: Int64
-}
 
 enum OCRState: Int64, Sendable {
     case pending = 0, done = 1, failed = 2, skipped = 3
@@ -29,8 +18,8 @@ enum OCRState: Int64, Sendable {
 
 struct DocumentRow: Identifiable, Hashable, Sendable {
     var doc: Int64
-    var library: LibraryID = ""
-    var id: DocumentRef { DocumentRef(library: library, doc: doc) }
+    /// Only unique within its library, which is all a window ever shows.
+    var id: Int64 { doc }
     var path: String
     var directory: String
     var filename: String
@@ -169,7 +158,6 @@ struct Field: Identifiable, Hashable, Sendable {
     var enabled: Bool
     var type: FieldType = .string
     var extraData: String?
-    var library: LibraryID = ""
 
     var options: [String] {
         guard type == .select, let extraData, let data = extraData.data(using: .utf8),
@@ -193,9 +181,8 @@ struct Entity: Identifiable, Hashable, Sendable {
     var matchMode: MatchMode = .anyWord
     var matchInsensitive: Bool = true
     var count: Int = 0
-    var library: LibraryID = ""
 
-    var id: String { "\(library)#\(fieldKey)#\(entityID)" }
+    var id: String { "\(fieldKey)#\(entityID)" }
 }
 
 struct FieldOptions: Codable, Sendable, Hashable {
@@ -211,10 +198,9 @@ struct Tag: Identifiable, Hashable, Sendable {
     var count: Int = 0
     var parentID: Int64?
     var depth: Int = 0
-    var library: LibraryID = ""
     var implied: Bool = false
 
-    var id: TagRef { TagRef(library: library, tag: tagID) }
+    var id: Int64 { tagID }
 
     static let maxDepth = 5
 
@@ -301,7 +287,6 @@ struct SavedView: Identifiable, Hashable, Sendable {
     var ascending: Bool = false
     var viewMode: String?
     var position: Int64 = 0
-    var library: LibraryID = ""
 }
 
 struct FolderNode: Identifiable, Hashable, Sendable {
@@ -318,7 +303,7 @@ enum Selection: Hashable, Sendable {
     case all
     case queue
     case folder(String)
-    case tag(TagRef)
+    case tag(Int64)
     case finderTag(String)
     case field(String, String)
     case savedView(id: Int64, query: String)
@@ -326,7 +311,7 @@ enum Selection: Hashable, Sendable {
     case needsReview
     case deleted
     /// The documents marked as outliers for one rule.
-    case outliers(library: LibraryID, rule: Int64)
+    case outliers(rule: Int64)
 
     var isQueueMode: Bool { self == .queue || self == .needsReview }
 }

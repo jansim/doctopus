@@ -1,8 +1,9 @@
 import SwiftUI
 
-/// Where a group of settings is kept. With one library open there is no picker
-/// to hint at it, and a pane like Intelligence mixes both, so every section says.
-enum SettingsScope { case library, openLibraries, app }
+/// Where a group of settings is kept. Settings follow the front window, which
+/// the window chrome does not say, and a pane like Intelligence mixes both, so
+/// every section says.
+enum SettingsScope { case library, app }
 
 struct ScopeBadge: View {
     @Environment(AppModel.self) private var model
@@ -10,10 +11,8 @@ struct ScopeBadge: View {
 
     var body: some View {
         let (title, icon, help): (String, String, String) = switch scope {
-        case .library: (model.settingsLibrary?.displayName ?? "This library", "folder",
+        case .library: (model.library?.displayName ?? "This library", "folder",
                         "Kept in this library's folder and travels with it. Other libraries have their own.")
-        case .openLibraries: ("Open libraries", "square.stack",
-                              "Each library keeps its own copy, and a change here is made in every open library at once.")
         case .app: ("All libraries", "desktopcomputer",
                     "Kept on this Mac and shared by every library. Never stored inside a library's folder.")
         }

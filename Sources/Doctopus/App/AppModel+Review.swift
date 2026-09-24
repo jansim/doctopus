@@ -48,23 +48,21 @@ private enum KeepOutcome {
 extension AppModel {
 
     func approveAll() {
+        guard let lib = library else { return }
         Task {
-            for lib in libraries {
-                do { try await lib.store.approveAllPending() }
-                catch { report(error, "approve everything in \(lib.displayName)") }
-            }
+            do { try await lib.store.approveAllPending() }
+            catch { report(error, "approve everything in \(lib.displayName)") }
             refreshAll()
             reloadDetail()
         }
     }
 
     func setApproved(_ rows: [DocumentRow], _ approved: Bool) {
+        guard let lib = library else { return }
         Task {
-            for (lib, rows) in grouped(rows) {
-                for row in rows {
-                    do { try await lib.store.setDocumentApproved(row.doc, approved) }
-                    catch { report(error, "\(approved ? "approve" : "unapprove") “\(row.displayTitle)”") }
-                }
+            for row in rows {
+                do { try await lib.store.setDocumentApproved(row.doc, approved) }
+                catch { report(error, "\(approved ? "approve" : "unapprove") “\(row.displayTitle)”") }
             }
             refreshAll()
             reloadDetail()
@@ -72,14 +70,13 @@ extension AppModel {
     }
 
     func discardGeneratedInfo(_ rows: [DocumentRow]) {
+        guard let lib = library else { return }
         Task {
             var failures: [String] = []
-            for (lib, rows) in grouped(rows) {
-                for row in rows {
-                    do { try await lib.store.discardGeneratedInfo(row.doc) }
-                    catch { failures.append("“\(row.filename)”: \(error.localizedDescription)"); continue }
-                    await lib.indexer.syncAliases(docID: row.doc, target: row.url)
-                }
+            for row in rows {
+                do { try await lib.store.discardGeneratedInfo(row.doc) }
+                catch { failures.append("“\(row.filename)”: \(error.localizedDescription)"); continue }
+                await lib.indexer.syncAliases(docID: row.doc, target: row.url)
             }
             refreshAll()
             reloadDetail()
@@ -92,7 +89,7 @@ extension AppModel {
 
     func file(_ row: DocumentRow, in primary: URL, alsoIn secondaries: Set<String>,
               approve: Bool, version: KeptVersion? = nil, advance: Bool = false) {
-        guard let lib = library(of: row) else { return }
+        guard let lib = library else { return }
         guard lib.owns(path: primary.path) else {
             errorMessage = "“\(primary.lastPathComponent)” is outside \(lib.displayName). A document can only be filed within its own library."
             return
@@ -104,7 +101,7 @@ extension AppModel {
         }
         let next = advance ? rowAfter(row) : nil
         Task {
-            let marks = await eventMarks([row])
+            let mark = await eventMark()
             let wanted = secondaries.subtracting([primary.path])
             let existing = ((try? await lib.store.aliases(for: row.doc)) ?? []).filter { $0.tagID == nil }
             var have: Set<String> = []
@@ -161,7 +158,7 @@ extension AppModel {
                 catch { approved = false; notAdded.append("approving it: \(error.localizedDescription)") }
                 if let version { kept = await keep(version, of: row, in: lib).note }
             }
-            if moved || !added.isEmpty { offerUndo("File", of: [row], since: marks) }
+            if moved || !added.isEmpty { offerUndo("File", of: [row], since: mark) }
             if let next { selectedIDs = [next] }
             refreshAll()
             reloadDetail()
@@ -183,31 +180,30 @@ extension AppModel {
     }
 
     func approve(_ rows: [DocumentRow], newArrivals: ReviewTreatment, alreadyInLibrary: ReviewTreatment) {
+        guard let lib = library else { return }
         Task {
             var moved = 0, optimized = 0, restored = 0, failed = 0
             var saved: Int64 = 0
             var failures: [String] = []
             var notMoved: [String] = []
-            for (lib, rows) in grouped(rows) {
-                for row in rows {
-                    let treatment = row.fromOutside ? newArrivals : alreadyInLibrary
-                    if treatment.move, let best = await suggestedFolder(for: row) {
-                        let result = await lib.indexer.move(ids: [row.doc], to: URL(fileURLWithPath: best, isDirectory: true))
-                        if result.done == 1 {
-                            moved += 1
-                        } else {
-                            failed += 1
-                            notMoved += result.failures
-                        }
+            for row in rows {
+                let treatment = row.fromOutside ? newArrivals : alreadyInLibrary
+                if treatment.move, let best = await suggestedFolder(for: row) {
+                    let result = await lib.indexer.move(ids: [row.doc], to: URL(fileURLWithPath: best, isDirectory: true))
+                    if result.done == 1 {
+                        moved += 1
+                    } else {
+                        failed += 1
+                        notMoved += result.failures
                     }
-                    do { try await lib.store.setDocumentApproved(row.doc, true) }
-                    catch { failures.append("“\(row.filename)”: \(error.localizedDescription)"); continue }
-                    guard let version = treatment.version else { continue }
-                    switch await keep(version, of: row, in: lib) {
-                    case .optimized(let bytes): optimized += 1; saved += bytes
-                    case .restored: restored += 1
-                    case .unchanged, .compact: break
-                    }
+                }
+                do { try await lib.store.setDocumentApproved(row.doc, true) }
+                catch { failures.append("“\(row.filename)”: \(error.localizedDescription)"); continue }
+                guard let version = treatment.version else { continue }
+                switch await keep(version, of: row, in: lib) {
+                case .optimized(let bytes): optimized += 1; saved += bytes
+                case .restored: restored += 1
+                case .unchanged, .compact: break
                 }
             }
             refreshAll()
@@ -229,7 +225,7 @@ extension AppModel {
     }
 
     func suggestedFolder(for row: DocumentRow) async -> String? {
-        guard let lib = library(of: row) else { return nil }
+        guard let lib = library else { return nil }
         let suggestions = (try? await lib.store.pathSuggestions(for: row.doc)) ?? []
         guard let best = suggestions.first(where: { lib.owns(path: $0.path) }),
               Store.canonical(best.path) != Store.canonical(row.directory) else { return nil }
@@ -260,7 +256,7 @@ extension AppModel {
 
     /// Optimizes a throwaway copy, so the review can show the result; nil when it would not help.
     func optimizationPreview(of row: DocumentRow) async -> OptimizationPreview? {
-        guard let lib = library(of: row) else { return nil }
+        guard let lib = library else { return nil }
         let options = lib.settings.optimizerOptions
         let source = row.url
         return await Task.detached(priority: .utility) { () -> OptimizationPreview? in
@@ -279,7 +275,7 @@ extension AppModel {
         }.value
     }
 
-    private func rowAfter(_ row: DocumentRow) -> DocumentRef? {
+    private func rowAfter(_ row: DocumentRow) -> Int64? {
         guard let index = documents.firstIndex(where: { $0.id == row.id }) else { return nil }
         if index + 1 < documents.count { return documents[index + 1].id }
         return index > 0 ? documents[index - 1].id : nil

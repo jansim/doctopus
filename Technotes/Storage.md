@@ -38,8 +38,8 @@ folder travels with the folder.
 Keeping the second group out of the library is also what keeps an API key out
 of a folder somebody might share.
 
-Settings badges every section with its side of this split (`ScopeBadge`);
-fields, stored per library but edited in every open one, get a third badge.
+Settings badges every section with its side of this split (`ScopeBadge`), and
+the library side is always the front window's.
 
 ## The index
 

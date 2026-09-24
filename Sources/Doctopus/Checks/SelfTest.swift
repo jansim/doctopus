@@ -1021,7 +1021,7 @@ enum SelfTest {
             print("  tagged with Invoices → \(carried.map(\.name).joined(separator: ", "))")
             Check.that("assigning a child attaches its parent too",
                        carried.contains { $0.tagID == finances })
-            let byParent = (try? await store.listDocuments(selection: .tag(TagRef(library: "", tag: finances)),
+            let byParent = (try? await store.listDocuments(selection: .tag(finances),
                                                            query: SearchQuery(""), sort: .added,
                                                            ascending: false)) ?? []
             Check.that("…so filtering by the parent finds it",
@@ -1708,7 +1708,7 @@ enum SelfTest {
         Check.that("an outlier is still listed, but no longer pending",
                    suppressed?.suppressed == true && suppressed?.isPending == false)
         let counts = (try? await store.suppressionCounts()) ?? [:]
-        let listed = (try? await store.listDocuments(selection: .outliers(library: "", rule: id),
+        let listed = (try? await store.listDocuments(selection: .outliers(rule: id),
                                                      query: SearchQuery(""), sort: .added,
                                                      ascending: false)) ?? []
         Check.that("a rule counts and lists its outliers",

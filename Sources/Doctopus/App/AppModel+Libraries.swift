@@ -3,38 +3,48 @@ import AppKit
 
 extension AppModel {
 
-    func existingContainer(in folder: URL) -> URL? {
-        (try? FileManager.default.contentsOfDirectory(
-            at: folder, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles]))?
-            .first { $0.lastPathComponent.hasSuffix(".doctopus") }
-    }
+    enum OpenOutcome { case opened, elsewhere, failed }
 
+    /// Opens the library in this window, which has to be empty; one already
+    /// showing a library hands the request on to a window of its own.
+    @discardableResult
     func openLibrary(container: URL, rootBookmark: Data? = nil,
-                             persist: Bool = true, index: Bool = true) async {
+                     quietly: Bool = false) async -> OpenOutcome {
+        let workspace = Workspace.shared
+        guard !isClosed else { return .failed }
+        guard isEmpty else {
+            workspace.open(container, from: self)
+            return .elsewhere
+        }
+        let silent = quietly || workspace.isReopening(container)
+        defer { workspace.doneReopening(container) }
         let root = container.deletingLastPathComponent()
         let bookmark = rootBookmark ?? (try? root.bookmarkData(
             includingResourceValuesForKeys: nil, relativeTo: nil))
 
+        isOpening = true
+        defer { isOpening = false }
         let store: Store
         do {
             store = try Store(directory: container)
         } catch let error as Store.OpenError {
             errorMessage = error.description
-            return
+            return .failed
         } catch {
             errorMessage = "Could not open a library at \(root.lastPathComponent): \(error.localizedDescription)"
-            return
+            return .failed
         }
 
         // Identity is the id in `meta.json`, so the same library reached by two
-        // different paths — a bookmark and a Finder open, say — is one library.
-        if let already = library(store.libraryID) {
-            if let bookmark { already.bookmark = bookmark }
-            if persist { persistOpenLibraries() }
-            return
+        // different paths — a bookmark and a Finder open, say — is one library,
+        // and stays in the one window.
+        if let other = workspace.window(showing: store.libraryID) {
+            if let bookmark { other.library?.bookmark = bookmark }
+            other.bringToFront()
+            return .elsewhere
         }
-        guard opening.insert(store.libraryID).inserted else { return }
-        defer { opening.remove(store.libraryID) }
+        guard workspace.opening.insert(store.libraryID).inserted else { return .elsewhere }
+        defer { workspace.opening.remove(store.libraryID) }
 
         let lib = Library(store: store, bookmark: bookmark)
         let loaded = await AppSettings.load(from: store)
@@ -49,26 +59,31 @@ extension AppModel {
         if (try? await store.rules())?.isEmpty ?? true {
             for rule in Rule.starters { _ = try? await store.upsertRule(rule) }
         }
+        // Closed while the library was on its way in: nothing is left to show it.
+        guard !isClosed else { return .failed }
 
-        libraries.append(lib)
-        if persist { Preferences.noteRecentLibrary(lib.container) }
+        library = lib
+        Preferences.noteRecentLibrary(lib.container)
         startWatching(lib)
-
-        if libraries.count == 1 {
-            adoptSettings(of: lib)
-            viewMode = settings.viewMode
-            await intelligence.update(settings: settings)
-            modelStatus = await intelligence.status()
-        }
+        adoptSettings(of: lib)
+        viewMode = settings.viewMode
+        await intelligence.update(settings: settings)
+        modelStatus = await intelligence.status()
 
         refreshAll()
-        if persist { persistOpenLibraries() }
-        guard index else { return }
+        workspace.persistOpenLibraries()
         let indexed = await lib.indexer.indexAll()
-        if persist, let indexed {
+        if !silent, let indexed {
             notify(indexed == 0 ? "Opened \(lib.displayName)."
                                 : "Indexed \(indexed) document\(indexed == 1 ? "" : "s") in \(lib.displayName).")
         }
+        return .opened
+    }
+
+    func bringToFront() {
+        guard let window else { return }
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate()
     }
 
     func addLibrary() {
@@ -94,16 +109,9 @@ extension AppModel {
         openLibrary(at: url)
     }
 
+    /// Here if this window is still empty, in a window of its own if not.
     func openLibrary(at url: URL) {
-        let container: URL
-        if url.lastPathComponent.hasSuffix(".doctopus") {
-            container = url
-        } else if let existing = existingContainer(in: url) {
-            container = existing
-        } else {
-            container = url.appendingPathComponent(Preferences.libraryFolderName, isDirectory: true)
-        }
-        Task { await openLibrary(container: container) }
+        Workspace.shared.open(Workspace.container(for: url), from: self)
     }
 
     func createFolder(named name: String, in parent: URL) {
@@ -120,7 +128,7 @@ extension AppModel {
     /// The index moves first, so the watcher never sees the new folder while
     /// its documents are still recorded under the old one.
     func renameFolder(_ path: String, to name: String) {
-        guard let lib = libraries.first(where: { $0.owns(path: path) }) else { return }
+        guard let lib = library, lib.owns(path: path) else { return }
         let source = URL(fileURLWithPath: path)
         let destination = source.deletingLastPathComponent().appendingPathComponent(name, isDirectory: true).path
         Task {
@@ -143,28 +151,41 @@ extension AppModel {
         }
     }
 
-    func closeLibrary(_ lib: Library) {
+    /// The window goes with its library, unless it is the last one, which
+    /// stays at the welcome screen rather than quitting the app.
+    func closeLibrary() {
+        guard let lib = library else { return }
+        stopLibrary(lib)
+        library = nil
+        selection = .all
+        selectedIDs = []
+        searchText = ""
+        documents = []
+        detail = nil
+        hasMoreDocuments = false
+        adoptSettings(of: nil)
+        let workspace = Workspace.shared
+        workspace.persistOpenLibraries()
+        if workspace.windows.count > 1 { window?.close() }
+    }
+
+    /// Closing the last window quits the app, and whatever it showed should
+    /// be open again next time, so only a window closed among others is
+    /// dropped from the list.
+    func windowClosed() {
+        let workspace = Workspace.shared
+        let last = workspace.windows.count <= 1
+        isClosed = true
+        if let lib = library { stopLibrary(lib) }
+        workspace.unregister(self)
+        if !last { workspace.persistOpenLibraries() }
+    }
+
+    private func stopLibrary(_ lib: Library) {
+        if scanSession != nil { stopContinuousScan() }
         lib.watcher?.stop()
-        libraries.removeAll { $0 === lib }
-        if settingsLibraryID == lib.id { settingsLibraryID = nil }
-        if selectionBelongs(to: lib) { selection = .all }
-        selectedIDs = selectedIDs.filter { $0.library != lib.id }
-        persistOpenLibraries()
-        adoptSettings(of: settingsLibrary)
-        refreshAll()
-    }
-
-    private func selectionBelongs(to lib: Library) -> Bool {
-        switch selection {
-        case .tag(let ref): return ref.library == lib.id
-        case .folder(let path): return lib.owns(path: path)
-        default: return false
-        }
-    }
-
-    func persistOpenLibraries() {
-        guard !restoring else { return }
-        Preferences.libraryBookmarks = libraries.compactMap(\.bookmark)
+        lib.watcher = nil
+        Task { await lib.indexer.cancel() }
     }
 
     private func startWatching(_ lib: Library) {
@@ -177,42 +198,34 @@ extension AppModel {
         lib.watcher = watcher
     }
 
-    func reindex(_ lib: Library? = nil) {
-        let targets = lib.map { [$0] } ?? libraries
+    func reindex() {
+        guard let lib = library else { return }
         Task {
-            var changed = 0
-            var ran = false
-            for lib in targets {
-                guard let n = await lib.indexer.indexAll() else { continue }
-                changed += n
-                ran = true
-            }
-            guard ran else { return }
-            let scope = targets.count == 1 ? targets[0].displayName : "\(targets.count) libraries"
-            if changed == 0 { notify("\(scope) is up to date.", .info) }
-            else { notify("Indexed \(changed) new or changed document\(changed == 1 ? "" : "s") in \(scope).") }
+            guard let changed = await lib.indexer.indexAll() else { return }
+            if changed == 0 { notify("\(lib.displayName) is up to date.", .info) }
+            else { notify("Indexed \(changed) new or changed document\(changed == 1 ? "" : "s") in \(lib.displayName).") }
         }
     }
-    func cancelIndexing() { Task { for lib in libraries { await lib.indexer.cancel() } } }
-
-    /// Where each library's event log stands before a file change, so Edit ›
-    /// Undo can take back that change alone and not whatever was filed since.
-    func eventMarks(_ rows: [DocumentRow]) async -> [LibraryID: Int64] {
-        var marks: [LibraryID: Int64] = [:]
-        for (lib, _) in grouped(rows) { marks[lib.id] = (try? await lib.store.latestEventID()) ?? 0 }
-        return marks
+    func cancelIndexing() {
+        guard let lib = library else { return }
+        Task { await lib.indexer.cancel() }
     }
 
-    func offerUndo(_ name: String, of rows: [DocumentRow], since marks: [LibraryID: Int64],
+    /// Where the event log stands before a file change, so Edit › Undo can
+    /// take back that change alone and not whatever was filed since.
+    func eventMark() async -> Int64 {
+        guard let lib = library else { return 0 }
+        return (try? await lib.store.latestEventID()) ?? 0
+    }
+
+    func offerUndo(_ name: String, of rows: [DocumentRow], since mark: Int64,
                    restoring trashed: [DocumentRow] = []) {
-        guard let undoManager, !rows.isEmpty || !trashed.isEmpty else { return }
+        guard let undoManager, let lib = library, !rows.isEmpty || !trashed.isEmpty else { return }
         undoManager.registerUndo(withTarget: self) { model in
             MainActor.assumeIsolated {
                 if !trashed.isEmpty { model.restore(trashed) }
                 Task {
-                    for (lib, rows) in model.grouped(rows) {
-                        await lib.indexer.undo(rows.map(\.doc), since: marks[lib.id] ?? .max)
-                    }
+                    if !rows.isEmpty { await lib.indexer.undo(rows.map(\.doc), since: mark) }
                     model.refreshAll()
                 }
             }
@@ -221,7 +234,7 @@ extension AppModel {
     }
 
     func verifyLibrary() {
-        guard let lib = activeLibrary else { return }
+        guard let lib = library else { return }
         Task {
             do {
                 let report = try await LibraryVerifier.verify(store: lib.store)

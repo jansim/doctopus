@@ -80,7 +80,7 @@ struct RenameSheet: View {
                                  docType: row.docType, language: row.language, counter: counter,
                                  originalStem: url.deletingPathExtension().lastPathComponent,
                                  ext: url.pathExtension,
-                                 options: (model.library(of: row)?.settings ?? model.settings).namingOptions)
+                                 options: model.settings.namingOptions)
         return Naming.render(template, ctx)
     }
 }
@@ -96,9 +96,9 @@ struct AddTagSheet: View {
             TextField("Tag name", text: $name)
                 .textFieldStyle(.roundedBorder)
                 .onSubmit(commit)
-            if !model.distinctTags.isEmpty {
+            if !model.tags.isEmpty {
                 FlowLayout(spacing: 5) {
-                    ForEach(model.distinctTags.prefix(24)) { tag in
+                    ForEach(model.tags.prefix(24)) { tag in
                         Button(tag.name) { name = tag.name }
                             .buttonStyle(.borderless)
                             .font(.caption)

@@ -13,19 +13,17 @@ extension AppModel {
     /// that folder too, and that is the one a glance at the list cannot show.
     func refreshRevealedFolders() {
         revealTask?.cancel()
-        guard revealingFolders, !selectedRows.isEmpty else {
+        guard revealingFolders, let lib = library, !selectedRows.isEmpty else {
             if !revealedFolders.isEmpty { revealedFolders = [] }
             return
         }
-        let groups = grouped(selectedRows)
+        let rows = selectedRows
         revealTask = Task { [weak self] in
             var folders: Set<String> = []
-            for (lib, rows) in groups {
-                for row in rows {
-                    folders.insert(row.directory)
-                    for alias in ((try? await lib.store.aliases(for: row.doc)) ?? []) {
-                        folders.insert((alias.path as NSString).deletingLastPathComponent)
-                    }
+            for row in rows {
+                folders.insert(row.directory)
+                for alias in ((try? await lib.store.aliases(for: row.doc)) ?? []) {
+                    folders.insert((alias.path as NSString).deletingLastPathComponent)
                 }
             }
             guard !Task.isCancelled, let self, self.revealingFolders else { return }
@@ -52,11 +50,9 @@ extension AppModel {
     static let defaultOpener: (URL) -> Void = { NSWorkspace.shared.open($0) }
 
     func reprocess(_ rows: [DocumentRow]) {
+        guard let lib = library else { return }
         Task {
-            var n = 0
-            for (lib, rows) in grouped(rows) {
-                n += await lib.indexer.reprocess(ids: rows.map(\.doc))
-            }
+            let n = await lib.indexer.reprocess(ids: rows.map(\.doc))
             switch n {
             case 0: notify("Nothing to reprocess — those files are no longer on disk.", .info)
             case 1: notify("Reprocessed “\(rows.first?.displayTitle ?? "document")”.")
@@ -66,27 +62,25 @@ extension AppModel {
     }
 
     func addTag(_ name: String, to rows: [DocumentRow]) {
+        guard let lib = library else { return }
         Task {
-            for (lib, rows) in grouped(rows) {
-                do {
-                    let id = try await lib.store.tagID(named: name)
-                    guard id > 0 else { continue }
-                    for row in rows {
-                        try await lib.store.assign(tag: id, to: row.doc)
-                        try? await lib.store.logEdit(docID: row.doc, detail: "Tagged “\(name)”")
-                        await lib.indexer.syncAliases(docID: row.doc, target: row.url)
-                    }
-                } catch { report(error, "tag \(rows.count == 1 ? "it" : "them") “\(name)”") }
-            }
+            do {
+                let id = try await lib.store.tagID(named: name)
+                for row in rows where id > 0 {
+                    try await lib.store.assign(tag: id, to: row.doc)
+                    try? await lib.store.logEdit(docID: row.doc, detail: "Tagged “\(name)”")
+                    await lib.indexer.syncAliases(docID: row.doc, target: row.url)
+                }
+            } catch { report(error, "tag \(rows.count == 1 ? "it" : "them") “\(name)”") }
             refreshAll()
             reloadDetail()
         }
     }
 
     func removeTag(_ tag: Tag, from rows: [DocumentRow]) {
-        guard let lib = library(tag.library) else { return }
+        guard let lib = library else { return }
         Task {
-            for row in rows where row.library == tag.library {
+            for row in rows {
                 do { try await lib.store.unassign(tag: tag.tagID, from: row.doc) }
                 catch { report(error, "take “\(tag.name)” off “\(row.displayTitle)”"); continue }
                 try? await lib.store.logEdit(docID: row.doc, detail: "Untagged “\(tag.name)”")
@@ -98,7 +92,7 @@ extension AppModel {
     }
 
     func acceptTagSuggestion(_ suggestion: TagSuggestion, for row: DocumentRow) {
-        guard let lib = library(of: row) else { return }
+        guard let lib = library else { return }
         Task {
             do {
                 try await lib.store.acceptTagSuggestion(suggestion.name, for: row.doc)
@@ -112,7 +106,7 @@ extension AppModel {
     }
 
     func discardTagSuggestion(_ suggestion: TagSuggestion, for row: DocumentRow) {
-        guard let lib = library(of: row) else { return }
+        guard let lib = library else { return }
         Task {
             do { try await lib.store.discardTagSuggestion(suggestion.name, for: row.doc) }
             catch { report(error, "discard the suggestion “\(suggestion.name)”") }
@@ -121,7 +115,7 @@ extension AppModel {
     }
 
     func setTagMirroring(_ tag: Tag, enabled: Bool) {
-        guard let lib = library(tag.library) else { return }
+        guard let lib = library else { return }
         Task {
             do {
                 try await lib.store.setTagMirroring(tag.tagID, enabled, folder: tag.folder)
@@ -134,11 +128,7 @@ extension AppModel {
     }
 
     func setTagParent(_ tag: Tag, to parent: Tag?) {
-        guard let lib = library(tag.library) else { return }
-        if let parent, parent.library != tag.library {
-            errorMessage = "Tags can only be nested inside their own library."
-            return
-        }
+        guard let lib = library else { return }
         Task {
             do {
                 let moved = try await lib.store.setTagParent(tag.tagID, to: parent?.tagID)
@@ -151,8 +141,8 @@ extension AppModel {
         }
     }
 
-    func createTag(named name: String, in lib: Library? = nil) {
-        guard let lib = lib ?? activeLibrary else { return }
+    func createTag(named name: String) {
+        guard let lib = library else { return }
         Task {
             do { _ = try await lib.store.tagID(named: name) } catch { report(error, "create “\(name)”") }
             refreshAll()
@@ -160,13 +150,13 @@ extension AppModel {
     }
 
     func renameTag(_ tag: Tag, to name: String) {
-        guard let lib = library(tag.library) else { return }
+        guard let lib = library else { return }
         Task {
             let survivor: Int64
             do { survivor = try await lib.store.renameTag(tag.tagID, to: name) }
             catch { report(error, "rename “\(tag.name)”"); return }
             if selection == .tag(tag.id) {
-                selection = .tag(TagRef(library: tag.library, tag: survivor))
+                selection = .tag(survivor)
             }
             refreshAll()
             reloadDetail()
@@ -174,7 +164,7 @@ extension AppModel {
     }
 
     func setTagColor(_ tag: Tag, _ color: Int64) {
-        guard let lib = library(tag.library) else { return }
+        guard let lib = library else { return }
         Task {
             do { try await lib.store.setTagColor(tag.tagID, color) } catch { report(error, "recolour “\(tag.name)”") }
             refreshAll()
@@ -183,7 +173,7 @@ extension AppModel {
     }
 
     func deleteTag(_ tag: Tag) {
-        guard let lib = library(tag.library) else { return }
+        guard let lib = library else { return }
         Task {
             do { try await lib.store.deleteTag(tag.tagID) }
             catch { report(error, "delete “\(tag.name)”"); refreshAll(); return }
@@ -196,16 +186,15 @@ extension AppModel {
     /// happens on an explicit action, and the index is refreshed from whatever
     /// the disk ends up saying rather than from what we asked for.
     func addFinderTag(_ name: String, to rows: [DocumentRow]) {
+        guard let lib = library else { return }
         let clean = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !clean.isEmpty else { return }
         Task {
-            for (lib, rows) in grouped(rows) {
-                for row in rows where FinderTags.add(clean, to: row.url) {
-                    do { try await lib.store.indexFinderTags(docID: row.doc, entries: FinderTags.entries(row.url)) }
-                    catch { report(error, "record the Finder tag on “\(row.displayTitle)”"); continue }
-                    try? await lib.store.logEdit(docID: row.doc,
-                                                 detail: "Finder tag “\(clean)” added")
-                }
+            for row in rows where FinderTags.add(clean, to: row.url) {
+                do { try await lib.store.indexFinderTags(docID: row.doc, entries: FinderTags.entries(row.url)) }
+                catch { report(error, "record the Finder tag on “\(row.displayTitle)”"); continue }
+                try? await lib.store.logEdit(docID: row.doc,
+                                             detail: "Finder tag “\(clean)” added")
             }
             refreshAll()
             reloadDetail()
@@ -213,14 +202,13 @@ extension AppModel {
     }
 
     func removeFinderTag(_ name: String, from rows: [DocumentRow]) {
+        guard let lib = library else { return }
         Task {
-            for (lib, rows) in grouped(rows) {
-                for row in rows where FinderTags.remove(name, from: row.url) {
-                    do { try await lib.store.indexFinderTags(docID: row.doc, entries: FinderTags.entries(row.url)) }
-                    catch { report(error, "record the Finder tag on “\(row.displayTitle)”"); continue }
-                    try? await lib.store.logEdit(docID: row.doc,
-                                                 detail: "Finder tag “\(name)” removed")
-                }
+            for row in rows where FinderTags.remove(name, from: row.url) {
+                do { try await lib.store.indexFinderTags(docID: row.doc, entries: FinderTags.entries(row.url)) }
+                catch { report(error, "record the Finder tag on “\(row.displayTitle)”"); continue }
+                try? await lib.store.logEdit(docID: row.doc,
+                                             detail: "Finder tag “\(name)” removed")
             }
             if selection == .finderTag(name) { selection = .all }
             refreshAll()
@@ -229,80 +217,70 @@ extension AppModel {
     }
 
     func setValueIcon(_ field: Field, value: String, icon: String?) {
+        guard let lib = library else { return }
         Task {
-            for (lib, field) in librariesDefining(field) {
-                do { try await lib.store.setValueIcon(field: field, value: value, icon: icon) }
-                catch { report(error, "set the icon for “\(value)”") }
-            }
+            do { try await lib.store.setValueIcon(field: field, value: value, icon: icon) }
+            catch { report(error, "set the icon for “\(value)”") }
             refreshAll()
         }
     }
 
-    func librariesDefining(_ field: Field) -> [(Library, Field)] {
-        libraries.compactMap { lib in
-            lib.fields.first { $0.key == field.key }.map { (lib, $0) }
-        }
-    }
-
-    func addNote(_ body: String, to ref: DocumentRef) {
-        guard let lib = library(ref.library), body.nilIfBlank != nil else { return }
+    func addNote(_ body: String, to doc: Int64) {
+        guard let lib = library, body.nilIfBlank != nil else { return }
         Task {
             do {
-                _ = try await lib.store.addNote(body, to: ref.doc)
-                try? await lib.store.logEdit(docID: ref.doc, detail: "Note added")
+                _ = try await lib.store.addNote(body, to: doc)
+                try? await lib.store.logEdit(docID: doc, detail: "Note added")
             } catch { report(error, "save the note") }
             reloadDetail()
         }
     }
 
-    func updateNote(_ id: Int64, body: String, in ref: DocumentRef) {
-        guard let lib = library(ref.library) else { return }
+    func updateNote(_ id: Int64, body: String, in doc: Int64) {
+        guard let lib = library else { return }
         Task {
             do {
                 try await lib.store.updateNote(id, body: body)
-                try? await lib.store.logEdit(docID: ref.doc,
+                try? await lib.store.logEdit(docID: doc,
                                              detail: body.nilIfBlank == nil ? "Note deleted" : "Note edited")
             } catch { report(error, body.nilIfBlank == nil ? "delete the note" : "save the note") }
             reloadDetail()
         }
     }
 
-    func deleteNote(_ id: Int64, in ref: DocumentRef) {
-        guard let lib = library(ref.library) else { return }
+    func deleteNote(_ id: Int64, in doc: Int64) {
+        guard let lib = library else { return }
         Task {
             do {
                 try await lib.store.deleteNote(id)
-                try? await lib.store.logEdit(docID: ref.doc, detail: "Note deleted")
+                try? await lib.store.logEdit(docID: doc, detail: "Note deleted")
             } catch { report(error, "delete the note") }
             reloadDetail()
         }
     }
 
     func setFieldValue(_ rows: [DocumentRow], field: Field, value: String?) {
+        guard let lib = library else { return }
         Task {
-            for (lib, rows) in grouped(rows) {
-                guard let owned = lib.fields.first(where: { $0.key == field.key }) else { continue }
-                for row in rows {
-                    do { try await lib.store.setFieldValue(docID: row.doc, field: owned, value: value) }
-                    catch { report(error, "set \(field.name) on “\(row.displayTitle)”"); continue }
-                    try? await lib.store.logEdit(docID: row.doc,
-                                                 detail: Self.editDetail(field.name, value))
-                }
-                await lib.indexer.reroute(rows.map(\.doc), applyingActions: false)
+            for row in rows {
+                do { try await lib.store.setFieldValue(docID: row.doc, field: field, value: value) }
+                catch { report(error, "set \(field.name) on “\(row.displayTitle)”"); continue }
+                try? await lib.store.logEdit(docID: row.doc,
+                                             detail: Self.editDetail(field.name, value))
             }
+            await lib.indexer.reroute(rows.map(\.doc), applyingActions: false)
             reloadDetail()
             refreshAll()
         }
     }
 
-    func setFieldValue(_ ref: DocumentRef, field: Field, value: String?) {
-        guard let lib = library(ref.library),
-              let owned = lib.fields.first(where: { $0.key == field.key }) else { return }
+    func setFieldValue(_ doc: Int64, field: Field, value: String?) {
+        guard let lib = library else { return }
         Task {
             do {
-                try await lib.store.setFieldValue(docID: ref.doc, field: owned, value: value)
-                try? await lib.store.logEdit(docID: ref.doc, detail: Self.editDetail(field.name, value))
-                await lib.indexer.reroute([ref.doc], applyingActions: false)
+                try await lib.store.setFieldValue(docID: doc, field: field, value: value)
+                try? await lib.store.logEdit(docID: doc, detail: Self.editDetail(field.name, value))
+                await lib.indexer.reroute([doc], applyingActions: false)
             } catch { report(error, "set \(field.name)") }
             reloadDetail()
             refreshAll()
@@ -310,12 +288,11 @@ extension AppModel {
     }
 
     func renameFieldValue(_ field: Field, from old: String, to new: String) {
+        guard let lib = library else { return }
         Task {
             var n = 0
-            for (lib, field) in librariesDefining(field) {
-                do { n += try await lib.store.renameFieldValue(field: field, from: old, to: new) }
-                catch { report(error, "rename “\(old)” in \(lib.displayName)") }
-            }
+            do { n = try await lib.store.renameFieldValue(field: field, from: old, to: new) }
+            catch { report(error, "rename “\(old)”") }
             if case .field(let key, let value) = selection, key == field.key, value == old, n > 0 {
                 selection = .field(field.key, new)
             }
@@ -325,16 +302,16 @@ extension AppModel {
     }
 
     func setEntityMatch(_ field: Field, value: String, pattern: String) {
+        guard let lib = library else { return }
         Task {
             var saved = false
-            for (lib, owned) in librariesDefining(field) {
-                guard let column = owned.builtinColumn else { continue }
-                do {
-                    guard let id = try await lib.store.existingEntityID(named: value, builtin: column) else { continue }
+            do {
+                if let column = field.builtinColumn,
+                   let id = try await lib.store.existingEntityID(named: value, builtin: column) {
                     try await lib.store.setEntityMatch(id, pattern: pattern.nilIfBlank)
                     saved = true
-                } catch { report(error, "save what “\(value)” matches") }
-            }
+                }
+            } catch { report(error, "save what “\(value)” matches") }
             refreshAll()
             if saved, pattern.nilIfBlank != nil {
                 notify("Documents mentioning that will be filed as “\(value)”.")
@@ -343,60 +320,53 @@ extension AppModel {
     }
 
     func deleteFieldValue(_ field: Field, value: String) {
+        guard let lib = library else { return }
         Task {
-            for (lib, field) in librariesDefining(field) {
-                do { try await lib.store.deleteFieldValue(field: field, value: value) }
-                catch { report(error, "delete “\(value)” in \(lib.displayName)") }
-            }
+            do { try await lib.store.deleteFieldValue(field: field, value: value) }
+            catch { report(error, "delete “\(value)”") }
             if selection == .field(field.key, value) { selection = .all }
             refreshAll()
         }
     }
 
     func updateField(_ field: Field) {
+        guard let lib = library else { return }
         listColumns[visibility: "field.\(field.key)"] = .automatic
         Task {
-            for (lib, owned) in librariesDefining(field) {
-                var updated = field
-                updated.fieldID = owned.fieldID
-                updated.library = lib.id
-                do { try await lib.store.updateField(updated) }
-                catch { report(error, "update “\(field.name)” in \(lib.displayName)") }
-            }
+            do { try await lib.store.updateField(field) }
+            catch { report(error, "update “\(field.name)”") }
             refreshAll()
         }
     }
 
     func addCustomField(named name: String, type: FieldType = .string) {
+        guard let lib = library else { return }
         Task {
-            for lib in libraries {
-                do { _ = try await lib.store.addCustomField(name: name, type: type) }
-                catch { report(error, "add “\(name)” to \(lib.displayName)") }
-            }
+            do { _ = try await lib.store.addCustomField(name: name, type: type) }
+            catch { report(error, "add “\(name)”") }
             refreshAll()
         }
     }
 
     func deleteField(_ field: Field) {
+        guard let lib = library else { return }
         Task {
-            for (lib, owned) in librariesDefining(field) {
-                do { try await lib.store.deleteField(owned.fieldID) }
-                catch { report(error, "delete “\(field.name)” in \(lib.displayName)") }
-            }
+            do { try await lib.store.deleteField(field.fieldID) }
+            catch { report(error, "delete “\(field.name)”") }
             if case .field(let key, _) = selection, key == field.key { selection = .all }
             refreshAll()
         }
     }
 
-    func editMetadata(_ ref: DocumentRef, column: String, value: String?) {
-        guard let lib = library(ref.library) else { return }
+    func editMetadata(_ doc: Int64, column: String, value: String?) {
+        guard let lib = library else { return }
         let label = columnLabel(column)
         Task {
             do {
-                try await lib.store.overwriteMetadataField(ref.doc, column: column, value: value?.nilIfBlank)
-                try? await lib.store.logEdit(docID: ref.doc,
+                try await lib.store.overwriteMetadataField(doc, column: column, value: value?.nilIfBlank)
+                try? await lib.store.logEdit(docID: doc,
                                              detail: Self.editDetail(label, value))
-                await lib.indexer.reroute([ref.doc], applyingActions: false)
+                await lib.indexer.reroute([doc], applyingActions: false)
             } catch { report(error, "set \(label)") }
             reloadDetail()
             reloadDocuments()
@@ -409,15 +379,15 @@ extension AppModel {
         return column == "summary" ? "Summary" : "Title"
     }
 
-    func setDocumentDate(_ ref: DocumentRef, _ date: Date?) {
-        guard let lib = library(ref.library) else { return }
+    func setDocumentDate(_ doc: Int64, _ date: Date?) {
+        guard let lib = library else { return }
         Task {
             do {
-                try await lib.store.setDocumentDate(ref.doc, date)
+                try await lib.store.setDocumentDate(doc, date)
                 try? await lib.store.logEdit(
-                    docID: ref.doc,
+                    docID: doc,
                     detail: Self.editDetail("Date", date.map(DayDate.display)))
-                await lib.indexer.reroute([ref.doc], applyingActions: false)
+                await lib.indexer.reroute([doc], applyingActions: false)
             } catch { report(error, "set the date") }
             reloadDetail()
             reloadDocuments()
