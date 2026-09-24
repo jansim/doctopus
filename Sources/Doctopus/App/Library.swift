@@ -45,9 +45,10 @@ final class Library: Identifiable {
 
     func attachIndexer(intelligence: Intelligence,
                        onProgress: @escaping @Sendable (IndexProgress) -> Void,
-                       onDataChanged: @escaping @Sendable () -> Void) {
+                       onDataChanged: @escaping @Sendable () -> Void,
+                       onProblem: @escaping @Sendable (String) -> Void = { _ in }) {
         indexer = Indexer(store: store, intelligence: intelligence, settings: settings,
-                          onProgress: onProgress, onDataChanged: onDataChanged)
+                          onProgress: onProgress, onDataChanged: onDataChanged, onProblem: onProblem)
     }
 
     nonisolated func owns(path: String) -> Bool {

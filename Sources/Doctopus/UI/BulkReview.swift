@@ -6,15 +6,12 @@ struct BulkReview: View {
     let rows: [DocumentRow]
     @State private var newArrivals = BulkReview.new
     @State private var inLibrary = BulkReview.found
-    @State private var suggested: [DocumentRef: String] = [:]
+    @State private var suggested: [Int64: String] = [:]
     @State private var confirmingDiscard = false
 
     private enum Preset: Hashable { case defaults, allNew, allInLibrary, custom }
 
-    private var library: Library? {
-        let ids = Set(rows.map(\.library))
-        return ids.count == 1 ? ids.first.flatMap(model.library) : nil
-    }
+    private var library: Library? { model.library }
 
     private func rows(_ arrival: Arrival) -> [DocumentRow] { rows.filter { Arrival($0) == arrival } }
     private var present: [Arrival] { Arrival.allCases.filter { !rows($0).isEmpty } }
@@ -178,7 +175,7 @@ struct BulkReview: View {
     }
 
     private func loadSuggestions() async {
-        var found: [DocumentRef: String] = [:]
+        var found: [Int64: String] = [:]
         for row in rows {
             if let folder = await model.suggestedFolder(for: row) { found[row.id] = folder }
             if Task.isCancelled { return }

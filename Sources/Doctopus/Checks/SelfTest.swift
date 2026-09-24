@@ -475,7 +475,7 @@ enum SelfTest {
            let created = try? AliasManager.createAlias(to: source.url, in: second) {
             try? await store.recordAlias(docID: source.doc, tagID: nil, path: created.path)
             let mark = (try? await store.latestEventID()) ?? 0
-            let landed = await indexer.promoteClosestAlias(docID: source.doc)
+            let landed = try? await indexer.promoteClosestAlias(docID: source.doc)
             print("  deleted \(source.filename.padded(32)) → "
                   + (landed?.deletingLastPathComponent().lastPathComponent ?? "the Trash"))
             Check.that("deleting an aliased document promotes the alias into the document",
@@ -1021,7 +1021,7 @@ enum SelfTest {
             print("  tagged with Invoices → \(carried.map(\.name).joined(separator: ", "))")
             Check.that("assigning a child attaches its parent too",
                        carried.contains { $0.tagID == finances })
-            let byParent = (try? await store.listDocuments(selection: .tag(TagRef(library: "", tag: finances)),
+            let byParent = (try? await store.listDocuments(selection: .tag(finances),
                                                            query: SearchQuery(""), sort: .added,
                                                            ascending: false)) ?? []
             Check.that("…so filtering by the parent finds it",
@@ -1157,7 +1157,7 @@ enum SelfTest {
                 try? await store.setSizes(targetDoc.doc, size: origSize / 2, originalSize: origSize)
                 let origURL = try? await store.originalFileURL(for: targetDoc.doc)
                 Check.that("pre-optimization original file is preserved", origURL != nil && FileManager.default.fileExists(atPath: origURL!.path))
-                let reverted = await indexer.revertOptimization(ids: [targetDoc.doc]) == 1
+                let reverted = await indexer.revertOptimization(ids: [targetDoc.doc]).done == 1
                 Check.that("revert optimization restores document size and removes original_size", reverted)
             }
         }
@@ -1539,7 +1539,139 @@ enum SelfTest {
             Check.that("the fixtures have two PDFs to move", false)
         }
 
+        await failuresAreSaid(store: store, indexer: indexer)
+
         Check.finish("pipeline self-test")
+    }
+
+    /// Failures that used to pass for success. Each is forced here, and what
+    /// is checked is that it is said, and that nothing changed on the way.
+    private static func failuresAreSaid(store: Store, indexer: Indexer) async {
+        print("\nFAILURES ARE SAID")
+        let fm = FileManager.default
+        let root = store.root
+        let rows = ((try? await store.listDocuments(selection: .all, query: SearchQuery(""),
+                                                    sort: .added, ascending: false)) ?? [])
+            .filter { $0.ext == "pdf" && fm.fileExists(atPath: $0.path) }
+        guard rows.count >= 2 else {
+            Check.that("the fixtures have two PDFs to fail with", false)
+            return
+        }
+        let (subject, mover) = (rows[0], rows[1])
+
+        // A file where the originals folder should be: the copy cannot be made.
+        let originals = await store.originalsDirectory
+        let aside = originals.deletingLastPathComponent().appendingPathComponent("originals-aside")
+        let hadOriginals = fm.fileExists(atPath: originals.path)
+        if hadOriginals { try? fm.moveItem(at: originals, to: aside) }
+        fm.createFile(atPath: originals.path, contents: Data())
+        let hashBefore = FileScanner.hash(subject.url)
+        let optimized = await indexer.optimize(ids: [subject.doc])
+        try? fm.removeItem(at: originals)
+        if hadOriginals { try? fm.moveItem(at: aside, to: originals) }
+        print("  optimize, no originals  \(optimized.failures.first ?? "no reason given")")
+        Check.that("an optimization whose original cannot be kept is refused, with a reason",
+                   optimized.count == 0 && optimized.failures.count == 1)
+        Check.that("…and leaves the file as it was",
+                   hashBefore != nil && FileScanner.hash(subject.url) == hashBefore)
+
+        Check.that("a Trash that cannot be listed is not taken for an empty one",
+                   Store.filenames(in: root.appendingPathComponent("No Such Folder \(UUID().uuidString)")) == nil)
+
+        // A forgotten row still holding the path the move would land on.
+        let away = root.appendingPathComponent("Unrecorded", isDirectory: true)
+        let clash = away.appendingPathComponent(mover.filename)
+        let stale = try? await store.upsertDocument(
+            Store.FileFacts(path: clash.path, size: 1, mtime: Date(), created: Date()), origin: .inLibrary)
+        try? await store.markMissing(path: clash.path)
+        let moved = await indexer.move(ids: [mover.doc], to: away)
+        let stillAt = (try? await store.documentPath(mover.doc)) ?? ""
+        print("  move, unrecordable      \(moved.failures.first ?? "no reason given")")
+        Check.that("a move the index cannot record is taken back, with a reason",
+                   stale != nil && moved.done == 0 && moved.failures.count == 1)
+        Check.that("…so the file is where its row says it is",
+                   stillAt == mover.path && fm.fileExists(atPath: mover.path) && !fm.fileExists(atPath: clash.path))
+        if let stale { try? await store.deleteDocument(stale.id) }
+        try? fm.removeItem(at: away)
+
+        // A home folder that cannot be written to: the document cannot leave it.
+        let home = subject.url.deletingLastPathComponent()
+        let elsewhere = root.appendingPathComponent("Also Filed", isDirectory: true)
+        if let alias = try? AliasManager.createAlias(to: subject.url, in: elsewhere) {
+            try? await store.recordAlias(docID: subject.doc, tagID: nil, path: alias.path)
+            try? fm.setAttributes([.posixPermissions: 0o555], ofItemAtPath: home.path)
+            var refusal: String?
+            do { _ = try await indexer.promoteClosestAlias(docID: subject.doc) }
+            catch { refusal = error.localizedDescription }
+            try? fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: home.path)
+            let placements = ((try? await store.aliases(for: subject.doc)) ?? []).filter { $0.tagID == nil }
+            let master = Store.canonical(subject.url.standardizedFileURL.path)
+            let refiled = placements.contains { placement in
+                guard let points = AliasManager.resolve(URL(fileURLWithPath: placement.path)) else { return false }
+                return Store.canonical(points.standardizedFileURL.path) == master
+            }
+            print("  delete, cannot rehome   \(refusal ?? "went ahead")")
+            Check.that("a document that cannot move into its other placement says so", refusal != nil)
+            Check.that("…and stays where it was, still filed in the other folder",
+                       fm.fileExists(atPath: subject.path) && refiled, "\(placements.count) placement(s)")
+            for placement in placements {
+                AliasManager.removeAlias(at: placement.path, pointingTo: subject.url)
+                try? await store.deleteAlias(id: placement.id)
+            }
+            try? fm.removeItem(at: elsewhere)
+        } else {
+            Check.that("an alias can be made to fail a promotion with", false)
+        }
+
+        let locked = root.appendingPathComponent("Locked", isDirectory: true)
+        try? fm.createDirectory(at: locked, withIntermediateDirectories: true)
+        try? fm.setAttributes([.posixPermissions: 0o555], ofItemAtPath: locked.path)
+        let outside = fm.temporaryDirectory.appendingPathComponent("doctopus-unique-\(UUID().uuidString).pdf")
+        var bytes = (try? Data(contentsOf: subject.url)) ?? Data()
+        bytes.append(Data("\n% \(UUID().uuidString)\n".utf8))
+        try? bytes.write(to: outside)
+        let imported = await indexer.importFiles([outside], into: locked)
+        try? fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: locked.path)
+        print("  import, locked folder   \(imported.failures.first ?? "no reason given")")
+        Check.that("an import that fails says why",
+                   imported.failed == 1 && imported.failures.first?.contains(outside.lastPathComponent) == true)
+        try? fm.removeItem(at: outside)
+        try? fm.removeItem(at: locked)
+
+        let broken = root.appendingPathComponent("Broken \(UUID().uuidString.prefix(8)).pdf")
+        try? Data("not a PDF".utf8).write(to: broken)
+        _ = await indexer.importFiles([broken], into: root)
+        let brokenRow = ((try? await store.listDocuments(selection: .all, query: SearchQuery(""),
+                                                         sort: .added, ascending: false)) ?? [])
+            .first { $0.path == broken.path }
+        if let brokenRow {
+            let history = (try? await store.history(for: brokenRow.doc)) ?? []
+            let said = history.first { $0.detail?.hasPrefix("Indexed with problems") == true }?.detail
+            print("  unreadable file         \(said ?? "nothing said")")
+            Check.that("a file whose text cannot be read says so in its history", said != nil)
+            try? await store.deleteDocument(brokenRow.doc)
+        } else {
+            Check.that("an unreadable file is still indexed", false)
+        }
+        try? fm.removeItem(at: broken)
+
+        let garbled = fm.temporaryDirectory
+            .appendingPathComponent("doctopus-garbled-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("library.doctopus", isDirectory: true)
+        let garbledMeta = garbled.appendingPathComponent("meta.json")
+        try? fm.createDirectory(at: garbled, withIntermediateDirectories: true)
+        try? Data("{ not json".utf8).write(to: garbledMeta)
+        var refusedGarbled = false
+        do { _ = try Store(directory: garbled) } catch Store.OpenError.unreadableMeta { refusedGarbled = true } catch {}
+        Check.that("a library whose meta.json does not read is refused, not given a new identity",
+                   refusedGarbled)
+        Check.that("…and its meta.json is left as it was",
+                   (try? String(contentsOf: garbledMeta, encoding: .utf8)) == "{ not json")
+        try? fm.removeItem(at: garbled.deletingLastPathComponent())
+
+        Check.that("settings that do not decode are told apart from none at all",
+                   LibrarySettings.decodedIfReadable(from: Data("[1, 2".utf8)) == nil
+                       && LibrarySettings.decodedIfReadable(from: Data()) != nil)
     }
 
     private static func ruleMatches(store: Store, indexer: Indexer, payslip: DocumentRow) async {
@@ -1576,7 +1708,7 @@ enum SelfTest {
         Check.that("an outlier is still listed, but no longer pending",
                    suppressed?.suppressed == true && suppressed?.isPending == false)
         let counts = (try? await store.suppressionCounts()) ?? [:]
-        let listed = (try? await store.listDocuments(selection: .outliers(library: "", rule: id),
+        let listed = (try? await store.listDocuments(selection: .outliers(rule: id),
                                                      query: SearchQuery(""), sort: .added,
                                                      ascending: false)) ?? []
         Check.that("a rule counts and lists its outliers",
@@ -1596,6 +1728,7 @@ enum SelfTest {
         Check.that("applying the rule to the one document settles the match",
                    applied.matched == 1 && appliedTagged && after == nil)
         await partialRuleMatch(store: store, indexer: indexer, payslip: payslip)
+        await conflictingRuleMatches(store: store, payslip: payslip)
 
         let original = try? await store.detail(payslip.doc)
         let tagsBefore = Set(((try? await store.tags()) ?? []).map(\.tagID))
@@ -1658,6 +1791,41 @@ enum SelfTest {
 
         try? await store.deleteRule(id)
         if let tag = try? await store.tagID(named: "partial-check") { try? await store.deleteTag(tag) }
+    }
+
+    /// Two rules both wanting a document: the folders they disagree on are a
+    /// conflict to choose from, the tags they add together are not.
+    private static func conflictingRuleMatches(store: Store, payslip: DocumentRow) async {
+        func rule(_ name: String, folder: String, tag: String) -> Rule {
+            Rule(id: 0, name: name, priority: 1,
+                 conditions: [RuleCondition(field: .filename, pattern: "gehaltsabrechnung")],
+                 actions: [RuleAction(kind: .moveFile, value: folder),
+                           RuleAction(kind: .addTags, value: tag)])
+        }
+        guard let first = try? await store.upsertRule(rule("Conflict A", folder: "Conflict A", tag: "conflict-a")),
+              let second = try? await store.upsertRule(rule("Conflict B", folder: "Conflict B", tag: "conflict-b"))
+        else {
+            Check.that("two rules to conflict are saved", false)
+            return
+        }
+        let matches = ((try? await store.ruleMatches()) ?? [:])[payslip.doc]?
+            .filter { [first, second].contains($0.ruleID) } ?? []
+        let conflicts = RuleMatch.conflicts(among: matches)
+        Check.that("rules moving a document to different folders conflict, and their tags do not",
+                   matches.count == 2 && conflicts.map(\.kind) == [.moveFile]
+                       && Set(conflicts.first?.options.map(\.ruleID) ?? []) == [first, second],
+                   conflicts.map(\.summary).joined(separator: "; "))
+
+        var choices = RuleMatchChoices()
+        let unsettled = conflicts.allSatisfy(choices.isSettled)
+        if let conflict = conflicts.first { choices.choose(first, in: conflict) }
+        let loser = matches.first { $0.ruleID == second }
+        Check.that("choosing one rule settles the conflict and leaves the other's tags",
+                   !unsettled && conflicts.allSatisfy(choices.isSettled)
+                       && loser.map(choices.accepted) == [.addTags(["conflict-b"])])
+
+        try? await store.deleteRule(first)
+        try? await store.deleteRule(second)
     }
 
     private static func ruleMigration() {

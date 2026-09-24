@@ -7,8 +7,21 @@ A native AppKit/SwiftUI three-pane layout.
 The physical directory tree, the Recent Processing queue — recently filed items
 with their confidence badges, the rules or models that were applied, and an
 Approved / Needs Review toggle — and Paperless-ngx-style smart views: Tags,
-Correspondents, Languages, Document Types. With more than one library open, folders and tags
-are grouped under the library that owns them; the smart views span all of them.
+Correspondents, Languages, Document Types.
+
+## Windows
+
+Each library has a window of its own, and a window shows one library. Opening
+another library opens another window — unless the front one is still empty, at
+the welcome screen, in which case it takes the library — and opening one that
+is already open brings its window forward, however it was reached. Closing a
+window closes its library; File › Close Library does the same but, in the last
+window, leaves it open at the welcome screen. Whatever was open at quit is
+reopened at launch.
+
+The menus, Settings, Quick Look and ⌥ act on the front window. Settings shows
+the front window's library, next to the app-wide settings every window shares.
+A Continuity Camera scan goes to the library of the folder it was sent into.
 
 ### Drag and drop
 
@@ -44,9 +57,18 @@ filters and sort options.
 In Recent Processing and Needs Review the centre pane splits, and the selected
 document is reviewed underneath the list.
 
-A document a rule would still change shows that rule's changes in purple above
-the rest, each with a checkbox: Apply does the ticked ones — and suppresses the
-rule for the document if any were left unticked — and Suppress does none.
+A document is reviewed as one proposal with a single Accept. A rule that would
+still change it offers its move as one of the folders on the right, picked by
+default, and its other changes as ticks underneath; a rule not fully taken is
+suppressed for the document. When rules disagree — two folders, two names —
+the review says so and Accept waits until one is picked: the folder by
+choosing it, anything else by ticking one.
+
+Outside review, the inspector shows a document's rule matches in purple, each
+with Apply and Suppress. When several match, a purple box above them says so
+and, where they conflict, asks for one of them per disagreement; Apply stays
+disabled on the rules involved until it has an answer, and Apply All settles
+every match at once.
 
 On the left, everything that was worked out — title, fields, date, tags and tag
 suggestions — is editable in place, or can be discarded in one go; the file is
@@ -61,7 +83,7 @@ other folder in the library, or a new one — has two controls: *Lives here* (on
 folder; the file is moved there) and *Also here* (any number; filed as Finder
 aliases). *Lives here* starts on a new document's best suggestion (a chosen
 import folder counts as one), and on where the file is now for anything already
-in the library. One button applies, approves and moves on (⌘↩).
+in the library. Accept applies, approves and moves on (⌘↩).
 
 A PDF's original and optimized versions sit side by side behind a switch, each
 openable in Quick Look, with Compare to flip between them; an unoptimized file

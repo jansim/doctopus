@@ -16,7 +16,7 @@ struct RootView: View {
                 .navigationSplitViewColumnWidth(min: 210, ideal: 250, max: 360)
         } detail: {
             Group {
-                if model.libraries.isEmpty {
+                if model.library == nil {
                     WelcomeView()
                 } else {
                     DocumentListView()
@@ -30,7 +30,10 @@ struct RootView: View {
                     .inspectorColumnWidth(min: 280, ideal: 340, max: 480)
             }
         }
-        .navigationTitle("")
+        // For the Window menu and Mission Control, which tell windows apart
+        // by it; the toolbar has no room for it.
+        .navigationTitle(model.library?.displayName ?? "Doctopus")
+        .toolbar(removing: .title)
         .toolbar { toolbar }
         .searchable(text: $model.searchText, placement: .toolbar,
                     prompt: "Search text, titles, tags…")
@@ -51,8 +54,14 @@ struct RootView: View {
         }
         .onAppear { model.undoManager = undoManager }
         .onOpenURL { url in
-            model.handleURL(url)
+            guard url.isFileURL else { return model.handleURL(url) }
+            // Checked on disk: a URL handed over for a package need not end in
+            // a slash, so `hasDirectoryPath` would turn it away.
+            guard (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true else { return }
+            Workspace.shared.open(folderOrLibrary: url, from: model)
         }
+        // Without this, SwiftUI opens a new, empty window for every URL.
+        .handlesExternalEvents(preferring: ["*"], allowing: ["*"])
         .alert("Doctopus", isPresented: Binding(
             get: { model.errorMessage != nil },
             set: { if !$0 { model.errorMessage = nil } })

@@ -157,6 +157,17 @@ enum RuleActionKind: String, CaseIterable, Sendable {
         }
     }
 
+    /// Completes “Rule A and Rule B …” when two rules disagree.
+    var conflictPhrase: String {
+        switch self {
+        case .moveFile: return "would move this to different folders"
+        case .renameFile: return "would give this different names"
+        case .addTags: return "would add different tags"
+        case .setCorrespondent: return "would set different correspondents"
+        case .setDocType: return "would set different document types"
+        }
+    }
+
     var placeholder: String {
         switch self {
         case .moveFile: return "Finances/Invoices/{year}"
@@ -259,5 +270,40 @@ struct RuleMatch: Identifiable, Hashable, Sendable {
 
     var summary: String {
         "Rule “\(ruleName)”: " + changes.map(\.label).joined(separator: "; ")
+    }
+
+    /// Pending rules that want different values for the same single-valued
+    /// action — two folders, two names. Tags add up, so they never conflict.
+    struct Conflict: Identifiable, Hashable, Sendable {
+        var kind: RuleActionKind
+        var options: [Option]
+
+        var id: RuleActionKind { kind }
+
+        struct Option: Hashable, Sendable {
+            var ruleID: Int64
+            var ruleName: String
+            var change: Change
+        }
+
+        var summary: String {
+            ListFormatter.localizedString(byJoining: options.map { "“\($0.ruleName)”" })
+                + " " + kind.conflictPhrase
+        }
+    }
+
+    static func conflicts(among matches: [RuleMatch]) -> [Conflict] {
+        let pending = matches.filter(\.isPending)
+        guard pending.count > 1 else { return [] }
+        return RuleActionKind.allCases.compactMap { kind in
+            guard kind != .addTags else { return nil }
+            let options = pending.compactMap { match in
+                match.changes.first { $0.kind == kind }.map {
+                    Conflict.Option(ruleID: match.ruleID, ruleName: match.ruleName, change: $0)
+                }
+            }
+            guard Set(options.map(\.change)).count > 1 else { return nil }
+            return Conflict(kind: kind, options: options)
+        }
     }
 }

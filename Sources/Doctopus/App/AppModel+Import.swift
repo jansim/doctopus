@@ -5,7 +5,7 @@ import os
 extension AppModel {
 
     var defaultImportDirectory: URL? {
-        guard let lib = activeLibrary else { return nil }
+        guard let lib = library else { return nil }
         return lib.root.appendingPathComponent(lib.settings.scanDestination, isDirectory: true)
     }
 
@@ -26,8 +26,12 @@ extension AppModel {
             errorMessage = "Open a library before importing."
             return
         }
-        guard let lib = libraries.first(where: { $0.owns(path: dest.path) }) ?? activeLibrary else {
+        guard let lib = library else {
             errorMessage = "Open a library before importing."
+            return
+        }
+        guard lib.owns(path: dest.path) else {
+            errorMessage = "“\(dest.lastPathComponent)” is outside \(lib.displayName). Import into a folder of the library in this window."
             return
         }
         Task {
@@ -47,6 +51,7 @@ extension AppModel {
                        : "Those files are already in the library, so they were indexed where they are.", .info)
             } else if result.imported == 0 {
                 errorMessage = "Nothing could be imported from \(urls.count == 1 ? "that file" : "those files")."
+                    + (result.failures.isEmpty ? "" : "\n\n" + result.failures.prefix(5).joined(separator: "\n"))
             } else {
                 let n = result.imported
                 let what = movingSource ? "Scanned" : "Imported"
@@ -59,7 +64,9 @@ extension AppModel {
                 } else {
                     text += " into “\(dest.lastPathComponent)”"
                 }
-                notify(text + (result.failed > 0 ? " — \(result.failed) could not be read." : "."),
+                notify(text + (result.failed > 0
+                               ? " — \(result.failed) could not be imported. \(result.failures.first ?? "")"
+                               : "."),
                        result.failed > 0 ? .warning : .success)
             }
         }

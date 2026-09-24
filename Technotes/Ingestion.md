@@ -141,6 +141,13 @@ to those actions — and then suppresses the rule for that document, so what was
 left is never pointed out again. Which documents a rule would still change is
 worked out in memory, so the app hands the list to the Needs Review query.
 
+A document more than one rule would still change is flagged as such. Tags add up, so rules that only differ there can be
+applied together; rules that want different folders, names, correspondents or
+types conflict, which puts an X in the badge, and none of them can be applied
+until one is picked for each. The others are then treated
+as a partial match: what they still agree on is applied and they are
+suppressed for that document.
+
 Matching reads every document's text, so the store keeps each answer until the
 text, filename, correspondent, type or a rule's conditions change. What a
 match would change is compared against the index fresh on every pass.
@@ -170,7 +177,9 @@ degrading readability or stripping text layers.
 A page is only ever rasterized if it has *no* text layer to lose; pages with
 real text are re-drawn into the output PDF context, which copies their text and
 vector operators through intact. If the result is not at least 15% smaller, the
-original is kept byte-for-byte.
+original is kept byte-for-byte. Nothing is optimized until a copy of the
+original is safely kept beside the index; when it cannot be, the file is left
+as it is and Doctopus says why.
 
 This is automatic only for files Doctopus brings in itself — the copy an
 import makes, and a scan. Anything already in the library is optimized only on

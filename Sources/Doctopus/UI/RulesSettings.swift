@@ -11,7 +11,6 @@ struct RulesSettings: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 12) {
-                LibraryPicker().fixedSize()
                 Spacer()
                 ScopeBadge(scope: .library)
             }
@@ -80,10 +79,10 @@ struct RulesSettings: View {
             .padding(8)
         }
         .task { await load() }
-        .task(id: model.settingsLibrary?.id) { await load() }
-        .onChange(of: model.settingsLibrary?.outlierRevision) { Task { await load() } }
+        .task(id: model.library?.id) { await load() }
+        .onChange(of: model.library?.outlierRevision) { Task { await load() } }
         .sheet(item: $editing) { rule in
-            if let library = model.settingsLibrary {
+            if let library = model.library {
                 RuleEditor(rule: rule, library: library) { save($0) }
             }
         }
@@ -103,7 +102,7 @@ struct RulesSettings: View {
                     get: { showingOutliers == rule.id },
                     set: { if !$0 { showingOutliers = nil } }),
                          arrowEdge: .trailing) {
-                    if let library = model.settingsLibrary {
+                    if let library = model.library {
                         OutlierList(rule: rule, library: library) {
                             Task { await load() }
                         } onShow: {
@@ -125,7 +124,7 @@ struct RulesSettings: View {
     private var selectedRule: Rule? { rules.first { $0.id == selected } }
 
     private func load() async {
-        let store = model.settingsLibrary?.store
+        let store = model.library?.store
         rules = (try? await store?.rules()) ?? []
         outlierCounts = (try? await store?.suppressionCounts()) ?? [:]
     }
@@ -137,9 +136,11 @@ struct RulesSettings: View {
     }
 
     private func save(_ rule: Rule) {
-        guard let store = model.settingsLibrary?.store else { return }
+        guard let store = model.library?.store else { return }
         Task {
-            let id = (try? await store.upsertRule(rule)) ?? rule.id
+            var id = rule.id
+            do { id = try await store.upsertRule(rule) }
+            catch { model.report(error, "save the rule “\(rule.name)”") }
             await load()
             selected = id
             rulesChanged()
@@ -147,7 +148,7 @@ struct RulesSettings: View {
     }
 
     private func rulesChanged() {
-        if let library = model.settingsLibrary { model.rulesChanged(in: library) }
+        model.rulesChanged()
     }
 
     private func addRule() {
@@ -164,24 +165,26 @@ struct RulesSettings: View {
     }
 
     private func remove(_ id: Rule.ID) {
-        guard let store = model.settingsLibrary?.store else { return }
+        guard let store = model.library?.store else { return }
         Task {
-            try? await store.deleteRule(id)
-            if selected == id { selected = nil }
+            do {
+                try await store.deleteRule(id)
+                if selected == id { selected = nil }
+            } catch { model.report(error, "delete the rule") }
             await load()
             rulesChanged()
         }
     }
 
     private func move(_ id: Rule.ID, by offset: Int) {
-        guard let store = model.settingsLibrary?.store,
+        guard let store = model.library?.store,
               let index = rules.firstIndex(where: { $0.id == id }) else { return }
         let target = index + offset
         guard rules.indices.contains(target) else { return }
         var ordered = rules.map(\.id)
         ordered.swapAt(index, target)
         Task {
-            try? await store.reorderRules(ordered)
+            do { try await store.reorderRules(ordered) } catch { model.report(error, "reorder the rules") }
             await load()
             selected = id
             rulesChanged()
@@ -191,7 +194,6 @@ struct RulesSettings: View {
 
 private struct OutlierList: View {
     @Environment(AppModel.self) private var model
-    @Environment(\.openWindow) private var openWindow
     let rule: Rule
     let library: Library
     let onChange: () -> Void
@@ -231,8 +233,8 @@ private struct OutlierList: View {
             HStack {
                 Spacer()
                 Button("Show in Library") {
-                    model.showOutliers(of: rule.id, in: library)
-                    openWindow(id: "main")
+                    model.showOutliers(of: rule.id)
+                    model.bringToFront()
                     onShow()
                 }
             }

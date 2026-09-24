@@ -28,7 +28,7 @@ struct FilingEditor: View {
     @State private var chosen: [FilingOption] = []
     /// Set once the folder is picked by hand, so a rule match arriving late does not override it.
     @State private var touched = false
-    @State private var declined: [Int64: Set<RuleMatch.Change>] = [:]
+    @State private var choices = RuleMatchChoices()
 
     init(detail: DocumentDetail, mode: Mode, version: KeptVersion? = nil, ruleMatches: [RuleMatch] = []) {
         self.detail = detail
@@ -47,10 +47,18 @@ struct FilingEditor: View {
     private var row: DocumentRow { detail.row }
     private var arrival: Arrival { Arrival(row) }
     /// A rule's folder comes first: the rule is what the user asked for.
+    /// Rules that disagree on it leave the pick to the user.
     private var startingPrimary: String {
-        if case .review = mode { return ruleFolders.first?.path ?? detail.defaultFolder }
+        if case .review = mode { return (folderConflict ? nil : ruleFolders.first?.path) ?? detail.defaultFolder }
         return row.directory
     }
+    private var conflicts: [RuleMatch.Conflict] { RuleMatch.conflicts(among: ruleMatches) }
+    private var folderConflict: Bool { conflicts.contains { $0.kind == .moveFile } }
+    /// Picking the folder by hand settles which rule's move wins; the ticks settle the rest.
+    private func isSettled(_ conflict: RuleMatch.Conflict) -> Bool {
+        conflict.kind == .moveFile ? touched : choices.isSettled(conflict)
+    }
+    private var unsettled: Bool { !conflicts.allSatisfy(isSettled) }
     private var ruleFolders: [(match: RuleMatch, path: String)] {
         ruleMatches.compactMap { match in
             match.moveTarget.flatMap { rulePath($0) }.map { (match: match, path: $0) }
@@ -60,7 +68,7 @@ struct FilingEditor: View {
         guard let version else { return false }
         return (version == .optimized) != detail.isOptimized
     }
-    private var library: Library? { model.library(row.library) }
+    private var library: Library? { model.library }
     private var existingSecondaries: Set<String> {
         Set(detail.folderAliases.map { ($0 as NSString).deletingLastPathComponent })
     }
@@ -78,10 +86,9 @@ struct FilingEditor: View {
 
     /// A rule's move is taken exactly when its folder is where the file will live.
     private func ruleDecision(for match: RuleMatch) -> RuleDecision {
-        let skipped = declined[match.ruleID] ?? []
         let accepted = match.changes.filter { change in
             if case .move(let folder) = change { return rulePath(folder) == primary }
-            return !skipped.contains(change)
+            return choices.isAccepted(change, of: match.ruleID)
         }
         return RuleDecision(match: match, accepted: Set(accepted))
     }
@@ -159,19 +166,34 @@ struct FilingEditor: View {
 
     /// Rule matches load after the detail, so their folder is taken up when it arrives.
     private func adoptRuleFolder() {
-        guard case .review = mode, !touched, let path = ruleFolders.first?.path, primary != path else { return }
+        guard case .review = mode, !touched, !folderConflict,
+              let path = ruleFolders.first?.path, primary != path else { return }
         primary = path
         secondaries.remove(path)
     }
 
-    /// What each rule would do besides moving it, ticked on by default.
+    /// What each rule would do besides moving it, ticked on by default. Where
+    /// rules disagree, one has to be picked before Accept.
     private var rulesSection: some View {
         VStack(alignment: .leading, spacing: 6) {
+            ForEach(conflicts) { conflict in
+                let settled = isSettled(conflict)
+                Label {
+                    Text(conflict.summary + (settled ? "." : conflict.kind == .moveFile
+                                             ? " — pick the folder above." : " — tick one."))
+                        .fixedSize(horizontal: false, vertical: true)
+                } icon: {
+                    Image(systemName: settled ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                }
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.purple)
+            }
             ForEach(ruleMatches) { match in
                 let decision = ruleDecision(for: match)
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 6) {
-                        RuleMatchBadge(size: 14, muted: decision.accepted.isEmpty)
+                        RuleMatchBadge(size: 14, muted: decision.accepted.isEmpty,
+                                       conflicting: conflicts.contains { $0.options.contains { $0.ruleID == match.ruleID } })
                         Text(match.ruleName).font(.callout.weight(.semibold)).lineLimit(1)
                         if let target = match.moveTarget {
                             Text(decision.accepted.contains(.move(to: target))
@@ -188,11 +210,8 @@ struct FilingEditor: View {
                     }
                     ForEach(match.changes.filter { $0.kind != .moveFile }, id: \.self) { change in
                         Toggle(isOn: Binding(
-                            get: { !(declined[match.ruleID]?.contains(change) ?? false) },
-                            set: { on in
-                                if on { declined[match.ruleID, default: []].remove(change) }
-                                else { declined[match.ruleID, default: []].insert(change) }
-                            })) {
+                            get: { choices.isAccepted(change, of: match.ruleID) },
+                            set: { choices.set($0, change, of: match.ruleID, conflicts: conflicts) })) {
                             Label {
                                 Text(change.label).lineLimit(1).truncationMode(.middle)
                             } icon: {
@@ -286,11 +305,11 @@ struct FilingEditor: View {
                     .lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 8)
-                if primary != startingPrimary || secondaries != existingSecondaries || !declined.isEmpty {
+                if primary != startingPrimary || secondaries != existingSecondaries || !choices.declined.isEmpty {
                     Button("Revert") {
                         primary = startingPrimary
                         secondaries = existingSecondaries
-                        declined = [:]
+                        choices = RuleMatchChoices()
                         touched = false
                     }
                 }
@@ -298,7 +317,7 @@ struct FilingEditor: View {
                     .keyboardShortcut(.return, modifiers: [.command])
                     .buttonStyle(.borderedProminent)
                     .tint(arrival.tint)
-                    .disabled(!changed && !rewrites && row.approved && ruleMatches.isEmpty)
+                    .disabled(unsettled || (!changed && !rewrites && row.approved && ruleMatches.isEmpty))
                     .help("\(plan) (⌘↩)")
             case .sheet(let dismiss):
                 Text("The file lives in one folder. Tick others to file it there too, as a Finder alias — nothing is copied.")
@@ -328,6 +347,7 @@ struct FilingEditor: View {
 
     /// What Accept will do, in the order it happens.
     private var plan: String {
+        if unsettled { return "The matching rules disagree — choose between them first." }
         var steps: [String] = []
         if primary != row.directory { steps.append("move to \(displayPath(primary))") }
         let adding = secondaries.subtracting(existingSecondaries).count

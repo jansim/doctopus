@@ -183,3 +183,14 @@ extension Database.Value {
     static func bool(_ b: Bool) -> Database.Value { .int(b ? 1 : 0) }
     static func date(_ d: Date?) -> Database.Value { d.map { .double($0.timeIntervalSince1970) } ?? .null }
 }
+
+/// What a person is shown: the reason without the SQL, which `description`
+/// keeps for the logs and `--check`.
+extension Database.Error: LocalizedError {
+    var errorDescription: String? {
+        switch self {
+        case .open(let m): return "The library index could not be opened (\(m))."
+        case .sql(_, let m): return "The library index could not be updated (\(m))."
+        }
+    }
+}
