@@ -19,6 +19,9 @@ wrote it, and the index records its schema version. A library from a newer
 Doctopus is refused with a reason if either is ahead, rather than opened and
 written back missing whatever it did not know about. Each migration commits
 together with its version, so an interrupted upgrade resumes where it stopped.
+`meta.json` also holds the library's id, which is its identity: one that is
+there but will not read is refused with a reason rather than replaced, and only
+a library with no `meta.json` at all is given a new one.
 
 Finder shows the package as a single Doctopus document that opens the library
 on a double-click; Show Package Contents gets at the files.
@@ -35,8 +38,8 @@ folder travels with the folder.
 Keeping the second group out of the library is also what keeps an API key out
 of a folder somebody might share.
 
-Settings badges every section with its side of this split (`ScopeBadge`);
-fields, stored per library but edited in every open one, get a third badge.
+Settings badges every section with its side of this split (`ScopeBadge`), and
+the library side is always the front window's.
 
 ## The index
 

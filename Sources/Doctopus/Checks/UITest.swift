@@ -29,8 +29,9 @@ enum UITest {
             try? FileManager.default.copyItem(at: library, to: root)
             let container = root.appendingPathComponent("library.doctopus", isDirectory: true)
 
-            let model = AppModel(openingLibraryAt: container)
+            let model = AppModel()
             await model.bootstrap()
+            await model.openLibrary(container: container, quietly: true)
             guard await settle({ !model.documents.isEmpty }) else {
                 print("  ✗ indexed the library"); exit(1)
             }
@@ -53,7 +54,7 @@ enum UITest {
             await sidebarShowsBothTagSystems(model, snapshots: snapshots)
             await handEditsReachTheHistory(model)
             await optionRevealsFolders(model)
-            await secondLibraryMerges(model, alongside: library, snapshots: snapshots)
+            await secondLibraryOpensApart(model, alongside: library, snapshots: snapshots)
             await reviewPanelFiles(model, snapshots: snapshots)
             await reviewBatchTreatsEachKindApart(model, snapshots: snapshots)
             await droppingAFolderImportsIt(model)
@@ -186,7 +187,7 @@ enum UITest {
         Check.that("⇧ before anything has been clicked selects the one cell",
                    unanchored == .init(selection: [order[2]], anchor: order[2]))
         let stale = GallerySelection.click(order[2], in: order, modifiers: .shift, selection: [],
-                                           anchor: DocumentRef(library: "gone", doc: -1))
+                                           anchor: -1)
         Check.that("⇧ with an anchor no longer in the pane selects the one cell",
                    stale == .init(selection: [order[2]], anchor: order[2]))
     }
@@ -209,10 +210,17 @@ enum UITest {
         Check.that("dragging a document outside the selection counts just that one",
                    outside == 1 && model.rows(forDropped: [DocumentDragItem(rows[2])]).count == 1,
                    "badge \(outside)")
+
+        // What another window's library would send: the same row number, but
+        // not a file this library holds.
+        var foreign = DocumentDragItem(rows[0])
+        foreign.path = "/elsewhere/" + rows[0].filename
+        Check.that("a document dragged in from another library's window is not taken for one here",
+                   model.rows(forDropped: [foreign]).isEmpty)
     }
 
     private static func folderPickerResolvesPaths(_ model: AppModel) {
-        guard let library = model.libraries.first else {
+        guard let library = model.library else {
             Check.that("a library to resolve chosen folders against", false)
             return
         }
@@ -374,7 +382,7 @@ enum UITest {
     }
 
     private static func ruleEditorDraws(_ model: AppModel, snapshots: String?) async {
-        guard let library = model.libraries.first,
+        guard let library = model.library,
               let rule = (try? await library.store.rules())?.first else {
             Check.that("the rule editor draws", false, "no rule to edit"); return
         }
@@ -407,7 +415,7 @@ enum UITest {
         if let dir = snapshots { snapshot(host, to: dir + "/rules-pane.png") }
         Check.that("the rules pane draws", inkedRows(host) > 20, "\(inkedRows(host)) rows with ink")
 
-        let rules = (try? await model.libraries.first?.store.rules()) ?? []
+        let rules = (try? await model.library?.store.rules()) ?? []
         Check.that("every rule says what it looks for and what it does",
                    !rules.isEmpty && rules.allSatisfy {
                        $0.conditionSummary != "—" && !$0.actionSummary.isEmpty
@@ -447,7 +455,7 @@ enum UITest {
     }
 
     private static func reviewPanelFiles(_ model: AppModel, snapshots: String?) async {
-        guard let lib = model.libraries.first else { return }
+        guard let lib = model.library else { return }
         let fm = FileManager.default
         let staging = fm.temporaryDirectory.appendingPathComponent("doctopus-review-\(UUID().uuidString)")
         try? fm.createDirectory(at: staging, withIntermediateDirectories: true)
@@ -516,13 +524,13 @@ enum UITest {
     }
 
     private static func reviewBatchTreatsEachKindApart(_ model: AppModel, snapshots: String?) async {
-        guard let lib = model.libraries.first else { return }
+        guard let lib = model.library else { return }
         let fm = FileManager.default
         model.selection = .all
         var sample: DocumentRow?
         _ = await settle({
             sample = model.documents.first {
-                $0.ext.lowercased() == "pdf" && $0.library == lib.id && !$0.filename.hasPrefix("review-")
+                $0.ext.lowercased() == "pdf" && !$0.filename.hasPrefix("review-")
             }
             return sample != nil
         }, timeout: 10)
@@ -544,9 +552,12 @@ enum UITest {
 
         model.selection = .needsReview
         var rows: [DocumentRow] = []
+        // Both can be listed before the import is done — a rule that already
+        // matches puts one in Needs Review — and only the import's own entry
+        // says it arrived from outside, so wait for that rather than the listing.
         _ = await settle({
             rows = model.documents.filter { $0.filename.hasPrefix("batch-") }
-            return rows.count == 2
+            return rows.count == 2 && rows.contains { $0.filename.hasPrefix("batch-new") && $0.fromOutside }
         }, timeout: 60)
         let newRow = rows.first { $0.filename.hasPrefix("batch-new") }
         let foundRow = rows.first { $0.filename.hasPrefix("batch-found") }
@@ -603,7 +614,7 @@ enum UITest {
         var last: String?
         for _ in 0..<20 {
             var raw = Preferences.uiState(key)
-            if raw == nil, let store = model.activeLibrary?.store {
+            if raw == nil, let store = model.library?.store {
                 raw = (try? await store.setting(key)) ?? nil
             }
             if let raw {
@@ -729,80 +740,81 @@ enum UITest {
         _ = await settle { model.documents.first { $0.id == row.id }?.title == row.title }
     }
 
-    private static func secondLibraryMerges(_ model: AppModel, alongside fixture: URL,
-                                            snapshots: String?) async {
+    /// A second library gets a window, and a model, of its own; the first
+    /// one's panes never see it.
+    private static func secondLibraryOpensApart(_ model: AppModel, alongside fixture: URL,
+                                                snapshots: String?) async {
         let alone = model.documents.count
         let second = FileManager.default.temporaryDirectory
             .appendingPathComponent("doctopus-uitest-2-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: second) }
         try? FileManager.default.copyItem(at: fixture, to: second)
+        let container = second.appendingPathComponent("library.doctopus", isDirectory: true)
+
+        let workspace = Workspace.shared
+        workspace.register(model)
+        let other = AppModel()
+        workspace.register(other)
+        defer {
+            other.windowClosed()
+            workspace.current = model
+        }
 
         model.selection = .all
-        model.openLibrary(at: second)
-        let opened = await settle { model.libraries.count == 2 && model.documents.count > alone }
-        Check.that("a second library opens alongside the first",
-                   opened, "\(model.libraries.count) libraries, \(model.documents.count) documents")
-        guard model.libraries.count == 2 else { return }
+        let handedOn = await model.openLibrary(container: container)
+        let opened = await settle { other.library != nil && !other.documents.isEmpty }
+        Check.that("a window showing a library hands a second one to an empty window",
+                   handedOn == .elsewhere && opened && model.documents.count == alone,
+                   "\(handedOn), \(model.documents.count) and \(other.documents.count) documents")
+        guard opened, let first = model.library, let newer = other.library else { return }
+        Check.that("each window lists only its own library",
+                   other.documents.count == alone && model.documents.count == alone,
+                   "\(model.documents.count) and \(other.documents.count) of \(alone)")
 
-        Check.that("the centre pane merges both libraries",
-                   model.documents.count == alone * 2,
-                   "\(model.documents.count) of an expected \(alone * 2)")
-        Check.that("every row knows which library it came from",
-                   Set(model.documents.map(\.library)).count == 2)
+        let spare = AppModel()
+        workspace.register(spare)
+        defer { spare.windowClosed() }
+        let again = await spare.openLibrary(container: container)
+        Check.that("a library already open in one window is not opened in another",
+                   again == .elsewhere && spare.library == nil, "\(again)")
 
-        if let sample = model.documents.first {
-            let hits = model.globalSearch(text: sample.displayTitle, limit: 50).compactMap(\.document)
-            let named = Set(hits.map(\.library))
-            Check.that("a search result names the library its document is in",
-                       hits.contains(sample.id) && named.count == 2,
-                       "\(hits.count) hit(s) across \(named.count) of 2 libraries")
-        }
-
-        func ascendingByName() -> Bool {
-            let titles = model.documents.map(\.displayTitle)
-            guard titles.count == alone * 2 else { return false }
-            return zip(titles, titles.dropFirst()).allSatisfy {
-                $0.localizedStandardCompare($1) != .orderedDescending
-            }
-        }
-        model.setSort(.name, ascending: true)
-        let ordered = await settle(ascendingByName)
-        Check.that("the merged list is still in sort order", ordered,
-                   model.documents.map(\.displayTitle).prefix(3).joined(separator: " · "))
-
-        let newer = model.libraries[1]
-        guard let row = model.documents.first(where: { $0.library == newer.id }) else { return }
-        model.addTag("OnlyHere", to: [row])
+        guard let row = other.documents.first else { return }
+        other.addTag("OnlyHere", to: [row])
         _ = await settle { newer.tags.contains { $0.name == "OnlyHere" } }
-        Check.that("a tag is made in the library of the row it was dropped on",
+        Check.that("a tag is made in the library of the window it was added in",
                    newer.tags.contains { $0.name == "OnlyHere" }
-                       && !model.libraries[0].tags.contains { $0.name == "OnlyHere" },
-                   "first: \(model.libraries[0].tags.map(\.name)), second: \(newer.tags.map(\.name))")
+                       && !first.tags.contains { $0.name == "OnlyHere" },
+                   "first: \(first.tags.map(\.name)), second: \(newer.tags.map(\.name))")
 
-        let (sidebarWindow, sidebar) = host(SidebarView().environment(model),
+        let size = model.settings.galleryThumbnailSize
+        other.settings.galleryThumbnailSize = size + 20
+        let shared = await settle { model.settings.galleryThumbnailSize == size + 20 }
+        Check.that("an app-wide setting changed in one window reaches the others", shared,
+                   "\(model.settings.galleryThumbnailSize)")
+        model.settings.galleryThumbnailSize = size
+        let libraryOnly = model.settings.namingTemplate
+        other.settings.namingTemplate = "{title} elsewhere"
+        try? await Task.sleep(for: .milliseconds(300))
+        Check.that("a library setting stays with its own library",
+                   model.settings.namingTemplate == libraryOnly,
+                   model.settings.namingTemplate)
+
+        let (sidebarWindow, sidebar) = host(SidebarView().environment(other),
                                             size: NSSize(width: 260, height: 700))
         defer { sidebarWindow.orderOut(nil) }
-        let (listWindow, listHost) = host(DocumentListView().environment(model),
-                                          size: NSSize(width: 900, height: 400))
-        defer { listWindow.orderOut(nil) }
         try? await Task.sleep(for: .seconds(2))
-        if let dir = snapshots {
-            snapshot(sidebar, to: dir + "/sidebar-two-libraries.png")
-            snapshot(listHost, to: dir + "/list-two-libraries.png")
-        }
-        Check.that("the sidebar draws a group per library", inkedRows(sidebar) > 20,
+        if let dir = snapshots { snapshot(sidebar, to: dir + "/sidebar-second-window.png") }
+        Check.that("the second window's sidebar draws", inkedRows(sidebar) > 20,
                    "\(inkedRows(sidebar)) rows with ink")
-        Check.that("the list draws with both libraries in it", inkedRows(listHost) > 20,
-                   "\(inkedRows(listHost)) rows with ink")
 
-        model.closeLibrary(newer)
-        let closed = await settle { model.libraries.count == 1 && model.documents.count == alone }
-        Check.that("closing a library takes its rows out of the pane", closed,
-                   "\(model.documents.count) documents left")
+        other.closeLibrary()
+        let closed = await settle { other.library == nil && other.documents.isEmpty }
+        Check.that("closing a library empties its window", closed,
+                   "\(other.documents.count) documents left")
+        Check.that("closing a library leaves the other window alone",
+                   model.library === first && model.documents.count == alone)
         Check.that("closing a library leaves its folder on disk",
-                   FileManager.default.fileExists(
-                       atPath: second.appendingPathComponent("library.doctopus").path))
-        model.setSort(.docDate, ascending: false)
+                   FileManager.default.fileExists(atPath: container.path))
     }
 
     private static func droppingAFolderImportsIt(_ model: AppModel) async {
@@ -851,7 +863,7 @@ enum UITest {
         func fail(_ why: String) {
             Check.that("a drag onto a folder files the document there as well", false, why)
         }
-        guard let library = model.libraries.first else { return fail("no library open") }
+        guard let library = model.library else { return fail("no library open") }
 
         let name = "Dropped-\(UUID().uuidString.prefix(6))"
         let destination = library.root.appendingPathComponent(name, isDirectory: true)
@@ -881,7 +893,7 @@ enum UITest {
 
         model.selectedIDs = []
         let candidates = model.documents.filter {
-            $0.library == library.id && !$0.isAliasHere && !$0.missing
+            !$0.isAliasHere && !$0.missing
                 && $0.directory != destination.path && fm.fileExists(atPath: $0.path)
         }
         guard candidates.count >= 2 else { return fail("\(candidates.count) usable documents") }
@@ -919,7 +931,7 @@ enum UITest {
         model.undoManager = undo
         model.selection = .all
         guard let row = model.documents.first(where: { !$0.isAliasHere }),
-              let library = model.library(of: row) else { return }
+              let library = model.library else { return }
         let folder = library.root.appendingPathComponent("Undo Check", isDirectory: true)
         model.move([row], to: folder)
         let moved = await settle { undo.canUndo }

@@ -66,39 +66,66 @@ enum Main {
 
 struct DoctopusApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
-    @State private var model = AppModel()
 
     var body: some Scene {
-        Window("Doctopus", id: "main") {
-            RootView()
-                .environment(model)
-                .task {
-                    delegate.model = model
-                    ScanCoordinator.shared.onScan = { delivery, destination in
-                        model.importScanned(delivery, into: destination)
-                        model.scanDelivered(delivery)
-                    }
-                    ScanCoordinator.shared.onScanFailed = { model.scanFailed($0) }
-                    await model.bootstrap()
-                }
+        // A window per library, keyed by its container. Asking for one that is
+        // already open brings that window forward.
+        WindowGroup("Doctopus", for: URL.self) { $container in
+            LibraryWindow(container: $container)
         }
         .defaultSize(width: 1320, height: 840)
+        // What was open is reopened from `Preferences.libraryBookmarks`, which
+        // also knows about libraries whose folder has since gone.
+        .restorationBehavior(.disabled)
         .commands {
             SidebarCommands()
             InspectorCommands()
-            DoctopusCommands(model: model)
+            DoctopusCommands(workspace: Workspace.shared)
         }
 
         Settings {
-            SettingsView().environment(model)
+            SettingsWindow()
         }
     }
 }
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
-    var model: AppModel? { didSet { openPending() } }
-    private var pendingOpens: [URL] = []
+/// Settings are the front window's: its library's, and the app-wide ones.
+private struct SettingsWindow: View {
+    var body: some View {
+        SettingsView().environment(Workspace.shared.frontmost)
+    }
+}
 
+/// Launch opens one of these empty; it reopens last time's libraries, taking
+/// the first itself. Every other window is opened for a library.
+private struct LibraryWindow: View {
+    @Binding var container: URL?
+    @State private var model = AppModel()
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        RootView()
+            .environment(model)
+            .background(WindowReader(model: model))
+            .onChange(of: model.library?.container) { _, now in container = now }
+            .task {
+                let workspace = Workspace.shared
+                workspace.register(model)
+                workspace.openWindow = { openWindow(value: $0) }
+                await model.bootstrap()
+                if let container {
+                    // Already open elsewhere, which has been brought forward instead.
+                    if await model.openLibrary(container: container) == .elsewhere, model.library == nil {
+                        model.window?.close()
+                    }
+                } else {
+                    workspace.restore(into: model)
+                }
+            }
+    }
+}
+
+final class AppDelegate: NSObject, NSApplicationDelegate {
     // Continuity Camera: the import item must be in the main menu before launch
     // finishes, or it stays a dead, disabled leaf. See ScanCoordinator.
     func applicationWillFinishLaunching(_ notification: Notification) {
@@ -107,24 +134,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
-        SpacePreview.install { [weak self] in self?.model?.quickLook() }
-        OptionReveal.install { [weak self] held in self?.model?.revealingFolders = held }
+        MainActor.assumeIsolated {
+            let workspace = Workspace.shared
+            ScanCoordinator.shared.onScan = { delivery, destination in
+                guard let model = workspace.scanTarget(for: destination) else { return }
+                model.importScanned(delivery, into: destination)
+                model.scanDelivered(delivery)
+            }
+            ScanCoordinator.shared.onScanFailed = { workspace.scanTarget(for: nil)?.scanFailed($0) }
+            SpacePreview.install { workspace.current?.quickLook() }
+            OptionReveal.install { held in workspace.current?.revealingFolders = held }
+        }
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {
-        pendingOpens += urls
-        openPending()
-    }
-
-    private func openPending() {
-        guard let model else { return }
-        let urls = pendingOpens
-        pendingOpens = []
         // Checked on disk: a URL handed over for a package need not end in a
         // slash, so `hasDirectoryPath` would turn it away.
         for url in urls where (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true {
-            MainActor.assumeIsolated { model.openLibrary(at: url) }
+            MainActor.assumeIsolated { Workspace.shared.open(folderOrLibrary: url) }
         }
+    }
+
+    /// Quitting closes every window, and none of them should take its library
+    /// off the list reopened at the next launch.
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        MainActor.assumeIsolated { Workspace.shared.terminating = true }
+        return .terminateNow
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
@@ -149,9 +184,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 }
 
 struct DoctopusCommands: Commands {
-    let model: AppModel
+    let workspace: Workspace
 
     var body: some Commands {
+        let model = workspace.frontmost
         CommandGroup(replacing: .newItem) {
             Button("New Library from Folder…") { model.addLibrary() }
                 .keyboardShortcut("n", modifiers: [.command])
@@ -161,7 +197,7 @@ struct DoctopusCommands: Commands {
                 let recent = NSDocumentController.shared.recentDocumentURLs
                     .filter { FileManager.default.fileExists(atPath: $0.path) }
                 ForEach(recent, id: \.self) { url in
-                    Button(url.deletingLastPathComponent().lastPathComponent) { model.openLibrary(at: url) }
+                    Button(url.deletingLastPathComponent().path.abbreviatingHome) { model.openLibrary(at: url) }
                 }
                 Divider()
                 Button("Clear Menu") { NSDocumentController.shared.clearRecentDocuments(nil) }
@@ -183,9 +219,11 @@ struct DoctopusCommands: Commands {
         }
 
         CommandGroup(after: .toolbar) {
-            Button("Rescan All Folders") { model.reindex() }
+            Button("Rescan Library") { model.reindex() }
                 .keyboardShortcut("r", modifiers: [.command])
             Button("Verify Library…") { model.verifyLibrary() }
+            Button("Close Library") { model.closeLibrary() }
+                .disabled(model.library == nil)
             Divider()
         }
 
@@ -223,6 +261,6 @@ struct DoctopusCommands: Commands {
 
     private func importPanel() {
         guard let urls = ImportPanel.choose() else { return }
-        model.importFiles(urls, into: nil)
+        workspace.frontmost.importFiles(urls, into: nil)
     }
 }

@@ -203,15 +203,6 @@ private struct DocumentTableView: View {
                 .defaultVisibility(field.showInList ? .visible : .hidden)
             }
 
-            TableColumn("Library") { (row: DocumentRow) in
-                Text(model.library(row.library)?.displayName ?? "—")
-                    .lineLimit(1)
-                    .foregroundStyle(.secondary)
-            }
-            .width(min: 70, ideal: 120)
-            .customizationID("library")
-            .defaultVisibility(model.libraries.count > 1 ? .visible : .hidden)
-
             TableColumn("Date", sortUsing: DocumentSort(field: .docDate)) { row in
                 // A document date is a stored day; showing it through the local
                 // calendar is how it slips to the day before.
@@ -269,7 +260,7 @@ private struct DocumentTableView: View {
             }
         }
         .tableStyle(.inset(alternatesRowBackgrounds: true))
-        .contextMenu(forSelectionType: DocumentRef.self) { ids in
+        .contextMenu(forSelectionType: Int64.self) { ids in
             DocumentMenu(rows: model.documents.filter { ids.contains($0.id) })
         } primaryAction: { ids in
             model.open(model.documents.filter { ids.contains($0.id) })
@@ -351,7 +342,7 @@ struct AliasBadgedThumbnail: View {
 
 private struct DocumentGalleryView: View {
     @Environment(AppModel.self) private var model
-    @State private var selectionAnchor: DocumentRef?
+    @State private var selectionAnchor: Int64?
 
     private var cell: CGFloat { CGFloat(model.settings.galleryThumbnailSize) }
 
@@ -405,13 +396,13 @@ private struct DocumentGalleryView: View {
 /// so this is the only place a check can reach the rule.
 enum GallerySelection {
     struct Outcome: Equatable {
-        var selection: Set<DocumentRef>
-        var anchor: DocumentRef?
+        var selection: Set<Int64>
+        var anchor: Int64?
     }
 
-    static func click(_ id: DocumentRef, in order: [DocumentRef],
+    static func click(_ id: Int64, in order: [Int64],
                       modifiers: NSEvent.ModifierFlags,
-                      selection: Set<DocumentRef>, anchor: DocumentRef?) -> Outcome {
+                      selection: Set<Int64>, anchor: Int64?) -> Outcome {
         if modifiers.contains(.shift), let anchor,
            let anchorIndex = order.firstIndex(of: anchor),
            let clickedIndex = order.firstIndex(of: id) {

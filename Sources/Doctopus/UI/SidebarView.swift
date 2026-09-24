@@ -9,7 +9,7 @@ struct SidebarView: View {
         @Bindable var model = model
 
         List(selection: $model.selection) {
-            Section(model.libraries.count > 1 ? "All Libraries" : "Library") {
+            Section("Library") {
                 row(.all, "All Documents", "tray.full", model.stats.total)
                 row(.needsReview, "Needs Review", "exclamationmark.triangle", model.needsReviewCount)
                 row(.untagged, "Untagged", "tag.slash", nil)
@@ -40,27 +40,16 @@ struct SidebarView: View {
                 }
             }
 
-            if model.libraries.count == 1, let library = model.libraries.first {
-                if !library.folders.isEmpty {
+            if model.library != nil {
+                if !model.folders.isEmpty {
                     Section("Folders") {
-                        ForEach(library.folders) { node in
+                        ForEach(model.folders) { node in
                             FolderRow(node: node, depth: 0)
                         }
                     }
                 }
                 Section("Tags") {
-                    tagRows(library)
-                }
-            } else {
-                ForEach(model.libraries) { library in
-                    Section {
-                        ForEach(library.folders) { node in
-                            FolderRow(node: node, depth: 0)
-                        }
-                        tagRows(library)
-                    } header: {
-                        LibraryHeader(library: library)
-                    }
+                    tagRows
                 }
             }
 
@@ -121,15 +110,15 @@ struct SidebarView: View {
     }
 
     @ViewBuilder
-    private func tagRows(_ library: Library) -> some View {
-        ForEach(library.tags) { tag in
-            TagRow(tag: tag, siblings: library.tags)
+    private var tagRows: some View {
+        ForEach(model.tags) { tag in
+            TagRow(tag: tag, siblings: model.tags)
         }
         Button {
             guard let name = TextPrompt.ask(title: "New Tag",
                                             message: "Tags can be dragged onto from the document list.",
                                             initial: "", confirm: "Create") else { return }
-            model.createTag(named: name, in: library)
+            model.createTag(named: name)
         } label: {
             Label("New Tag…", systemImage: "plus")
                 .foregroundStyle(.secondary)
@@ -187,24 +176,6 @@ struct SidebarView: View {
         }
     }
 
-}
-
-private struct LibraryHeader: View {
-    @Environment(AppModel.self) private var model
-    let library: Library
-
-    var body: some View {
-        Text(library.displayName)
-            .help(library.root.path)
-            .contextMenu {
-                Button("Rescan Library") { model.reindex(library) }
-                Button("Reveal in Finder") {
-                    NSWorkspace.shared.activateFileViewerSelecting([library.root])
-                }
-                Divider()
-                Button("Close Library", role: .destructive) { model.closeLibrary(library) }
-            }
-    }
 }
 
 private struct TagRow: View {
@@ -294,7 +265,6 @@ struct FolderRow: View {
     @State private var hovering: FolderDropIntent?
     @State private var dropState = FolderDropState()
     private var isExpanded: Bool { !model.collapsedFolders.contains(node.path) }
-    private var owningLibrary: Library? { model.libraries.first { $0.owns(path: node.path) } }
     /// Lit while ⌥ is held and a selected document is in this folder. A
     /// collapsed folder stands in for whatever it is hiding.
     private var isRevealed: Bool {
@@ -372,10 +342,10 @@ struct FolderRow: View {
             NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: node.path)])
         }
         Divider()
-        Button("Rescan This Folder") { model.reindex(owningLibrary) }
-        if node.isRoot, let owningLibrary {
+        Button("Rescan This Folder") { model.reindex() }
+        if node.isRoot {
             Divider()
-            Button("Close Library", role: .destructive) { model.closeLibrary(owningLibrary) }
+            Button("Close Library", role: .destructive) { model.closeLibrary() }
         }
     }
 
