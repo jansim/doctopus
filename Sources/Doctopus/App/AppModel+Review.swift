@@ -146,7 +146,7 @@ extension AppModel {
                 } catch { notAdded.append("“\(name)”: \(error.localizedDescription)"); continue }
                 try? await lib.store.logProcessing(docID: row.doc, action: .aliased,
                                                    detail: "Also filed under \((folder as NSString).lastPathComponent)",
-                                                   confidence: nil, rule: nil, from: target.path,
+                                                   rule: nil, from: target.path,
                                                    to: created.path, approved: true)
                 added.append((folder as NSString).lastPathComponent)
             }

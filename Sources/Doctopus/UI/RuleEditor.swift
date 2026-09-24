@@ -198,7 +198,7 @@ struct RuleEditor: View {
     }
 
     private var previewRouter: Router {
-        Router(rules: [], threshold: 1, derivedTemplate: "",
+        Router(rules: [], derivedTemplate: "",
                root: library.root, deriveWhenNoRule: false)
     }
 

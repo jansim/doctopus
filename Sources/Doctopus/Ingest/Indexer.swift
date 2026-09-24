@@ -249,7 +249,7 @@ actor Indexer {
             try? await store.markOCR(id, state: .failed)
         } else {
             do {
-                try await store.storeOCR(docID: id, text: extracted.text, confidence: extracted.confidence,
+                try await store.storeOCR(docID: id, text: extracted.text,
                                          words: extracted.words, source: extracted.source,
                                          elapsedMS: extracted.elapsedMS, pageCount: extracted.pageCount)
             } catch { problems.append("its text could not be saved (\(error.localizedDescription))") }
@@ -303,7 +303,6 @@ actor Indexer {
                 intent: insight?.intent,
                 docDate: findings.date,
                 dateSource: findings.dateSource,
-                confidence: max(findings.confidence, insight?.confidence ?? 0),
                 source: insight?.source ?? "heuristic",
                 amount: findings.amount))
         } catch { problems.append("what was read off it could not be saved (\(error.localizedDescription))") }
@@ -325,13 +324,12 @@ actor Indexer {
         if !isImport, !isNew, optimized == nil {
             try? await store.logProcessing(docID: id, action: .indexed,
                                            detail: summaryLine(extracted, findings, insight),
-                                           confidence: findings.confidence, rule: nil,
-                                           from: nil, to: nil, approved: true)
+                                           rule: nil, from: nil, to: nil, approved: true)
         }
         if !problems.isEmpty {
             try? await store.logProcessing(docID: id, action: .indexed,
                                            detail: "Indexed with problems: " + problems.joined(separator: "; "),
-                                           confidence: nil, rule: nil, from: nil, to: nil, approved: true)
+                                           rule: nil, from: nil, to: nil, approved: true)
         }
         return name
     }
@@ -363,7 +361,6 @@ actor Indexer {
     private func router(for id: Int64) async -> Router {
         let outlierOf = (try? await store.suppressedRuleIDs(for: id)) ?? []
         return Router(rules: ((try? await store.rules()) ?? []).filter { !outlierOf.contains($0.id) },
-                      threshold: settings.routingThreshold,
                       derivedTemplate: settings.derivedTemplate,
                       root: store.root,
                       deriveWhenNoRule: settings.deriveWhenNoRule)
@@ -374,11 +371,11 @@ actor Indexer {
         var candidates = decision.candidates
         if let chosen {
             candidates.removeAll { $0.destination.standardizedFileURL == chosen.standardizedFileURL }
-            candidates.insert(Router.Candidate(destination: chosen, confidence: 1, rule: "chosen",
+            candidates.insert(Router.Candidate(destination: chosen, rule: "chosen",
                                                explanation: "Chosen when it was brought in"), at: 0)
         }
         try? await store.setPathSuggestions(candidates.map {
-            PathSuggestion(path: $0.destination.path, confidence: $0.confidence, source: $0.rule,
+            PathSuggestion(path: $0.destination.path, source: $0.rule,
                            explanation: $0.explanation)
         }, for: id)
     }
@@ -407,8 +404,8 @@ actor Indexer {
         let targets = ids?.filter({ waiting.contains($0) }) ?? Array(waiting)
         for id in targets {
             guard let input = try? await store.routingInput(for: id) else { continue }
-            let findings = DocumentAnalyzer.Findings(date: input.date, correspondent: input.correspondent,
-                                                     docType: input.docType, confidence: input.confidence)
+            let findings = DocumentAnalyzer.Findings(date: input.date, dateSource: input.dateSource,
+                                                     correspondent: input.correspondent, docType: input.docType)
             let decision = await router(for: id).evaluate(
                 text: input.text, filename: input.url.lastPathComponent, findings: findings,
                 insight: DocumentInsight(correspondent: input.correspondent, docType: input.docType),
@@ -441,7 +438,7 @@ actor Indexer {
                 "Suggested “\($0.lastPathComponent)”, left where it is — \(decision.explanation)"
             } ?? decision.explanation
             try? await store.logProcessing(docID: id, action: action, detail: detail,
-                                           confidence: decision.confidence, rule: decision.rule,
+                                           rule: decision.rule,
                                            from: nil, to: url.path, approved: false)
             return
         }
@@ -462,7 +459,7 @@ actor Indexer {
                 } catch {
                     try? await store.logProcessing(docID: id, action: action,
                                                    detail: "Could not rename to “\(name)”: \(error.localizedDescription)",
-                                                   confidence: decision.confidence, rule: decision.rule,
+                                                   rule: decision.rule,
                                                    from: url.path, to: url.path, approved: false)
                 }
             }
@@ -470,23 +467,22 @@ actor Indexer {
 
         guard let destination = decision.destination else {
             try? await store.logProcessing(docID: id, action: .imported, detail: decision.explanation,
-                                           confidence: decision.confidence, rule: decision.rule,
+                                           rule: decision.rule,
                                            from: nil, to: url.path, approved: false)
             return
         }
 
         let from = url.path
         do {
-            // A rule's move is certain, but what was read off the document
-            // still deserves a look, so it waits in Needs Review.
+            // Whether a rule or the derived path moved it, what was read off
+            // the document still deserves a look, so it waits in Needs Review.
             url = try await relocate(id, from: url, into: destination, named: url.lastPathComponent,
                                      action: .routed, detail: decision.explanation, rule: decision.rule,
-                                     confidence: decision.confidence,
-                                     approved: decision.rule == "derived" && decision.confidence >= 0.9)
+                                     approved: false)
         } catch {
             try? await store.logProcessing(docID: id, action: .imported,
                                            detail: "Could not move: \(error.localizedDescription)",
-                                           confidence: decision.confidence, rule: decision.rule,
+                                           rule: decision.rule,
                                            from: from, to: from, approved: false)
         }
     }
@@ -670,7 +666,6 @@ actor Indexer {
             intent: insight.intent,
             docDate: nil,
             dateSource: nil,
-            confidence: insight.confidence,
             source: insight.source,
             amount: nil))
 
@@ -678,8 +673,7 @@ actor Indexer {
             try? await store.suggestTag(tag, for: id, autoAcceptMatching: settings.autoAcceptMatchingTagSuggestions)
         }
         try? await store.logProcessing(docID: id, action: .analyzed, detail: analysisLine(insight),
-                                       confidence: insight.confidence, rule: nil,
-                                       from: nil, to: nil, approved: true)
+                                       rule: nil, from: nil, to: nil, approved: true)
         return .updated(name)
     }
 
@@ -905,7 +899,7 @@ actor Indexer {
             detail: String(format: "%.0f%% smaller (%d page%@ rasterized)",
                            result.savings * 100, result.pagesRasterized,
                            result.pagesRasterized == 1 ? "" : "s"),
-            confidence: nil, rule: nil, from: nil, to: nil, approved: true)
+            rule: nil, from: nil, to: nil, approved: true)
         if let hash = FileScanner.hash(url) { try? await store.setHash(id, hash) }
         return result
     }
@@ -934,7 +928,7 @@ actor Indexer {
             }
             try? await store.logProcessing(docID: id, action: .revertedOptimization,
                                            detail: "Reverted to original pre-optimization file",
-                                           confidence: nil, rule: nil, from: nil, to: saved.current.path,
+                                           rule: nil, from: nil, to: saved.current.path,
                                            approved: true)
             result.done += 1
         }
@@ -947,7 +941,7 @@ actor Indexer {
     @discardableResult
     private func relocate(_ id: Int64, from url: URL, into folder: URL, named name: String,
                           action: EventAction?, detail: String?, rule: String? = nil,
-                          confidence: Double? = nil, approved: Bool = true) async throws -> URL {
+                          approved: Bool = true) async throws -> URL {
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let target = Naming.uniqueURL(in: folder, filename: name,
                                       separator: settings.filenameUnderscoresForSpaces ? "_" : " ")
@@ -964,7 +958,7 @@ actor Indexer {
         }
         FileScanner.pruneEmptyDirectories(startingFrom: url.deletingLastPathComponent(), upTo: store.root)
         if let action {
-            try? await store.logProcessing(docID: id, action: action, detail: detail, confidence: confidence,
+            try? await store.logProcessing(docID: id, action: action, detail: detail,
                                            rule: rule, from: url.path, to: target.path, approved: approved)
         }
         await syncAliases(docID: id, target: target)
@@ -1043,7 +1037,7 @@ actor Indexer {
     /// already in the library — all but its outliers, or the one named.
     func applyRule(_ rule: Rule, onlyTo docID: Int64? = nil) async -> RuleApplyResult {
         var result = RuleApplyResult()
-        let router = Router(rules: [rule], threshold: 0, derivedTemplate: "", root: store.root,
+        let router = Router(rules: [rule], derivedTemplate: "", root: store.root,
                             deriveWhenNoRule: false)
         for doc in (try? await store.ruleTargets(for: rule, onlyTo: docID)) ?? [] where rule.matches(doc.subject) {
             result.matched += 1
@@ -1076,7 +1070,7 @@ actor Indexer {
                     do {
                         url = try await relocate(doc.id, from: url, into: folder, named: url.lastPathComponent,
                                                  action: .routed, detail: "Applied rule “\(rule.name)”",
-                                                 rule: rule.name, confidence: 1)
+                                                 rule: rule.name)
                         result.moved += 1
                     } catch { result.failures.append("“\(url.lastPathComponent)”: \(error.localizedDescription)") }
                 }

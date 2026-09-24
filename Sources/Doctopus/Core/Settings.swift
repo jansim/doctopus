@@ -58,7 +58,6 @@ struct LibrarySettings: StoredSettings, Sendable, Equatable {
     var filenameUnderscoresForSpaces = false
     var filenameASCIIOnly = false
     var derivedTemplate: String = "{correspondent}/{year}"
-    var routingThreshold: Double = 0.75
     var autoRouteImports = true
     var deriveWhenNoRule = true
     /// Imports and scans only. There is deliberately no setting to rewrite

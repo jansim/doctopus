@@ -257,7 +257,7 @@ extension AppModel {
                     }
                     try? await lib.store.logProcessing(
                         docID: row.doc, action: .moved, detail: "Restored from the Trash",
-                        confidence: nil, rule: nil, from: trashed, to: target.path, approved: true)
+                        rule: nil, from: trashed, to: target.path, approved: true)
                     restored += 1
                 } catch {
                     failures.append("“\(row.filename)”: \(error.localizedDescription)")
@@ -319,7 +319,7 @@ extension AppModel {
                 }
                 try? await lib.store.logProcessing(docID: row.doc, action: .aliased,
                                                    detail: "Also filed under \(folder.lastPathComponent)",
-                                                   confidence: nil, rule: nil, from: row.path,
+                                                   rule: nil, from: row.path,
                                                    to: created.path, approved: true)
                 made += 1
             }
@@ -344,7 +344,7 @@ extension AppModel {
             try? await lib.store.logProcessing(
                 docID: row.doc, action: .unfiled,
                 detail: "No longer filed under \((folder as NSString).lastPathComponent)",
-                confidence: nil, rule: nil, from: row.path, to: alias.path, approved: true)
+                rule: nil, from: row.path, to: alias.path, approved: true)
             removed += 1
         }
         return removed

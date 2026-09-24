@@ -99,8 +99,11 @@ Unspecified imports and inbox scans are routed by the rules first. A rule that
 matches is certain, so the file moves to its folder — unless matching rules
 name different folders, in which case it stays in the Inbox, in Needs Review,
 with every folder on offer until someone picks. When no rule has a folder, a
-path derived from the correspondent is used if it clears the confidence
-threshold. Routing never moves a file outside its library.
+path derived from the correspondent is used — provided a date was read off the
+document (its text, PDF metadata, EXIF or filename) whenever the derived
+template has one in it, so a file is never sorted by the day it was copied.
+Either way the move waits in Needs Review. Routing never moves a file outside
+its library.
 
 ## Rules
 

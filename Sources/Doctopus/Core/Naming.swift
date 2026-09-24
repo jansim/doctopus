@@ -33,6 +33,23 @@ enum Naming {
         return f
     }()
 
+    /// Whether `template` puts the document date anywhere.
+    static func usesDate(_ template: String) -> Bool {
+        var token = ""
+        var inToken = false
+        for ch in template {
+            if ch == "{" { inToken = true; token = "" }
+            else if ch == "}" && inToken {
+                inToken = false
+                let name = token.split(separator: "|", maxSplits: 1).first
+                    .flatMap { $0.split(separator: ":", maxSplits: 1).first }
+                    .map { $0.trimmingCharacters(in: .whitespaces).lowercased() } ?? ""
+                if ["date", "created", "year", "month", "day"].contains(name) { return true }
+            } else if inToken { token.append(ch) }
+        }
+        return false
+    }
+
     static func render(_ template: String, _ ctx: Context) -> String {
         var out = ""
         var token = ""

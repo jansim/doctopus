@@ -4,13 +4,13 @@ extension Store {
 
     static let queueLength = 500
 
-    func logProcessing(docID: Int64, action: EventAction, detail: String?, confidence: Double?,
+    func logProcessing(docID: Int64, action: EventAction, detail: String?,
                        rule: String?, from: String?, to: String?, approved: Bool) throws {
         let eventID = try db.run("""
-            INSERT INTO events(doc_id, at, action, detail, confidence, rule, from_path, to_path)
-            VALUES(?,?,?,?,?,?,?,?)
+            INSERT INTO events(doc_id, at, action, detail, rule, from_path, to_path)
+            VALUES(?,?,?,?,?,?,?)
             """, [.int(docID), .double(Date().timeIntervalSince1970), .text(action.rawValue), .text(detail),
-                  .double(confidence), .text(rule), .text(from), .text(to)])
+                  .text(rule), .text(from), .text(to)])
         try db.run("INSERT INTO processing(event_id, doc_id, status) VALUES(?,?,?)",
                    [.int(eventID), .int(docID), .bool(approved)])
         if !approved {
@@ -61,7 +61,7 @@ extension Store {
 
     func processingQueue(limit: Int = 200) throws -> [ProcessingEntry] {
         try db.map("""
-            SELECT p.id, p.doc_id, e.at, e.action, e.detail, e.confidence, e.rule,
+            SELECT p.id, p.doc_id, e.at, e.action, e.detail, e.rule,
                    e.from_path, e.to_path, p.status, d.filename, d.missing
             FROM processing p
             JOIN events e ON e.id = p.event_id
@@ -70,23 +70,22 @@ extension Store {
             """, [.int(limit)]) {
             ProcessingEntry(id: $0.int(0), docID: $0.int(1),
                             at: Date(timeIntervalSince1970: $0.double(2)), action: EventAction(stored: $0.string(3)),
-                            detail: $0.stringOrNil(4), confidence: $0.doubleOrNil(5),
-                            rule: $0.stringOrNil(6), fromPath: $0.stringOrNil(7),
-                            toPath: $0.stringOrNil(8), approved: $0.bool(9),
-                            filename: $0.string(10), missing: $0.bool(11))
+                            detail: $0.stringOrNil(4), rule: $0.stringOrNil(5),
+                            fromPath: $0.stringOrNil(6), toPath: $0.stringOrNil(7),
+                            approved: $0.bool(8), filename: $0.string(9), missing: $0.bool(10))
         }
     }
 
     func history(for docID: Int64, limit: Int = 200) throws -> [HistoryEvent] {
         try db.map("""
-            SELECT id, at, action, detail, confidence, rule, from_path, to_path
+            SELECT id, at, action, detail, rule, from_path, to_path
             FROM events WHERE doc_id=? ORDER BY at DESC, id DESC LIMIT ?
             """, [.int(docID), .int(limit)]) {
             HistoryEvent(id: $0.int(0), at: Date(timeIntervalSince1970: $0.double(1)),
                          action: EventAction(stored: $0.string(2)), detail: $0.stringOrNil(3),
-                         confidence: $0.doubleOrNil(4), rule: $0.stringOrNil(5),
-                         fromPath: $0.stringOrNil(6).map { absPath($0) },
-                         toPath: $0.stringOrNil(7).map { absPath($0) })
+                         rule: $0.stringOrNil(4),
+                         fromPath: $0.stringOrNil(5).map { absPath($0) },
+                         toPath: $0.stringOrNil(6).map { absPath($0) })
         }
     }
 

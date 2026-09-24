@@ -350,7 +350,6 @@ actor RemoteLLMService {
         insight.tags = tags(object["tags"])
         let modelPart = model.flatMap { $0.nilIfBlank }.map { ":\($0)" } ?? ""
         insight.source = "\(vision ? "vlm" : "remote")\(modelPart):v\(MetadataSource.promptVersion)"
-        insight.confidence = 0.9
 
         insight = insight.keeping(fields)
         // A response where every field came back empty is a failure dressed up

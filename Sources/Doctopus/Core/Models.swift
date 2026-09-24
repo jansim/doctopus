@@ -65,7 +65,6 @@ struct QueueInfo: Hashable, Sendable {
     var at: Date
     var action: EventAction
     var detail: String?
-    var confidence: Double?
     var rule: String?
     var approved: Bool
 }
@@ -139,7 +138,6 @@ struct DocumentDetail: Sendable {
 struct PathSuggestion: Identifiable, Hashable, Sendable {
     var id: String { path }
     var path: String
-    var confidence: Double
     var source: String
     var explanation: String?
 }
@@ -237,7 +235,6 @@ struct ProcessingEntry: Identifiable, Hashable, Sendable {
     var at: Date
     var action: EventAction
     var detail: String?
-    var confidence: Double?
     var rule: String?
     var fromPath: String?
     var toPath: String?
@@ -260,7 +257,6 @@ struct HistoryEvent: Identifiable, Hashable, Sendable {
     var at: Date
     var action: EventAction
     var detail: String?
-    var confidence: Double?
     var rule: String?
     var fromPath: String?
     var toPath: String?

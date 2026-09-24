@@ -356,11 +356,11 @@ enum UITest {
                        && partial.remoteEndpoint == AppWideSettings().remoteEndpoint,
                    "\(partial.viewMode.rawValue) at \(Int(partial.galleryThumbnailSize))")
 
-        let partialLibrary = LibrarySettings.decoded(from: Data(#"{"routingThreshold":0.9}"#.utf8))
+        let partialLibrary = LibrarySettings.decoded(from: Data(#"{"derivedTemplate":"{type}"}"#.utf8))
         Check.that("a blob missing library keys keeps the ones it has",
-                   partialLibrary.routingThreshold == 0.9
+                   partialLibrary.derivedTemplate == "{type}"
                        && partialLibrary.namingTemplate == LibrarySettings().namingTemplate,
-                   "threshold \(partialLibrary.routingThreshold)")
+                   "derived template \(partialLibrary.derivedTemplate)")
 
         model.viewMode = .list
         model.setSort(.docDate, ascending: false)

@@ -2,20 +2,19 @@ import Foundation
 
 /// Decides where a new document belongs: user rules first, then the derived
 /// path. A matching rule is certain, but rules naming different folders leave
-/// the document for review, and the derived path has to clear the threshold.
+/// the document for review, and the derived path needs a correspondent — and
+/// a date read off the document when the path template uses one.
 /// Destinations outside the library are never candidates.
 struct Router: Sendable {
 
     struct Candidate: Sendable, Equatable {
         var destination: URL
-        var confidence: Double
         var rule: String
         var explanation: String
     }
 
     struct Decision: Sendable {
         var destination: URL?
-        var confidence: Double
         var rule: String
         var tags: [String]
         var tagsFromRule: Bool = false
@@ -30,7 +29,6 @@ struct Router: Sendable {
     }
 
     var rules: [Rule]
-    var threshold: Double
     var derivedTemplate: String
     var root: URL
     var deriveWhenNoRule: Bool
@@ -51,7 +49,7 @@ struct Router: Sendable {
             let dest = expand(template, correspondent: correspondent,
                               docType: docType, date: findings.date)
             guard isInsideLibrary(dest) else { outside.append(rule.name); continue }
-            ruleCandidates.append(Candidate(destination: dest, confidence: 1, rule: rule.name,
+            ruleCandidates.append(Candidate(destination: dest, rule: rule.name,
                                             explanation: Self.why(rule, subject)))
         }
 
@@ -60,9 +58,7 @@ struct Router: Sendable {
             let dest = expand(derivedTemplate, correspondent: correspondent,
                               docType: docType, date: findings.date)
             if isInsideLibrary(dest), dest.standardizedFileURL != root.standardizedFileURL {
-                derived = Candidate(destination: dest,
-                                    confidence: findings.confidence * qualityFactor(findings, insight),
-                                    rule: "derived",
+                derived = Candidate(destination: dest, rule: "derived",
                                     explanation: "Derived from correspondent “\(correspondent)”")
             }
         }
@@ -75,7 +71,7 @@ struct Router: Sendable {
                 tags.append(tag)
             }
         }
-        var decision = Decision(destination: nil, confidence: findings.confidence,
+        var decision = Decision(destination: nil,
                                 rule: matched.first?.name ?? "none",
                                 tags: matched.isEmpty ? (insight?.tags ?? []) : tags,
                                 tagsFromRule: !matched.isEmpty,
@@ -87,7 +83,6 @@ struct Router: Sendable {
 
         let folders = Self.deduplicated(ruleCandidates)
         if let best = folders.first {
-            decision.confidence = 1
             decision.rule = best.rule
             decision.explanation = best.explanation
             if folders.count > 1 {
@@ -102,10 +97,9 @@ struct Router: Sendable {
         }
 
         if let derived {
-            decision.confidence = derived.confidence
             if matched.isEmpty { decision.rule = derived.rule }
-            if derived.confidence < threshold {
-                decision.explanation = "Would file under \(derived.destination.lastPathComponent), but the match is too weak to file it automatically"
+            if Naming.usesDate(derivedTemplate) && !findings.dateWasFound {
+                decision.explanation = "\(derived.explanation), but no date was found on the document"
             } else if derived.destination.standardizedFileURL == currentDirectory.standardizedFileURL {
                 decision.explanation = "Already in the right place"
             } else {
@@ -150,15 +144,6 @@ struct Router: Sendable {
         return rule.requiresAll
             ? "Rule “\(rule.name)” matched all \(live.count) conditions"
             : "Rule “\(rule.name)” matched \(hits.count) of \(live.count) conditions, on \(where_)"
-    }
-
-    private func qualityFactor(_ f: DocumentAnalyzer.Findings, _ i: DocumentInsight?) -> Double {
-        guard let i else { return 0.85 }
-        var factor = 0.9
-        if let a = i.correspondent?.lowercased(), let b = f.correspondent?.lowercased(),
-           a.contains(b) || b.contains(a) { factor += 0.08 }
-        if i.docType != nil, i.docType == f.docType { factor += 0.05 }
-        return min(1.0, factor)
     }
 
     enum PatternKind: Equatable {

@@ -12,7 +12,6 @@ struct DocumentInsight: Sendable {
     var intent: String?
     var title: String?
     var tags: [String] = []
-    var confidence: Double = 0
     var source: String = "llm"
 }
 

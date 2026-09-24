@@ -206,7 +206,7 @@ enum SelfTest {
                    folded == "2026-03-14_Mueller_Strasse_GmbH_Cafe_Angstroem_1_2.pdf", folded)
 
         print("\nROUTING (dry run against starter rules)")
-        let router = Router(rules: (try? await store.rules()) ?? [], threshold: settings.routingThreshold,
+        let router = Router(rules: (try? await store.rules()) ?? [],
                             derivedTemplate: settings.derivedTemplate, root: root, deriveWhenNoRule: true)
         for row in rows {
             let text = (try? await store.ocrText(row.doc)) ?? ""
@@ -215,8 +215,20 @@ enum SelfTest {
             let decision = router.evaluate(text: text, filename: row.filename, findings: findings,
                                            insight: nil, currentDirectory: row.url.deletingLastPathComponent())
             let target = decision.destination.map { $0.path.replacingOccurrences(of: root.path + "/", with: "") } ?? "(stays put)"
-            print("  \(row.filename.padded(38)) → \(target.padded(28)) \(Int(decision.confidence * 100))%  [\(decision.rule)]")
+            print("  \(row.filename.padded(38)) → \(target.padded(28)) [\(decision.rule)]")
         }
+
+        func derives(_ template: String, dateSource: String) -> Bool {
+            let findings = DocumentAnalyzer.Findings(date: .now, dateSource: dateSource, correspondent: "Acme")
+            return Router(rules: [], derivedTemplate: template, root: root, deriveWhenNoRule: true)
+                .evaluate(text: "", filename: "scan.pdf", findings: findings, insight: nil,
+                          currentDirectory: root).shouldMove
+        }
+        Check.that("a derived folder by year needs a date read off the document",
+                   derives("{correspondent}/{year}", dateSource: "ocr")
+                       && !derives("{correspondent}/{year}", dateSource: "fs"))
+        Check.that("…but not when its template has no date in it",
+                   derives("{correspondent}", dateSource: "fs"))
 
         ruleMigration()
 
@@ -248,7 +260,7 @@ enum SelfTest {
             let text = (try? await store.ocrText(payslip.doc)) ?? ""
             let findings = DocumentAnalyzer.analyze(url: payslip.url, text: text,
                                                     fallbackDate: payslip.createdAt, knownCorrespondents: [])
-            let decision = Router(rules: edited, threshold: settings.routingThreshold,
+            let decision = Router(rules: edited,
                                   derivedTemplate: settings.derivedTemplate, root: root,
                                   deriveWhenNoRule: true)
                 .evaluate(text: text, filename: payslip.filename, findings: findings, insight: nil,
@@ -269,7 +281,7 @@ enum SelfTest {
                              conditions: [RuleCondition(field: .filename, pattern: "februar")],
                              actions: [RuleAction(kind: .moveFile, value: "B/{year}"),
                                        RuleAction(kind: .addTags, value: "tagB, commonTag")])
-            let unionDecision = Router(rules: [ruleA, ruleB], threshold: 0.5,
+            let unionDecision = Router(rules: [ruleA, ruleB],
                                        derivedTemplate: "", root: root, deriveWhenNoRule: false)
                 .evaluate(text: text, filename: payslip.filename, findings: findings, insight: nil,
                           currentDirectory: payslip.url.deletingLastPathComponent())
@@ -526,7 +538,7 @@ enum SelfTest {
             try? await store.logProcessing(
                 docID: doc.doc, action: .unfiled,
                 detail: "No longer filed under \(elsewhere.lastPathComponent)",
-                confidence: nil, rule: nil, from: doc.path, to: created.path, approved: true)
+                rule: nil, from: doc.path, to: created.path, approved: true)
 
             let undone = await indexer.undo([doc.doc], since: mark)
             let back = ((try? await store.aliases(for: doc.doc)) ?? []).filter { $0.tagID == nil }
@@ -1305,7 +1317,7 @@ enum SelfTest {
             let oldest = firstEvents.last
             for n in 0...Store.queueLength {
                 try? await store.logProcessing(docID: subject.doc, action: .indexed,
-                                               detail: "filler \(n)", confidence: nil, rule: nil,
+                                               detail: "filler \(n)", rule: nil,
                                                from: nil, to: nil, approved: true)
             }
             let queue = (try? await store.processingQueue(limit: 10_000)) ?? []
@@ -1364,7 +1376,7 @@ enum SelfTest {
             if (try? FileManager.default.moveItem(at: subject.url, to: movedTarget)) != nil {
                 try? await store.updatePath(subject.doc, to: movedTarget.path)
                 try? await store.logProcessing(docID: subject.doc, action: .moved, detail: "test move",
-                                               confidence: nil, rule: nil, from: origPath, to: movedTarget.path, approved: true)
+                                               rule: nil, from: origPath, to: movedTarget.path, approved: true)
                 let undone = await indexer.undo([subject.doc], since: mark)
                 Check.that("undo restores moved file to previous path",
                            undone == 1 && FileManager.default.fileExists(atPath: origPath))
@@ -1871,7 +1883,7 @@ enum SelfTest {
                                              findings: DocumentAnalyzer.Findings,
                                              payslip: DocumentRow) async {
         func decide(_ rule: Rule) -> Router.Decision {
-            Router(rules: [rule], threshold: 0.5, derivedTemplate: "", root: root,
+            Router(rules: [rule], derivedTemplate: "", root: root,
                    deriveWhenNoRule: false)
                 .evaluate(text: text, filename: payslip.filename, findings: findings, insight: nil,
                           currentDirectory: payslip.url.deletingLastPathComponent())
@@ -1953,7 +1965,7 @@ enum SelfTest {
         let inbox = root.appendingPathComponent("Inbox", isDirectory: true)
         let rows = (try? await store.listDocuments(selection: .all, query: SearchQuery(""),
                                                    sort: .added, ascending: false)) ?? []
-        let router = Router(rules: (try? await store.rules()) ?? [], threshold: routing.routingThreshold,
+        let router = Router(rules: (try? await store.rules()) ?? [],
                             derivedTemplate: routing.derivedTemplate, root: root, deriveWhenNoRule: true)
         var routable: DocumentRow?
         for row in rows where row.directory == inbox.path {

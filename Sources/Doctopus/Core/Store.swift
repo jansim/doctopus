@@ -318,17 +318,16 @@ actor Store {
         } ?? nil
     }
 
-    func storeOCR(docID: Int64, text: String, confidence: Double, words: Int,
+    func storeOCR(docID: Int64, text: String, words: Int,
                   source: String, elapsedMS: Int, pageCount: Int?) throws {
         try db.transaction {
             try refreshSearchIndex(docID, body: text)
             try db.run("""
-                INSERT INTO ocr_stats(doc_id, confidence, words, source, engine_ms)
-                VALUES(?,?,?,?,?)
+                INSERT INTO ocr_stats(doc_id, words, source, engine_ms)
+                VALUES(?,?,?,?)
                 ON CONFLICT(doc_id) DO UPDATE SET
-                    confidence=excluded.confidence, words=excluded.words,
-                    source=excluded.source, engine_ms=excluded.engine_ms
-                """, [.int(docID), .double(confidence), .int(words), .text(source), .int(elapsedMS)])
+                    words=excluded.words, source=excluded.source, engine_ms=excluded.engine_ms
+                """, [.int(docID), .int(words), .text(source), .int(elapsedMS)])
             try db.run("UPDATE documents SET ocr_state=1, indexed_at=?, page_count=? WHERE id=?",
                        [.double(Date().timeIntervalSince1970), .int(pageCount.map(Int64.init)), .int(docID)])
         }
@@ -398,7 +397,6 @@ actor Store {
         var intent: String?
         var docDate: Date?
         var dateSource: String?
-        var confidence: Double?
         var source: String?
         var amount: String?
     }
@@ -408,9 +406,8 @@ actor Store {
         let docTypeID = try entityID(named: p.docType, builtin: "doc_type")
         try db.run("""
             INSERT INTO metadata(doc_id, title, correspondent_id, doc_type_id, language, summary,
-                                 intent, doc_date, date_source, confidence, source, amount,
-                                 amount_value)
-            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+                                 intent, doc_date, date_source, source, amount, amount_value)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(doc_id) DO UPDATE SET
                 title=COALESCE(excluded.title, metadata.title),
                 correspondent_id=COALESCE(excluded.correspondent_id, metadata.correspondent_id),
@@ -420,14 +417,13 @@ actor Store {
                 intent=COALESCE(excluded.intent, metadata.intent),
                 doc_date=COALESCE(excluded.doc_date, metadata.doc_date),
                 date_source=COALESCE(excluded.date_source, metadata.date_source),
-                confidence=COALESCE(excluded.confidence, metadata.confidence),
                 source=COALESCE(excluded.source, metadata.source),
                 amount=COALESCE(excluded.amount, metadata.amount),
                 amount_value=COALESCE(excluded.amount_value, metadata.amount_value)
             """, [.int(p.docID), .text(p.title), .int(correspondentID), .int(docTypeID),
                   .text(p.language), .text(p.summary), .text(p.intent),
                   .date(p.docDate.map { DayDate.startOfDay($0) }),
-                  .text(p.dateSource), .double(p.confidence), .text(p.source), .text(p.amount),
+                  .text(p.dateSource), .text(p.source), .text(p.amount),
                   .double(p.amount.flatMap { FieldType.number(from: $0) })])
         try refreshSearchIndex(p.docID)
     }
