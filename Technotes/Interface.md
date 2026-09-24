@@ -5,7 +5,7 @@ A native AppKit/SwiftUI three-pane layout.
 ## Sidebar
 
 The physical directory tree, the Recent Processing queue — recently filed items
-with their confidence badges, the rules or models that were applied, and an
+with the rules or models that were applied, and an
 Approved / Needs Review toggle — and Paperless-ngx-style smart views: Tags,
 Correspondents, Languages, Document Types.
 
@@ -69,7 +69,7 @@ Documents are coloured by [how they arrived](Ingestion.md#from-outside-or-from-i
 green for *New* (imported or scanned), blue for *Already in library*.
 
 On the right, every candidate folder — where it is now, the router's
-suggestions with their confidence, where similar documents already live, any
+suggestions, where similar documents already live, any
 other folder in the library, or a new one — has two controls: *Lives here* (one
 folder; the file is moved there) and *Also here* (any number; filed as Finder
 aliases). *Lives here* starts on a new document's best suggestion (a chosen

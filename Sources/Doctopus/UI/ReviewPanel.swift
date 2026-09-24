@@ -143,7 +143,6 @@ private struct GeneratedInfoEditor: View {
                     .font(.caption2.weight(.semibold)).foregroundStyle(.secondary).kerning(0.5)
                 if let source = detail.metadataSource {
                     Text(sourceLabel(source)).font(.caption2).foregroundStyle(.tertiary)
-                    if let c = detail.metadataConfidence { ConfidenceBadge(value: c) }
                 }
                 Spacer()
                 Button("Discard…", role: .destructive) { confirmingDiscard = true }

@@ -120,9 +120,7 @@ struct DocumentDetail: Sendable {
     var intent: String?
     var dateSource: String?
     var metadataSource: String?
-    var metadataConfidence: Double?
     var amount: String?
-    var ocrConfidence: Double?
     var ocrWords: Int?
     var ocrSource: String?
     var text: String = ""

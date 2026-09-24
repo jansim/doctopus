@@ -105,7 +105,7 @@ struct Router: Sendable {
             decision.confidence = derived.confidence
             if matched.isEmpty { decision.rule = derived.rule }
             if derived.confidence < threshold {
-                decision.explanation = "Would file under \(derived.destination.lastPathComponent), but confidence \(pct(derived.confidence)) is below \(pct(threshold))"
+                decision.explanation = "Would file under \(derived.destination.lastPathComponent), but the match is too weak to file it automatically"
             } else if derived.destination.standardizedFileURL == currentDirectory.standardizedFileURL {
                 decision.explanation = "Already in the right place"
             } else {
@@ -199,8 +199,6 @@ struct Router: Sendable {
         let components = Naming.renderPath(path, ctx)
         return components.reduce(root) { $0.appendingPathComponent($1, isDirectory: true) }
     }
-
-    private func pct(_ v: Double) -> String { "\(Int((v * 100).rounded()))%" }
 }
 
 extension String {

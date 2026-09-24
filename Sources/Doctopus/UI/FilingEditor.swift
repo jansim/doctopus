@@ -7,7 +7,6 @@ struct FilingOption: Identifiable, Hashable {
     var path: String
     var kind: Kind
     var reason: String?
-    var confidence: Double?
 }
 
 struct FilingEditor: View {
@@ -58,10 +57,9 @@ struct FilingEditor: View {
         let here = detail.pathSuggestions.first { $0.path == row.directory }
         var out: [FilingOption] = [FilingOption(
             path: row.directory, kind: .current,
-            reason: here.map { "Where it is now — \($0.explanation ?? $0.source)" } ?? "Where it is now",
-            confidence: here?.confidence)]
+            reason: here.map { "Where it is now — \($0.explanation ?? $0.source)" } ?? "Where it is now")]
         out += detail.pathSuggestions.map {
-            FilingOption(path: $0.path, kind: .suggested, reason: $0.explanation, confidence: $0.confidence)
+            FilingOption(path: $0.path, kind: .suggested, reason: $0.explanation)
         }
         out += existingSecondaries.sorted().map {
             FilingOption(path: $0, kind: .alias, reason: "Already filed here as an alias")
@@ -270,9 +268,6 @@ private struct FilingRow: View {
                 }
             }
             Spacer(minLength: 6)
-            if let c = option.confidence, option.kind != .similar {
-                ConfidenceBadge(value: c)
-            }
             Image(systemName: isPrimary ? "largecircle.fill.circle" : "circle")
                 .foregroundStyle(isPrimary ? tint : .secondary)
                 .frame(width: 66)

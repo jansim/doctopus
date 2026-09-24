@@ -324,19 +324,18 @@ extension Store {
     func detail(_ id: Int64) throws -> DocumentDetail? {
         guard let base = try db.first("""
             SELECT \(Store.rowColumns),
-                   d.hash, m.intent, m.date_source, m.confidence, m.source, m.amount,
-                   s.confidence, s.words, s.source, \(Store.fromOutsideColumn)
+                   d.hash, m.intent, m.date_source, m.source, m.amount,
+                   s.words, s.source, \(Store.fromOutsideColumn)
             \(Store.rowTables)
             LEFT JOIN ocr_stats s ON s.doc_id=d.id
             WHERE d.id=?
             """, [.int(id)], { r -> DocumentDetail in
             var d = DocumentDetail(
                 row: documentRow(r), hash: r.stringOrNil(19), intent: r.stringOrNil(20),
-                dateSource: r.stringOrNil(21), metadataSource: r.stringOrNil(23),
-                metadataConfidence: r.doubleOrNil(22), amount: r.stringOrNil(24),
-                ocrConfidence: r.doubleOrNil(25), ocrWords: r.intOrNil(26).map(Int.init),
-                ocrSource: r.stringOrNil(27))
-            d.row.fromOutside = r.bool(28)
+                dateSource: r.stringOrNil(21), metadataSource: r.stringOrNil(22),
+                amount: r.stringOrNil(23), ocrWords: r.intOrNil(24).map(Int.init),
+                ocrSource: r.stringOrNil(25))
+            d.row.fromOutside = r.bool(26)
             return d
         }) else { return nil }
 

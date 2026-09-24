@@ -138,11 +138,8 @@ private struct DetailInspector: View {
                     }
                 }
                 if let source = detail.metadataSource {
-                    let hint = detail.metadataConfidence
-                        .map { "\(ConfidenceBadge.percent($0)) confident" }
-                        ?? "How this document's metadata was worked out"
                     InfoRow("Extracted by") {
-                        Text(Self.sourceLabel(source)).help(hint)
+                        Text(Self.sourceLabel(source)).help("How this document's metadata was worked out")
                     }
                 }
             }
@@ -292,12 +289,7 @@ private struct DetailInspector: View {
                 InfoRow("Modified", row.mtime.formatted(date: .abbreviated, time: .shortened))
                 if let words = detail.ocrWords, let src = detail.ocrSource {
                     InfoRow("Text") {
-                        HStack(spacing: 5) {
-                            Text("\(words) words · \(ocrSourceLabel(src))")
-                            if let c = detail.ocrConfidence, src != "pdf-layer" {
-                                ConfidenceBadge(value: c, muted: true)
-                            }
-                        }
+                        Text("\(words) words · \(ocrSourceLabel(src))")
                     }
                 }
                 if let hash = detail.hash {
@@ -563,28 +555,6 @@ struct Badge: View {
             .padding(.horizontal, 5).padding(.vertical, 2)
             .background(tint.opacity(0.15), in: RoundedRectangle(cornerRadius: 4))
             .foregroundStyle(tint == .secondary ? AnyShapeStyle(.secondary) : AnyShapeStyle(tint))
-    }
-}
-
-struct ConfidenceBadge: View {
-    let value: Double
-    var muted: Bool = false
-
-    static func percent(_ value: Double) -> String {
-        "\(Int((value * 100).rounded()))%"
-    }
-
-    var body: some View {
-        Text(Self.percent(value))
-            .font(.caption2.weight(.semibold).monospacedDigit())
-            .padding(.horizontal, 5).padding(.vertical, 1)
-            .background(color.opacity(0.18), in: Capsule())
-            .foregroundStyle(color)
-            .help("Confidence")
-    }
-    private var color: Color {
-        guard !muted else { return .secondary }
-        return value >= 0.85 ? .green : (value >= 0.6 ? .orange : .red)
     }
 }
 

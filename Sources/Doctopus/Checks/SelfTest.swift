@@ -114,8 +114,7 @@ enum SelfTest {
             print("    title:  \(row.title ?? "—")")
             print("    from:   \(row.correspondent ?? "—")   type: \(row.docType ?? "—")   lang: \(row.language ?? "—")")
             print("    date:   \(row.docDate.map(DayDate.text) ?? "—") (\(detail.dateSource ?? "—"))")
-            print("    ocr:    \(detail.ocrWords ?? 0) words via \(detail.ocrSource ?? "—")"
-                  + (detail.ocrConfidence.map { String(format: ", %.0f%% confidence", $0 * 100) } ?? ""))
+            print("    ocr:    \(detail.ocrWords ?? 0) words via \(detail.ocrSource ?? "—")")
             if let amount = detail.amount { print("    amount: \(amount)") }
             if let summary = row.summary { print("    summary: \(summary)") }
             if !detail.tags.isEmpty { print("    tags:   \(detail.tags.map(\.name).joined(separator: ", "))") }
