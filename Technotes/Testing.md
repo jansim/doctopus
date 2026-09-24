@@ -77,3 +77,38 @@ Doctopus --check <folder>         # report on an existing library's integrity
 ```
 
 `--check` is the same verification the app runs behind Verify Library.
+
+## Screenshots on a pull request
+
+A pull request can get screenshots of the real app without anyone building it:
+a comment, or the PR description, with a `/screenshot` line on its own has the
+[Screenshot workflow](../.github/workflows/screenshot.yml) build the PR head on a
+macOS runner, open the demo library in it, and reply with a comment holding the
+image.
+
+````markdown
+/screenshot
+
+/screenshot Settings
+```sh
+keys , command
+wait_window Settings
+```
+````
+
+- The text after `/screenshot` picks the window by a case-insensitive part of
+  its title; without it, the frontmost window is taken. `/screenshot --screen`
+  takes the whole display.
+- A fenced block after the line is run first. `sh` blocks get `menu Document
+  "Quick Look"`, `keys o command shift`, `type_text`, `activate` and
+  `wait_window <title>` from `.github/screenshot/helpers.sh`, plus `$APP`,
+  `$DOCTOPUS` and `$LIBRARY`; `applescript` and `jxa` blocks go to `osascript`.
+- Each `/screenshot` line is one image, up to six per request, and each starts
+  from a fresh launch with the preferences wiped and the demo library open.
+- The window's rectangle is captured, so a sheet or popover over it is included.
+
+Only comments by the owner and collaborators count, since the setup block is run
+as written, and a description only counts on a branch of this repository.
+Editing a description re-runs it only when its `/screenshot` requests changed.
+The images are committed to the orphan `screenshots` branch, which is what the
+comment links to.
