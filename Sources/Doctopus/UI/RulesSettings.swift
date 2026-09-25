@@ -81,6 +81,7 @@ struct RulesSettings: View {
         .task { await load() }
         .task(id: model.library?.id) { await load() }
         .onChange(of: model.library?.outlierRevision) { Task { await load() } }
+        .onChange(of: model.ruleToEdit) { openRequestedRule() }
         .sheet(item: $editing) { rule in
             if let library = model.library {
                 RuleEditor(rule: rule, library: library) { save($0) }
@@ -127,6 +128,18 @@ struct RulesSettings: View {
         let store = model.library?.store
         rules = (try? await store?.rules()) ?? []
         outlierCounts = (try? await store?.suppressionCounts()) ?? [:]
+        openRequestedRule()
+    }
+
+    /// A rule asked for from elsewhere, such as a conflict in a document's rule
+    /// matches. It waits for `load` when the pane has only just appeared, and
+    /// is dropped if the rule has gone since, so it can't reopen the pane later.
+    private func openRequestedRule() {
+        guard let id = model.ruleToEdit else { return }
+        model.ruleToEdit = nil
+        guard let rule = rules.first(where: { $0.id == id }) else { return }
+        selected = id
+        editing = rule
     }
 
     private func toggle(_ rule: Rule, _ on: Bool) {

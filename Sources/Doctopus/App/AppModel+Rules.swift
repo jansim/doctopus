@@ -13,8 +13,7 @@ extension AppModel {
     /// Documents waiting for approval, and those a rule would still change.
     var needsReviewCount: Int {
         guard let lib = library else { return 0 }
-        let waiting = lib.queue.filter { !$0.approved }
-        return waiting.count + lib.ruleMatchedDocs.subtracting(waiting.map(\.docID)).count
+        return lib.stats.waiting.union(lib.ruleMatchedDocs).count
     }
 
     /// Debounced: the indexer triggers a refresh per document.
@@ -48,7 +47,7 @@ extension AppModel {
     /// Accepting only some of a match's changes applies those and marks the
     /// document as an outlier, so the rule stops pointing out the rest.
     func applyRule(_ match: RuleMatch, to row: DocumentRow, accepting accepted: Set<RuleMatch.Change>? = nil) {
-        applyRules([(match, accepted ?? Set(match.changes))], to: row)
+        applyRules([(match, accepted ?? match.wants)], to: row)
     }
 
     /// Settles several matches as one step, which is how a choice between
@@ -64,8 +63,8 @@ extension AppModel {
             for (match, accepted) in plan {
                 guard var rule = rules.first(where: { $0.id == match.ruleID }) else { continue }
                 let name = rule.name
-                let partial = accepted != Set(match.changes)
-                if partial { rule = rule.limited(to: Set(accepted.map(\.kind))) }
+                let partial = accepted != match.wants
+                if partial { rule = rule.limited(to: Set(accepted.intersection(match.changes).map(\.kind))) }
                 var result = Indexer.RuleApplyResult()
                 if rule.hasEffect {
                     result = await lib.indexer.applyRule(rule, onlyTo: row.doc)
@@ -100,13 +99,13 @@ extension AppModel {
         }
         let (match, accepted) = only
         let name = match.ruleName
-        if accepted == Set(match.changes) {
+        if accepted == match.wants {
             return matched > 0 ? "Applied “\(name)” to “\(row.displayTitle)”."
                                : "“\(name)” no longer matches “\(row.displayTitle)”."
         }
         return accepted.isEmpty
             ? "Suppressed “\(name)” for “\(row.displayTitle)”."
-            : "Applied \(accepted.count) of \(match.changes.count) changes from “\(name)” to “\(row.displayTitle)” and suppressed the rest."
+            : "Applied \(accepted.intersection(match.changes).count) of \(match.changes.count) changes from “\(name)” to “\(row.displayTitle)” and suppressed the rest."
     }
 
     func setRuleSuppressed(_ suppressed: Bool, _ match: RuleMatch, for row: DocumentRow) {
@@ -127,7 +126,7 @@ extension AppModel {
         if var matches = lib.ruleMatches[doc],
            let index = matches.firstIndex(where: { $0.ruleID == ruleID }) {
             matches[index].suppressed = suppressed
-            matches.removeAll { !$0.suppressed && $0.changes.isEmpty }
+            matches.removeAll { !$0.suppressed && $0.changes.isEmpty && $0.inEffect.isEmpty }
             lib.ruleMatches[doc] = matches.isEmpty ? nil : matches
             ruleMatchedDocsChanged()
         }
@@ -138,6 +137,12 @@ extension AppModel {
         if selection == .outliers(rule: ruleID) {
             reloadDocuments(resetPaging: false)
         }
+    }
+
+    /// Asks the Rules pane to open a rule in its editor. The caller opens the
+    /// Settings window, which may not exist yet, so the pane picks it up on load.
+    func editRule(_ ruleID: Int64) {
+        ruleToEdit = ruleID
     }
 
     func showOutliers(of ruleID: Int64) {

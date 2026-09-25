@@ -420,6 +420,15 @@ enum UITest {
                    !rules.isEmpty && rules.allSatisfy {
                        $0.conditionSummary != "—" && !$0.actionSummary.isEmpty
                    })
+
+        if let rule = rules.first {
+            model.editRule(rule.id)
+            let taken = await settle({ model.ruleToEdit == nil }, timeout: 5)
+            Check.that("the rules pane opens a rule asked for from a conflict", taken)
+        }
+        model.editRule(-1)
+        let dropped = await settle({ model.ruleToEdit == nil }, timeout: 5)
+        Check.that("the rules pane drops a request for a rule that has gone", dropped)
     }
 
     private static func finishedActionsAreToasts(_ model: AppModel, snapshots: String?) async {

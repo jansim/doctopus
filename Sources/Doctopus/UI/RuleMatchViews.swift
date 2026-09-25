@@ -23,13 +23,36 @@ struct RuleMatchBadge: View {
     }
 }
 
-/// Which of a document's pending changes the user has turned down. A conflict
+/// Opens one of a conflict's rules in the rules editor, for when the fix
+/// belongs in the rule rather than in a choice made for this one document.
+struct EditConflictingRule: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.openSettings) private var openSettings
+    let conflict: RuleMatch.Conflict
+
+    var body: some View {
+        Menu("Edit Rule") {
+            ForEach(conflict.options, id: \.ruleID) { option in
+                Button("“\(option.ruleName)”…") {
+                    model.editRule(option.ruleID)
+                    openSettings()
+                }
+            }
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .font(.caption)
+        .help("Change one of these rules so they stop disagreeing")
+    }
+}
+
+/// Which of a document's rule changes the user has turned down. A conflict
 /// counts as settled once no more than one of its options is still accepted.
 struct RuleMatchChoices {
     var declined: [Int64: Set<RuleMatch.Change>] = [:]
 
     func accepted(_ match: RuleMatch) -> Set<RuleMatch.Change> {
-        Set(match.changes).subtracting(declined[match.ruleID] ?? [])
+        match.wants.subtracting(declined[match.ruleID] ?? [])
     }
 
     func isAccepted(_ change: RuleMatch.Change, of ruleID: Int64) -> Bool {
@@ -129,15 +152,19 @@ struct RuleMatchesNotice: View {
 
     private func choice(_ conflict: RuleMatch.Conflict) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            Label {
-                Text(conflict.summary + (choices.isSettled(conflict) ? "." : " — choose one:"))
-                    .fixedSize(horizontal: false, vertical: true)
-            } icon: {
-                Image(systemName: choices.isSettled(conflict)
-                      ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+            HStack(alignment: .firstTextBaseline) {
+                Label {
+                    Text(conflict.summary + (choices.isSettled(conflict) ? "." : " — choose one:"))
+                        .fixedSize(horizontal: false, vertical: true)
+                } icon: {
+                    Image(systemName: choices.isSettled(conflict)
+                          ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                }
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.purple)
+                Spacer(minLength: 4)
+                EditConflictingRule(conflict: conflict)
             }
-            .font(.caption.weight(.medium))
-            .foregroundStyle(.purple)
             Picker(conflict.kind.label, selection: Binding(
                 get: { choices.chosen(in: conflict) },
                 set: { if let id = $0 { choices.choose(id, in: conflict) } })) {
@@ -188,7 +215,7 @@ private struct RuleMatchCard: View {
 
     var body: some View {
         let accepted = choices.accepted(match)
-        let partial = accepted.count < match.changes.count
+        let partial = accepted != match.wants
         VStack(alignment: .leading, spacing: 7) {
             VStack(alignment: .leading, spacing: 5) {
                 HStack(spacing: 6) {
@@ -199,14 +226,14 @@ private struct RuleMatchCard: View {
                     Spacer(minLength: 0)
                     if match.suppressed { Badge("Suppressed") }
                 }
-                if match.changes.isEmpty {
+                if match.changes.isEmpty && match.inEffect.isEmpty {
                     Text("Nothing left for this rule to change.")
                         .font(.caption).foregroundStyle(.secondary)
                 } else {
                     VStack(alignment: .leading, spacing: 3) {
-                        ForEach(match.changes, id: \.self) { change in
+                        ForEach(match.changes + match.inEffect, id: \.self) { change in
                             Label {
-                                Text(change.label)
+                                Text(change.label + (match.inEffect.contains(change) ? " (in effect)" : ""))
                                     .strikethrough(!accepted.contains(change))
                                     .lineLimit(2)
                                     .truncationMode(.middle)
@@ -232,7 +259,7 @@ private struct RuleMatchCard: View {
                     }
                     .buttonStyle(.borderedProminent)
                     .tint(.purple)
-                    .disabled(blocked || accepted.isEmpty)
+                    .disabled(blocked || accepted.isEmpty || (!partial && match.changes.isEmpty))
                     .help(blocked
                           ? "Another rule wants something different here — choose between them above"
                           : "Apply “\(match.ruleName)” to this document now")

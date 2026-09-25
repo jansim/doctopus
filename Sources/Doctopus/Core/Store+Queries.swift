@@ -19,8 +19,10 @@ extension Store {
         """
 
     /// Only imports and scans are logged as imported or routed; Apply to Existing's `routed` is told apart by its detail.
+    /// Approving the arrival settles it into the library, so a later event cannot make it new again.
     static let fromOutsideColumn = """
-        EXISTS (SELECT 1 FROM events o WHERE o.doc_id = d.id
+        EXISTS (SELECT 1 FROM processing op JOIN events o ON o.id = op.event_id
+                WHERE op.doc_id = d.id AND op.status = 0
                 AND (o.action = 'imported'
                      OR (o.action = 'routed' AND COALESCE(o.detail, '') NOT LIKE 'Applied rule %')))
         """
@@ -425,7 +427,10 @@ extension Store {
         var total = 0
         var pending = 0
         var failed = 0
-        var needsReview = 0
+        /// Documents in Recent Processing, counted as its list shows them.
+        var queued = 0
+        /// Documents with processing still waiting for approval.
+        var waiting: Set<Int64> = []
         var bytes: Int64 = 0
         var saved: Int64 = 0
         var deleted = 0
@@ -435,13 +440,18 @@ extension Store {
         var s = Stats()
         try db.query("""
             SELECT COUNT(*),
-                   SUM(ocr_state=0), SUM(ocr_state=2), SUM(approved=0),
+                   SUM(ocr_state=0), SUM(ocr_state=2), SUM(id IN (SELECT doc_id FROM processing)),
                    SUM(size), SUM(COALESCE(original_size,size) - size)
             FROM documents WHERE missing=0 AND deleted_at IS NULL
             """) { r in
             s.total = Int(r.int(0)); s.pending = Int(r.int(1)); s.failed = Int(r.int(2))
-            s.needsReview = Int(r.int(3)); s.bytes = r.int(4); s.saved = max(0, r.int(5))
+            s.queued = Int(r.int(3)); s.bytes = r.int(4); s.saved = max(0, r.int(5))
         }
+        s.waiting = Set(try db.map("""
+            SELECT id FROM documents
+            WHERE missing=0 AND deleted_at IS NULL
+              AND id IN (SELECT doc_id FROM processing WHERE status=0)
+            """) { $0.int(0) })
         s.deleted = try deletedCount()
         return s
     }

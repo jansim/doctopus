@@ -85,7 +85,7 @@ struct FilingEditor: View {
 
     /// A rule's move is taken exactly when its folder is where the file will live.
     private func ruleDecision(for match: RuleMatch) -> RuleDecision {
-        let accepted = match.changes.filter { change in
+        let accepted = (match.changes + match.inEffect).filter { change in
             if case .move(let folder) = change { return rulePath(folder) == primary }
             return choices.isAccepted(change, of: match.ruleID)
         }
@@ -176,15 +176,19 @@ struct FilingEditor: View {
         VStack(alignment: .leading, spacing: 6) {
             ForEach(conflicts) { conflict in
                 let settled = isSettled(conflict)
-                Label {
-                    Text(conflict.summary + (settled ? "." : conflict.kind == .moveFile
-                                             ? " — pick the folder above." : " — tick one."))
-                        .fixedSize(horizontal: false, vertical: true)
-                } icon: {
-                    Image(systemName: settled ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                HStack(alignment: .firstTextBaseline) {
+                    Label {
+                        Text(conflict.summary + (settled ? "." : conflict.kind == .moveFile
+                                                 ? " — pick the folder above." : " — tick one."))
+                            .fixedSize(horizontal: false, vertical: true)
+                    } icon: {
+                        Image(systemName: settled ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                    }
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.purple)
+                    Spacer(minLength: 4)
+                    EditConflictingRule(conflict: conflict)
                 }
-                .font(.caption.weight(.medium))
-                .foregroundStyle(.purple)
             }
             ForEach(ruleMatches) { match in
                 let decision = ruleDecision(for: match)
@@ -206,12 +210,13 @@ struct FilingEditor: View {
                                 .help("Accepting marks this document as an outlier for “\(match.ruleName)”, so the rule stops pointing out what was left")
                         }
                     }
-                    ForEach(match.changes.filter { $0.kind != .moveFile }, id: \.self) { change in
+                    ForEach((match.changes + match.inEffect).filter { $0.kind != .moveFile }, id: \.self) { change in
                         Toggle(isOn: Binding(
                             get: { choices.isAccepted(change, of: match.ruleID) },
                             set: { choices.set($0, change, of: match.ruleID, conflicts: conflicts) })) {
                             Label {
-                                Text(change.label).lineLimit(1).truncationMode(.middle)
+                                Text(change.label + (match.inEffect.contains(change) ? " (in effect)" : ""))
+                                    .lineLimit(1).truncationMode(.middle)
                             } icon: {
                                 Image(systemName: change.icon)
                             }
@@ -354,7 +359,7 @@ struct FilingEditor: View {
         if dropping > 0 { steps.append("remove \(dropping) alias\(dropping == 1 ? "" : "es")") }
         for match in ruleMatches {
             let decision = ruleDecision(for: match)
-            let others = decision.accepted.filter { $0.kind != .moveFile }
+            let others = decision.toApply.filter { $0.kind != .moveFile }
             if !others.isEmpty {
                 steps.append(others.count == 1 ? others.first!.label.lowercasedFirst
                              : "apply \(others.count) changes from “\(match.ruleName)”")
