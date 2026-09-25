@@ -81,7 +81,8 @@ extension Store {
         switch selection {
         case .all, .deleted, .savedView: break
         case .reviewed:
-            wheres.append("d.reviewed_at IS NOT NULL")
+            wheres.append("d.reviewed_at >= ?")
+            args.append(.double(ReviewedPeriod.cutoff(before: .now).timeIntervalSince1970))
         case .folder(let path):
             let rel = relPath(path)
             if !rel.isEmpty {

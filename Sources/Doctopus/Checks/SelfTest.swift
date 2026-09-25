@@ -606,6 +606,7 @@ enum SelfTest {
             print("  \(row.filename.padded(36)) \(q.action.rawValue.padded(10)) "
                   + "\(q.approved ? "approved    " : "needs review") \(q.detail ?? "")")
         }
+        await recentlyReviewedPeriods(store: store)
 
         print("\nQUEUE")
         for entry in ((try? await store.processingQueue(limit: 8)) ?? []) {
