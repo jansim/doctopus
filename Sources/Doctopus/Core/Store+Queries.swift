@@ -19,8 +19,10 @@ extension Store {
         """
 
     /// Only imports and scans are logged as imported or routed; Apply to Existing's `routed` is told apart by its detail.
+    /// Approving the arrival settles it into the library, so a later event cannot make it new again.
     static let fromOutsideColumn = """
-        EXISTS (SELECT 1 FROM events o WHERE o.doc_id = d.id
+        EXISTS (SELECT 1 FROM processing op JOIN events o ON o.id = op.event_id
+                WHERE op.doc_id = d.id AND op.status = 0
                 AND (o.action = 'imported'
                      OR (o.action = 'routed' AND COALESCE(o.detail, '') NOT LIKE 'Applied rule %')))
         """
