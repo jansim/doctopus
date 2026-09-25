@@ -488,6 +488,9 @@ private struct DocumentMenu: View {
                 Divider()
                 Button("Approve") { model.setApproved(rows, true) }
                 Button("Mark as Needs Review") { model.setApproved(rows, false) }
+            } else if model.selection != .deleted {
+                Divider()
+                Button("Review…") { model.review(rows) }
             }
             Divider()
             Menu("Tags") {
