@@ -556,12 +556,32 @@ enum SelfTest {
             }
         }
 
-        print("\nQUEUE MODE (same browser, review columns)")
-        let queued = (try? await store.listDocuments(selection: .queue, query: SearchQuery(""),
-                                                     sort: .added, ascending: false)) ?? []
-        Check.that("queue mode carries a processing row per document",
-                   queued.count == rows.count && queued.allSatisfy { $0.queue != nil })
-        for row in queued.prefix(4) {
+        print("\nRECENTLY REVIEWED (same browser, review columns)")
+        func reviewed() async -> [DocumentRow] {
+            (try? await store.listDocuments(selection: .reviewed, query: SearchQuery(""),
+                                            sort: .added, ascending: false)) ?? []
+        }
+        let current = (try? await store.listDocuments(selection: .all, query: SearchQuery(""),
+                                                      sort: .added, ascending: false)) ?? []
+        if current.count >= 2 {
+            let first = current[0], second = current[1]
+            try? await store.setDocumentApproved(first.doc, true)
+            try? await Task.sleep(for: .milliseconds(20))
+            try? await store.setDocumentApproved(second.doc, true)
+            var queued = await reviewed()
+            Check.that("an approval lands in Recently Reviewed, newest approval first",
+                       queued.prefix(2).map(\.doc) == [second.doc, first.doc]
+                           && queued.prefix(2).allSatisfy { $0.queue?.approved == true })
+            try? await store.setDocumentApproved(first.doc, true)
+            queued = await reviewed()
+            Check.that("approving again moves it back to the top", queued.first?.doc == first.doc)
+            try? await store.setDocumentApproved(second.doc, false)
+            queued = await reviewed()
+            Check.that("sending it back for review takes it out",
+                       !queued.contains { $0.doc == second.doc })
+            try? await store.setDocumentApproved(second.doc, true)
+        }
+        for row in await reviewed().prefix(4) {
             guard let q = row.queue else { continue }
             print("  \(row.filename.padded(36)) \(q.action.rawValue.padded(10)) "
                   + "\(q.approved ? "approved    " : "needs review") \(q.detail ?? "")")
