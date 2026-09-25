@@ -176,15 +176,19 @@ struct FilingEditor: View {
         VStack(alignment: .leading, spacing: 6) {
             ForEach(conflicts) { conflict in
                 let settled = isSettled(conflict)
-                Label {
-                    Text(conflict.summary + (settled ? "." : conflict.kind == .moveFile
-                                             ? " — pick the folder above." : " — tick one."))
-                        .fixedSize(horizontal: false, vertical: true)
-                } icon: {
-                    Image(systemName: settled ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                HStack(alignment: .firstTextBaseline) {
+                    Label {
+                        Text(conflict.summary + (settled ? "." : conflict.kind == .moveFile
+                                                 ? " — pick the folder above." : " — tick one."))
+                            .fixedSize(horizontal: false, vertical: true)
+                    } icon: {
+                        Image(systemName: settled ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                    }
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.purple)
+                    Spacer(minLength: 4)
+                    EditConflictingRule(conflict: conflict)
                 }
-                .font(.caption.weight(.medium))
-                .foregroundStyle(.purple)
             }
             ForEach(ruleMatches) { match in
                 let decision = ruleDecision(for: match)
