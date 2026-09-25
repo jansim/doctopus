@@ -60,6 +60,13 @@ final class Workspace {
         windows.first { $0.library?.id == id }
     }
 
+    /// The window holding the lock on the library in `container`, however
+    /// that library was reached.
+    func window(holdingLockIn container: URL) -> AppModel? {
+        guard let identity = LibraryLock.identity(in: container) else { return nil }
+        return windows.first { $0.library?.store.lock?.identity == identity }
+    }
+
     func window(owning path: String) -> AppModel? {
         windows.first { $0.library?.owns(path: path) == true }
     }

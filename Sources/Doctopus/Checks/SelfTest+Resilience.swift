@@ -160,4 +160,71 @@ extension SelfTest {
         print("  watched folder renamed  \(heard.all.isEmpty ? "not heard" : "heard")")
         Check.that("renaming the watched folder is reported as the root changing", !heard.all.isEmpty)
     }
+
+    static func oneWriterAtATime() async {
+        print("\nONE WRITER AT A TIME")
+        let fm = FileManager.default
+        let container = fm.temporaryDirectory
+            .appendingPathComponent("doctopus-lock-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("library.doctopus", isDirectory: true)
+        defer { try? fm.removeItem(at: container.deletingLastPathComponent()) }
+
+        let first = try? LibraryLock.acquire(in: container)
+        var refusal: String?
+        do { _ = try LibraryLock.acquire(in: container) } catch { refusal = "\(error)" }
+        print("  second open             \(refusal ?? "allowed")")
+        Check.that("a library held open is refused to a second opener", first != nil && refusal != nil)
+        Check.that("the holder is recorded for other Macs to see",
+                   LibraryLock.owner(in: container)?.machine == LibraryLock.thisMachine)
+        Check.that("the same library reached twice is recognised by its lock file",
+                   first?.identity != nil && first?.identity == LibraryLock.identity(in: container))
+
+        first?.release()
+        let again = try? LibraryLock.acquire(in: container)
+        Check.that("released, it opens again at once, and the owner record is cleared on the way",
+                   again != nil)
+        again?.release()
+        Check.that("…and a released lock names nobody", LibraryLock.owner(in: container) == nil)
+
+        // Another Mac, through a synced folder, where flock does not reach.
+        func elsewhere(_ age: TimeInterval) {
+            let owner = LibraryLock.Owner(machine: "another-mac", name: "Other Mac", pid: 1,
+                                          heartbeat: Date().addingTimeInterval(-age))
+            try? JSONEncoder().encode(owner).write(to: container.appendingPathComponent(LibraryLock.filename))
+        }
+        elsewhere(30)
+        var foreign: String?
+        do { _ = try LibraryLock.acquire(in: container) } catch { foreign = "\(error)" }
+        print("  open on another Mac     \(foreign ?? "allowed")")
+        Check.that("a library another Mac renewed recently is refused, naming that Mac",
+                   foreign?.contains("Other Mac") == true)
+        elsewhere(LibraryLock.staleAfter + 60)
+        let takenOver = try? LibraryLock.acquire(in: container)
+        Check.that("…but one it stopped renewing is taken over", takenOver != nil)
+        takenOver?.release()
+
+        let store = try? Store(directory: container, lock: try? LibraryLock.acquire(in: container))
+        var storeRefusal: LibraryLock.Refusal?
+        do { _ = try Store(directory: container, lock: LibraryLock.acquire(in: container)) }
+        catch let error as LibraryLock.Refusal { storeRefusal = error } catch {}
+        Check.that("a second store is refused before it touches the index", store != nil && storeRefusal != nil)
+
+        let home = fm.homeDirectoryForCurrentUser
+        let cases: [(String, String?)] = [
+            (home.path + "/Library/Mobile Documents/com~apple~CloudDocs/Docs", "iCloud Drive"),
+            (home.path + "/Library/CloudStorage/Dropbox/Docs", "Dropbox"),
+            (home.path + "/Library/CloudStorage/OneDrive-Personal/Docs", "OneDrive"),
+            (home.path + "/Library/CloudStorage/GoogleDrive-someone@example.com/My Drive", "Google Drive"),
+            (container.deletingLastPathComponent().path, nil),
+        ]
+        let wrong = cases.filter { SyncedFolder.service(for: URL(fileURLWithPath: $0.0)) != $0.1 }
+        Check.that("synced folders are recognised by service, and a local one is not", wrong.isEmpty,
+                   wrong.map(\.0).joined(separator: ", "))
+        let legacy = container.deletingLastPathComponent().appendingPathComponent("Old Dropbox/Docs")
+        try? fm.createDirectory(at: legacy, withIntermediateDirectories: true)
+        fm.createFile(atPath: legacy.deletingLastPathComponent().appendingPathComponent(".dropbox").path,
+                      contents: Data())
+        Check.that("the older Dropbox client's marked folder counts too",
+                   SyncedFolder.service(for: legacy) == "Dropbox")
+    }
 }

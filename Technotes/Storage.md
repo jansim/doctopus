@@ -9,6 +9,7 @@ Each indexed folder holds its index in a `library.doctopus` package inside it:
   library.doctopus/
     index.sqlite
     meta.json
+    lock
   Finances/
     Tax-2026/
       2026-01-14_finanzamt_bescheid.pdf
@@ -22,6 +23,23 @@ together with its version, so an interrupted upgrade resumes where it stopped.
 `meta.json` also holds the library's id, which is its identity: one that is
 there but will not read is refused with a reason rather than replaced, and only
 a library with no `meta.json` at all is given a new one.
+
+## One Mac at a time
+
+`lock` keeps a library open in one Doctopus at a time: two writers on one
+index — a second copy of the app, or a second Mac on a shared or synced folder
+— interleave their writes and can corrupt it. The app `flock`s the file, which
+is exact between processes on one Mac, and writes into it which Mac holds it,
+renewed every minute, which is what reaches another Mac through Dropbox or
+iCloud. Another Mac's record counts until it has gone five minutes unrenewed,
+so a Mac that crashed or went to sleep gives the library up by itself.
+Closing a library clears the record. The check suites and command-line modes
+open the index without it.
+
+A library in iCloud Drive, Dropbox, OneDrive, Google Drive or another File
+Provider folder is warned about on opening and in Verify Library: a syncing
+service can copy `index.sqlite` and its write-ahead log at different moments,
+and another Mac can end up with a pair that never existed together.
 
 Finder shows the package as a single Doctopus document that opens the library
 on a double-click; Show Package Contents gets at the files.

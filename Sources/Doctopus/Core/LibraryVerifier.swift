@@ -58,6 +58,14 @@ enum LibraryVerifier {
             }
         }
 
+        if let service = SyncedFolder.service(for: store.root) {
+            report.issues.append(VerificationReport.Issue(
+                severity: .warning,
+                title: "Library in a synced folder",
+                detail: SyncedFolder.warning(for: store.root.lastPathComponent, in: service)
+            ))
+        }
+
         let scanned = FileScanner.scan(root: store.root)
         for url in scanned.unreadable {
             report.issues.append(VerificationReport.Issue(

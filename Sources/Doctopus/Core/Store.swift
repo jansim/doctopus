@@ -7,6 +7,9 @@ actor Store {
     let containerURL: URL
     let root: URL
     let libraryID: LibraryID
+    /// Held for as long as the app has the library open; nil for the check
+    /// suites and the command-line modes.
+    nonisolated let lock: LibraryLock?
     var fieldCache: [Field]?
 
     // Store+RuleMatches
@@ -14,7 +17,8 @@ actor Store {
 
     private let rootPrefix: String
 
-    init(directory: URL) throws {
+    init(directory: URL, lock: LibraryLock? = nil) throws {
+        self.lock = lock
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let container = URL(fileURLWithPath: Store.canonical(directory.standardizedFileURL.path),
                             isDirectory: true)

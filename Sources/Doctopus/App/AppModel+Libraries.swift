@@ -24,9 +24,17 @@ extension AppModel {
 
         isOpening = true
         defer { isOpening = false }
+        // Before the lock is tried: this window's own lock would refuse it.
+        if let other = workspace.window(holdingLockIn: container) {
+            other.bringToFront()
+            return .elsewhere
+        }
         let store: Store
         do {
-            store = try Store(directory: container)
+            store = try Store(directory: container, lock: LibraryLock.acquire(in: container))
+        } catch let error as LibraryLock.Refusal {
+            errorMessage = error.description
+            return .failed
         } catch let error as Store.OpenError {
             errorMessage = error.description
             return .failed
@@ -76,6 +84,10 @@ extension AppModel {
         if !silent, let indexed {
             notify(indexed == 0 ? "Opened \(lib.displayName)."
                                 : "Indexed \(indexed) document\(indexed == 1 ? "" : "s") in \(lib.displayName).")
+        }
+        // Last, so no routine notice replaces it.
+        if !silent, let service = SyncedFolder.service(for: lib.root) {
+            notify(SyncedFolder.warning(for: lib.displayName, in: service), .warning)
         }
         return .opened
     }
@@ -239,6 +251,9 @@ extension AppModel {
         if scanSession != nil { stopContinuousScan() }
         lib.watcher?.stop()
         lib.watcher = nil
+        // Now, not when the last task lets go of the store: the library may be
+        // reopening in this very window.
+        lib.store.lock?.release()
         Task { await lib.indexer.cancel() }
     }
 
