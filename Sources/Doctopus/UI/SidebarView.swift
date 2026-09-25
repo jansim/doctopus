@@ -192,12 +192,6 @@ private struct TagRow: View {
                 }
                 Text(tag.name)
                 Spacer()
-                if tag.mirrors {
-                    Image(systemName: "arrow.triangle.branch")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                        .help("Mirrored to disk as Finder aliases")
-                }
                 CountBadge(tag.count)
             }
         } icon: {
@@ -231,9 +225,6 @@ private struct TagRow: View {
         Menu("Color") {
             TagColorItems(tag: tag)
         }
-        Toggle("Mirror to Disk as Aliases", isOn: Binding(
-            get: { tag.mirrors },
-            set: { model.setTagMirroring(tag, enabled: $0) }))
         Menu("Move Under") {
             Button("Nothing — Top Level") { model.setTagParent(tag, to: nil) }
                 .disabled(tag.parentID == nil)

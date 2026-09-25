@@ -84,9 +84,8 @@ extension AppModel {
                 total.moved += result.moved
                 total.renamed += result.renamed
                 report(failures: result.failures, "apply “\(name)” to")
-                if result.matched > 0,
-                   let path = try? await lib.store.documentPath(row.doc) {
-                    await lib.indexer.syncAliases(docID: row.doc, target: URL(fileURLWithPath: path))
+                if result.matched > 0 {
+                    await lib.indexer.forgetVanishedAliases(of: row.doc)
                 }
                 if partial {
                     await setRuleSuppressed(true, rule: match.ruleID, name: name, doc: row.doc, in: lib)

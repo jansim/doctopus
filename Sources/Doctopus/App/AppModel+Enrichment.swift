@@ -310,7 +310,7 @@ extension AppModel {
                     created = try AliasManager.createAlias(to: row.url, in: folder)
                 } catch { failures.append("“\(row.filename)”: \(error.localizedDescription)"); continue }
                 do {
-                    try await lib.store.recordAlias(docID: row.doc, tagID: nil, path: created.path)
+                    try await lib.store.recordAlias(docID: row.doc, path: created.path)
                 } catch {
                     // An alias the index does not know of could never be pruned.
                     AliasManager.removeAlias(at: created.path, pointingTo: row.url)

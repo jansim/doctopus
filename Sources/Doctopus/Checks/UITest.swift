@@ -55,6 +55,7 @@ enum UITest {
             await uiStatePersists(model)
             await sidebarShowsBothTagSystems(model, snapshots: snapshots)
             await handEditsReachTheHistory(model)
+            await tagCountsFollowEdits(model)
             await optionRevealsFolders(model)
             await secondLibraryOpensApart(model, alongside: library, snapshots: snapshots)
             await reviewPanelFiles(model, snapshots: snapshots)

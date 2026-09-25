@@ -2,17 +2,18 @@ import Foundation
 
 extension Store {
 
+    /// A tag's count is the documents a click on it lists: the ones in the
+    /// Trash or gone from disk are joined as nothing, so they are not counted.
     func tags() throws -> [Tag] {
         let flat = try db.map("""
-            SELECT t.id, t.name, t.color, t.mirrors, t.folder, COUNT(dt.doc_id), t.parent_id
+            SELECT t.id, t.name, t.color, COUNT(d.id), t.parent_id
             FROM tags t
             LEFT JOIN document_tags dt ON dt.tag_id = t.id
             LEFT JOIN documents d ON d.id = dt.doc_id AND d.missing=0 AND d.deleted_at IS NULL
             GROUP BY t.id ORDER BY t.name COLLATE NOCASE
             """) {
             Tag(tagID: $0.int(0), name: $0.string(1), color: $0.int(2),
-                mirrors: $0.bool(3), folder: $0.stringOrNil(4), count: Int($0.int(5)),
-                parentID: $0.intOrNil(6))
+                count: Int($0.int(3)), parentID: $0.intOrNil(4))
         }
         return Store.nested(flat)
     }
@@ -95,18 +96,46 @@ extension Store {
             subtree += next
             frontier = next
         }
+        var docs: Set<Int64> = []
         for id in subtree {
-            let above = try ancestors(of: id)
-            guard !above.isEmpty else { continue }
-            let docs = try documentIDs(withTag: id)
-            for doc in docs {
-                for parent in above {
-                    try db.run("INSERT OR IGNORE INTO document_tags(doc_id, tag_id, auto) VALUES(?,?,1)",
-                               [.int(doc), .int(parent)])
-                }
-            }
-            try refreshSearchIndex(docs)
+            let tagged = try documentIDs(withTag: id)
+            docs.formUnion(tagged)
         }
+        try refreshSearchIndex(reconcileImpliedTags(Array(docs)))
+    }
+
+    /// A document carries every tag above each of its own, and no other tag
+    /// only by implication: one whose child was taken off, moved elsewhere or
+    /// deleted would otherwise go on counting, and listing, a document nothing
+    /// tags with it any more. Returns the documents that changed, whose search
+    /// text the caller refreshes, since this may run inside a transaction.
+    @discardableResult
+    func reconcileImpliedTags(_ docIDs: [Int64]) throws -> [Int64] {
+        var changed: [Int64] = []
+        for doc in Set(docIDs) {
+            let own = try db.map("SELECT tag_id FROM document_tags WHERE doc_id=? AND implied=0",
+                                 [.int(doc)]) { $0.int(0) }
+            var wanted: Set<Int64> = []
+            for tag in own {
+                let above = try ancestors(of: tag)
+                wanted.formUnion(above)
+            }
+            wanted.subtract(own)
+            let implied = try db.map("SELECT tag_id FROM document_tags WHERE doc_id=? AND implied=1",
+                                     [.int(doc)]) { $0.int(0) }
+            let present = Set(implied)
+            guard present != wanted else { continue }
+            for stale in present.subtracting(wanted) {
+                try db.run("DELETE FROM document_tags WHERE doc_id=? AND tag_id=? AND implied=1",
+                           [.int(doc), .int(stale)])
+            }
+            for missing in wanted.subtracting(present) {
+                try db.run("INSERT OR IGNORE INTO document_tags(doc_id, tag_id, auto, implied) VALUES(?,?,1,1)",
+                           [.int(doc), .int(missing)])
+            }
+            changed.append(doc)
+        }
+        return changed
     }
 
     @discardableResult
@@ -133,52 +162,58 @@ extension Store {
         return try db.run("INSERT INTO tags(name, color) VALUES(?,?)", [.text(name), .int(color)])
     }
 
+    /// A tag the document only carried by implication becomes its own.
     func assign(tag tagID: Int64, to docID: Int64, auto: Bool = false) throws {
         guard tagID > 0 else { return }
-        try db.run("INSERT OR IGNORE INTO document_tags(doc_id, tag_id, auto) VALUES(?,?,?)",
-                   [.int(docID), .int(tagID), .bool(auto)])
-        for parent in try ancestors(of: tagID) {
-            try db.run("INSERT OR IGNORE INTO document_tags(doc_id, tag_id, auto) VALUES(?,?,1)",
-                       [.int(docID), .int(parent)])
-        }
+        try db.run("""
+            INSERT INTO document_tags(doc_id, tag_id, auto, implied) VALUES(?,?,?,0)
+            ON CONFLICT(doc_id, tag_id) DO UPDATE SET implied=0, auto=excluded.auto
+            WHERE document_tags.implied=1
+            """, [.int(docID), .int(tagID), .bool(auto)])
+        try reconcileImpliedTags([docID])
         try refreshSearchIndex(docID)
     }
 
     func unassign(tag tagID: Int64, from docID: Int64) throws {
         try db.run("DELETE FROM document_tags WHERE doc_id=? AND tag_id=?", [.int(docID), .int(tagID)])
+        try reconcileImpliedTags([docID])
         try refreshSearchIndex(docID)
     }
 
+    /// A document that was given this tag keeps the tags above it, as its
+    /// own now: deleting "tax/2025" is no reason to lose "tax" as well.
     func deleteTag(_ id: Int64) throws {
         let affected = try documentIDs(withTag: id)
+        for parent in try ancestors(of: id) {
+            try db.run("""
+                UPDATE document_tags SET implied=0 WHERE tag_id=? AND doc_id IN
+                    (SELECT doc_id FROM document_tags WHERE tag_id=? AND implied=0)
+                """, [.int(parent), .int(id)])
+        }
         try db.run("DELETE FROM tags WHERE id=?", [.int(id)])
+        try reconcileImpliedTags(affected)
         try refreshSearchIndex(affected)
-    }
-
-    func setTagMirroring(_ id: Int64, _ on: Bool, folder: String?) throws {
-        try db.run("UPDATE tags SET mirrors=?, folder=? WHERE id=?",
-                   [.bool(on), .text(folder), .int(id)])
     }
 
     func tags(for docID: Int64) throws -> [Tag] {
         try db.map("""
-            SELECT t.id, t.name, t.color, t.mirrors, t.folder, t.parent_id, dt.auto FROM tags t
+            SELECT t.id, t.name, t.color, t.parent_id, dt.implied FROM tags t
             JOIN document_tags dt ON dt.tag_id=t.id WHERE dt.doc_id=?
             ORDER BY t.name COLLATE NOCASE
             """, [.int(docID)]) {
-            Tag(tagID: $0.int(0), name: $0.string(1), color: $0.int(2), mirrors: $0.bool(3),
-                folder: $0.stringOrNil(4), parentID: $0.intOrNil(5), implied: $0.bool(6))
+            Tag(tagID: $0.int(0), name: $0.string(1), color: $0.int(2),
+                parentID: $0.intOrNil(3), implied: $0.bool(4))
         }
     }
 
-    func recordAlias(docID: Int64, tagID: Int64?, path: String) throws {
-        try db.run("INSERT OR REPLACE INTO aliases(doc_id, tag_id, path, created_at) VALUES(?,?,?,?)",
-                   [.int(docID), .int(tagID), .text(relPath(path)), .double(Date().timeIntervalSince1970)])
+    func recordAlias(docID: Int64, path: String) throws {
+        try db.run("INSERT OR REPLACE INTO aliases(doc_id, path, created_at) VALUES(?,?,?)",
+                   [.int(docID), .text(relPath(path)), .double(Date().timeIntervalSince1970)])
     }
 
-    func aliases(for docID: Int64) throws -> [(id: Int64, tagID: Int64?, path: String)] {
-        try db.map("SELECT id, tag_id, path FROM aliases WHERE doc_id=?", [.int(docID)]) {
-            ($0.int(0), $0.intOrNil(1), absPath($0.string(2)))
+    func aliases(for docID: Int64) throws -> [(id: Int64, path: String)] {
+        try db.map("SELECT id, path FROM aliases WHERE doc_id=?", [.int(docID)]) {
+            ($0.int(0), absPath($0.string(1)))
         }
     }
 

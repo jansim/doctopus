@@ -301,9 +301,9 @@ extension SelfTest {
         if let doc = rows.first(where: { $0.directory.hasSuffix("Personal") }) {
             let folder = root.appendingPathComponent("Work", isDirectory: true)
             if let alias = try? AliasManager.createAlias(to: doc.url, in: folder) {
-                try? await store.recordAlias(docID: doc.doc, tagID: nil, path: alias.path)
+                try? await store.recordAlias(docID: doc.doc, path: alias.path)
                 await indexer.reprocess(ids: [doc.doc])
-                await indexer.syncAliases(docID: doc.doc, target: doc.url)
+                await indexer.forgetVanishedAliases(of: doc.doc)
                 Check.that("a folder alias the user made survives reprocessing",
                            fm.fileExists(atPath: alias.path))
                 AliasManager.removeAlias(at: alias.path, pointingTo: doc.url)

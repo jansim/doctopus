@@ -69,8 +69,6 @@ actor Store {
     }
 
     static let formatVersion = 2
-    /// Where tags mirror as aliases unless a tag names its own folder.
-    static let tagMirrorFolder = "Tags"
 
     static var appVersion: String {
         (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "unknown"

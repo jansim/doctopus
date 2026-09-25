@@ -91,6 +91,7 @@ enum SelfTest {
         await routing(store: store, settings: settings, root: root, rows: rows)
         ruleMigration()
         noteMigration()
+        tagMirroringRemoved()
         await ruleEditing(store: store, indexer: indexer, settings: settings, root: root, rows: rows,
                           stats: stats)
         let fields = await fieldValues(store: store, rows: rows)
@@ -124,6 +125,7 @@ enum SelfTest {
         await entities(store: store, rows: rows)
         await matchModes(store: store)
         await nestedTags(store: store, rows: rows)
+        await tagCounts(store: store)
         await dates(store: store, rows: rows)
         await revertibleOptimisation(store: store, indexer: indexer, rows: rows)
         await typedFields(store: store, rows: rows)
@@ -203,14 +205,6 @@ enum SelfTest {
         Check.that("an empty folder on disk still shows in the tree",
                    findNode(path: emptyFolderPath, in: treeWithEmptyFolder)?.count == 0)
 
-        let tagsMirror = root.appendingPathComponent("Tags", isDirectory: true)
-            .appendingPathComponent("Some Tag", isDirectory: true)
-        try? FileManager.default.createDirectory(at: tagsMirror, withIntermediateDirectories: true)
-        let treeWithTagsMirror = (try? await store.folderTree()) ?? []
-        let tagsMirrorPath = store.absPath(store.relPath(tagsMirror.path))
-        Check.that("the Tags/ mirror is not promoted into the folder tree",
-                   findNode(path: tagsMirrorPath, in: treeWithTagsMirror) == nil)
-
         if let sample = rows.first(where: { store.relPath($0.path).contains("/") }) {
             let folder = (sample.path as NSString).deletingLastPathComponent
             let renamed = folder + " Renamed"
@@ -286,13 +280,13 @@ enum SelfTest {
         let home = subject.url.deletingLastPathComponent()
         let elsewhere = root.appendingPathComponent("Also Filed", isDirectory: true)
         if let alias = try? AliasManager.createAlias(to: subject.url, in: elsewhere) {
-            try? await store.recordAlias(docID: subject.doc, tagID: nil, path: alias.path)
+            try? await store.recordAlias(docID: subject.doc, path: alias.path)
             try? fm.setAttributes([.posixPermissions: 0o555], ofItemAtPath: home.path)
             var refusal: String?
             do { _ = try await indexer.promoteClosestAlias(docID: subject.doc) }
             catch { refusal = error.localizedDescription }
             try? fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: home.path)
-            let placements = ((try? await store.aliases(for: subject.doc)) ?? []).filter { $0.tagID == nil }
+            let placements = (try? await store.aliases(for: subject.doc)) ?? []
             let master = Store.canonical(subject.url.standardizedFileURL.path)
             let refiled = placements.contains { placement in
                 guard let points = AliasManager.resolve(URL(fileURLWithPath: placement.path)) else { return false }

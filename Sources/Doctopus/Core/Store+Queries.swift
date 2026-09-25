@@ -392,11 +392,8 @@ extension Store {
         }
 
         var allDirs = Set(counts.keys)
-        let tagsMirrorRoot = root.appendingPathComponent(Store.tagMirrorFolder, isDirectory: true).path
         for url in FileScanner.directories(root: root) {
-            let path = url.path
-            guard path != tagsMirrorRoot, !path.hasPrefix(tagsMirrorRoot + "/") else { continue }
-            allDirs.insert(relPath(path))
+            allDirs.insert(relPath(url.path))
         }
 
         var children: [String: Set<String>] = [:]

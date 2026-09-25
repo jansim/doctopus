@@ -238,13 +238,25 @@ extension Store {
             return id
         }
         guard mergeIntoExisting else { return id }
+        let children = try db.map("SELECT id FROM tags WHERE parent_id=?", [.int(id)]) { $0.int(0) }
         let merged = try db.transaction { () -> Int64 in
+            // A document given the merged tag has the survivor as its own,
+            // even where it only carried it by implication until now.
+            try db.run("""
+                UPDATE document_tags SET implied=0 WHERE tag_id=? AND doc_id IN
+                    (SELECT doc_id FROM document_tags WHERE tag_id=? AND implied=0)
+                """, [.int(target), .int(id)])
             try db.run("UPDATE OR IGNORE document_tags SET tag_id=? WHERE tag_id=?", [.int(target), .int(id)])
             try db.run("DELETE FROM document_tags WHERE tag_id=?", [.int(id)])
-            try db.run("UPDATE OR IGNORE aliases SET tag_id=? WHERE tag_id=?", [.int(target), .int(id)])
             try db.run("DELETE FROM tags WHERE id=?", [.int(id)])
             return target
         }
+        // What was nested in the merged tag goes on under the survivor, unless
+        // that would make a loop or nest too deep, which leaves it at the top.
+        for child in children where child != target {
+            _ = try setTagParent(child, to: target)
+        }
+        try reconcileImpliedTags(affected)
         try refreshSearchIndex(affected)
         return merged
     }

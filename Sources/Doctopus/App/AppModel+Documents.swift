@@ -69,7 +69,6 @@ extension AppModel {
                 for row in rows where id > 0 {
                     try await lib.store.assign(tag: id, to: row.doc)
                     try? await lib.store.logEdit(docID: row.doc, detail: "Tagged “\(name)”")
-                    await lib.indexer.syncAliases(docID: row.doc, target: row.url)
                 }
             } catch { report(error, "tag \(rows.count == 1 ? "it" : "them") “\(name)”") }
             refreshAll()
@@ -84,7 +83,6 @@ extension AppModel {
                 do { try await lib.store.unassign(tag: tag.tagID, from: row.doc) }
                 catch { report(error, "take “\(tag.name)” off “\(row.displayTitle)”"); continue }
                 try? await lib.store.logEdit(docID: row.doc, detail: "Untagged “\(tag.name)”")
-                await lib.indexer.syncAliases(docID: row.doc, target: row.url)
             }
             refreshAll()
             reloadDetail()
@@ -98,7 +96,6 @@ extension AppModel {
                 try await lib.store.acceptTagSuggestion(suggestion.name, for: row.doc)
                 try? await lib.store.logEdit(docID: row.doc,
                                              detail: "Tagged “\(suggestion.name)”")
-                await lib.indexer.syncAliases(docID: row.doc, target: row.url)
             } catch { report(error, "tag it “\(suggestion.name)”") }
             refreshAll()
             reloadDetail()
@@ -111,19 +108,6 @@ extension AppModel {
             do { try await lib.store.discardTagSuggestion(suggestion.name, for: row.doc) }
             catch { report(error, "discard the suggestion “\(suggestion.name)”") }
             reloadDetail()
-        }
-    }
-
-    func setTagMirroring(_ tag: Tag, enabled: Bool) {
-        guard let lib = library else { return }
-        Task {
-            do {
-                try await lib.store.setTagMirroring(tag.tagID, enabled, folder: tag.folder)
-                let rows = try await lib.store.listDocuments(selection: .tag(tag.id), query: SearchQuery(""),
-                                                             sort: .added, ascending: false, limit: 5000)
-                for row in rows { await lib.indexer.syncAliases(docID: row.doc, target: row.url) }
-            } catch { report(error, "change how “\(tag.name)” is mirrored") }
-            refreshAll()
         }
     }
 

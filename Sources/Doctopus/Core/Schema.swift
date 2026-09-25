@@ -7,7 +7,7 @@ enum Schema {
 
     private static let steps: [@Sendable (Database) throws -> Void] = [
         v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19,
-        v20, v21, v22, v23, v24, v25,
+        v20, v21, v22, v23, v24, v25, v26, v27,
     ]
     static var current: Int { steps.count }
 
@@ -35,6 +35,59 @@ enum Schema {
             [.text(table), .text(column)]) { $0.int(0) } ?? 0
         guard present == 0 else { return }
         try db.exec("ALTER TABLE \(table) ADD COLUMN \(column) \(declaration)")
+    }
+
+    /// Which tags a document carries only because a tag below them is, so
+    /// those can go again with it. They were marked automatic, like a tag a
+    /// rule added, which could not tell the two apart; an automatic tag that
+    /// sits above another of the document's is taken to be implied by it.
+    private static func v27(_ db: Database) throws {
+        let present = try db.first(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='document_tags'") { $0.int(0) } ?? 0
+        guard present > 0 else { return }
+        try addColumn(db, table: "document_tags", column: "implied",
+                      declaration: "INTEGER NOT NULL DEFAULT 0")
+        try db.exec("""
+        WITH RECURSIVE above(doc_id, tag_id) AS (
+            SELECT dt.doc_id, t.parent_id FROM document_tags dt
+            JOIN tags t ON t.id = dt.tag_id WHERE t.parent_id IS NOT NULL
+            UNION
+            SELECT above.doc_id, t.parent_id FROM above
+            JOIN tags t ON t.id = above.tag_id WHERE t.parent_id IS NOT NULL
+        )
+        UPDATE document_tags SET implied=1
+        WHERE auto=1 AND EXISTS (SELECT 1 FROM above
+                                 WHERE above.doc_id = document_tags.doc_id
+                                   AND above.tag_id = document_tags.tag_id);
+        """)
+    }
+
+    /// Tags no longer mirror to disk as Finder aliases. The aliases they made
+    /// are left where they are, since nothing may delete what is on disk
+    /// uninvited; the index only forgets them, and keeps the ones filed by hand.
+    private static func v26(_ db: Database) throws {
+        for column in ["mirrors", "folder"] {
+            let present = try db.first(
+                "SELECT COUNT(*) FROM pragma_table_info('tags') WHERE name=?",
+                [.text(column)]) { $0.int(0) } ?? 0
+            guard present > 0 else { continue }
+            try db.exec("ALTER TABLE tags DROP COLUMN \(column)")
+        }
+        let tagged = try db.first(
+            "SELECT COUNT(*) FROM pragma_table_info('aliases') WHERE name='tag_id'") { $0.int(0) } ?? 0
+        guard tagged > 0 else { return }
+        try db.exec("""
+        CREATE TABLE aliases_v26 (
+            id         INTEGER PRIMARY KEY,
+            doc_id     INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+            path       TEXT NOT NULL UNIQUE,
+            created_at REAL NOT NULL
+        );
+        INSERT INTO aliases_v26(id, doc_id, path, created_at)
+        SELECT id, doc_id, path, created_at FROM aliases WHERE tag_id IS NULL;
+        DROP TABLE aliases;
+        ALTER TABLE aliases_v26 RENAME TO aliases;
+        """)
     }
 
     /// The name the naming template last gave a document, so a later change
