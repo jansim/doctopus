@@ -32,7 +32,7 @@ library to a single window, and so to a single `Store`.
 `Store` only reads and writes the index and its own container. Moving,
 renaming or restoring a document's file is the `Indexer`'s, and every such
 move goes through one place there, which updates the row, prunes the folder
-left behind, logs the event and keeps the tag aliases in step.
+left behind, logs the event and forgets any alias of it that is gone from disk.
 
 Both types are split by subject rather than kept in one file: `Store+Queries`,
 `AppModel+Import`, and so on.
@@ -44,10 +44,10 @@ indexing an existing one restructures nothing and renames nothing. Renaming,
 single or batch, is something you ask for. The full contract is
 [File safety](FileSafety.md); [Storage](Storage.md) has the library layout.
 
-Every document has exactly one physical master location. Membership in further
-folders or tags can mirror to disk as native Finder aliases, configurable
-globally or per tag, and the generated ones are registered in the index so they
-can be pruned when a tag changes.
+Every document has exactly one physical master location. Filing it in further
+folders makes native Finder aliases there, which are registered in the index so
+unfiling removes exactly those. Tags are the index's alone and never touch the
+disk.
 
 PDFs are first-class; JPEG and PNG are supported alongside them.
 

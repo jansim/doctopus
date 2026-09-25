@@ -108,7 +108,6 @@ extension AppModel {
             for row in rows {
                 do { try await lib.store.discardGeneratedInfo(row.doc) }
                 catch { failures.append("“\(row.filename)”: \(error.localizedDescription)"); continue }
-                await lib.indexer.syncAliases(docID: row.doc, target: row.url)
             }
             refreshAll()
             reloadDetail()
@@ -187,7 +186,7 @@ extension AppModel {
                       approve: Bool, version: KeptVersion?, lib: Library,
                       since mark: Int64, next: Int64?, notes: [String] = []) async {
         let wanted = secondaries.subtracting([primary.path])
-        let existing = ((try? await lib.store.aliases(for: row.doc)) ?? []).filter { $0.tagID == nil }
+        let existing = (try? await lib.store.aliases(for: row.doc)) ?? []
         var have: Set<String> = []
 
         // Unwanted aliases go first, so one sitting in the folder the file
@@ -221,7 +220,7 @@ extension AppModel {
             let created: URL
             do {
                 created = try AliasManager.createAlias(to: target, in: URL(fileURLWithPath: folder))
-                do { try await lib.store.recordAlias(docID: row.doc, tagID: nil, path: created.path) }
+                do { try await lib.store.recordAlias(docID: row.doc, path: created.path) }
                 catch {
                     // An alias the index does not know of could never be pruned.
                     AliasManager.removeAlias(at: created.path, pointingTo: target)

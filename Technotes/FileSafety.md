@@ -22,11 +22,11 @@ out what each gets. Concretely:
   off the document, when matching rules name different folders, and for any
   destination outside the library. The document
   waits in Needs Review with its candidates kept in `path_suggestions`.
-- Doctopus only deletes an alias it made for a tag, and only if the file at
-  that path is still an alias to that document. An alias you made by dragging
-  onto a folder (a drag with ⌘ held moves the master rather than making one)
-  goes when you delete it, or when it is the placement the document itself
-  moves into.
+- Doctopus only deletes an alias when asked to — unfiling a document from a
+  folder, or deleting its row there — and only if the file at that path is
+  still an alias to that document. An alias you made by dragging onto a folder (a drag with ⌘ held
+  moves the master rather than making one) goes when you delete it, or when it
+  is the placement the document itself moves into.
 - Move to Trash uses the Trash, never a hard delete, and keeps the index entry
   if trashing fails.
 - Every file change made from the window — a move, a rename, filing, an alias,
@@ -39,6 +39,9 @@ out what each gets. Concretely:
   Trash either: it moves to the nearest of those folders, taking that alias's
   place. Undo puts both back, the document where it was and the alias it
   replaced.
-- Tag mirrors in `Tags/` are never promoted this way — they are a view of the
-  library, not a home — and neither is a placement outside the library root.
+- A placement outside the library root is never promoted this way.
+- Tags live in the index alone and never write to disk. Earlier versions could
+  mirror tags into a `Tags/` folder of Finder aliases; a library upgraded from
+  one forgets those aliases but leaves them where they are, for you to keep or
+  delete.
 - A library whose `library.doctopus` was deleted is not recreated at launch.

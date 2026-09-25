@@ -65,7 +65,6 @@ struct LibrarySettings: StoredSettings, Sendable, Equatable {
     /// Optimize in the context menu is the way to ask for it.
     var optimizeOnImport = true
     var autoAcceptMatchingTagSuggestions = false
-    var mirrorTagsAsAliases = false
     var scanDestination = "Inbox"
     var dateOrder: DateOrder = .automatic
     var ignoredDates = ""

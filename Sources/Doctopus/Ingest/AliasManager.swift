@@ -2,14 +2,6 @@ import Foundation
 
 enum AliasManager {
 
-    static func tagFolder(root: URL, tag: Tag) -> URL {
-        if let custom = tag.folder?.nilIfBlank {
-            return URL(fileURLWithPath: (custom as NSString).expandingTildeInPath)
-        }
-        return root.appendingPathComponent(Store.tagMirrorFolder, isDirectory: true)
-                   .appendingPathComponent(safe(tag.name), isDirectory: true)
-    }
-
     @discardableResult
     static func createAlias(to target: URL, in folder: URL) throws -> URL {
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
@@ -52,9 +44,5 @@ enum AliasManager {
 
     static func isAlias(_ url: URL) -> Bool {
         (try? url.resourceValues(forKeys: [.isAliasFileKey]).isAliasFile) == true
-    }
-
-    private static func safe(_ name: String) -> String {
-        name.components(separatedBy: CharacterSet(charactersIn: "/\\:")).joined(separator: "-")
     }
 }

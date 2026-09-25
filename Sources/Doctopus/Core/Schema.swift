@@ -7,7 +7,7 @@ enum Schema {
 
     private static let steps: [@Sendable (Database) throws -> Void] = [
         v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19,
-        v20, v21, v22, v23, v24,
+        v20, v21, v22, v23, v24, v25,
     ]
     static var current: Int { steps.count }
 
@@ -35,6 +35,34 @@ enum Schema {
             [.text(table), .text(column)]) { $0.int(0) } ?? 0
         guard present == 0 else { return }
         try db.exec("ALTER TABLE \(table) ADD COLUMN \(column) \(declaration)")
+    }
+
+    /// Tags no longer mirror to disk as Finder aliases. The aliases they made
+    /// are left where they are, since nothing may delete what is on disk
+    /// uninvited; the index only forgets them, and keeps the ones filed by hand.
+    private static func v25(_ db: Database) throws {
+        for column in ["mirrors", "folder"] {
+            let present = try db.first(
+                "SELECT COUNT(*) FROM pragma_table_info('tags') WHERE name=?",
+                [.text(column)]) { $0.int(0) } ?? 0
+            guard present > 0 else { continue }
+            try db.exec("ALTER TABLE tags DROP COLUMN \(column)")
+        }
+        let tagged = try db.first(
+            "SELECT COUNT(*) FROM pragma_table_info('aliases') WHERE name='tag_id'") { $0.int(0) } ?? 0
+        guard tagged > 0 else { return }
+        try db.exec("""
+        CREATE TABLE aliases_v25 (
+            id         INTEGER PRIMARY KEY,
+            doc_id     INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+            path       TEXT NOT NULL UNIQUE,
+            created_at REAL NOT NULL
+        );
+        INSERT INTO aliases_v25(id, doc_id, path, created_at)
+        SELECT id, doc_id, path, created_at FROM aliases WHERE tag_id IS NULL;
+        DROP TABLE aliases;
+        ALTER TABLE aliases_v25 RENAME TO aliases;
+        """)
     }
 
     /// A document has one note, written like a text box, rather than a list

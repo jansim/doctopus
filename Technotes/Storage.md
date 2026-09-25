@@ -99,4 +99,4 @@ statements. FTS5 with `unicode61 remove_diacritics 2`.
 | `events`, `processing` | `events` is the append-only record of what happened to a document, never trimmed, and the inspector's History — where it came from (scanned, imported from a path, or already in the library at one), what the pipeline did to it, and what somebody changed by hand afterwards. Hand edits made less than five minutes apart, with nothing else logged in between, fold into one `edited` row, one line of `detail` per change. `processing` is the bounded recency view the review reads, holding only which event is on show and whether it has been signed off; a hand edit never enters it |
 | `finder_tags` | Index of the Finder's own tags, which live on the files themselves |
 | `value_icons` | Per-value icons for the fields whose values are still strings; a correspondent or type keeps its icon on its own row, where a rename cannot orphan it |
-| `aliases` | Registry of generated Finder aliases, for automated pruning when tags change |
+| `aliases` | Registry of the Finder aliases a document is filed under in other folders, so unfiling, promotion and Undo act on exactly those and nothing else |

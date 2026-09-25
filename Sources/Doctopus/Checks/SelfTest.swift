@@ -154,14 +154,6 @@ enum SelfTest {
         Check.that("an empty folder on disk still shows in the tree",
                    findNode(path: emptyFolderPath, in: treeWithEmptyFolder)?.count == 0)
 
-        let tagsMirror = root.appendingPathComponent("Tags", isDirectory: true)
-            .appendingPathComponent("Some Tag", isDirectory: true)
-        try? FileManager.default.createDirectory(at: tagsMirror, withIntermediateDirectories: true)
-        let treeWithTagsMirror = (try? await store.folderTree()) ?? []
-        let tagsMirrorPath = store.absPath(store.relPath(tagsMirror.path))
-        Check.that("the Tags/ mirror is not promoted into the folder tree",
-                   findNode(path: tagsMirrorPath, in: treeWithTagsMirror) == nil)
-
         if let sample = rows.first(where: { store.relPath($0.path).contains("/") }) {
             let folder = (sample.path as NSString).deletingLastPathComponent
             let renamed = folder + " Renamed"
@@ -251,6 +243,7 @@ enum SelfTest {
 
         ruleMigration()
         noteMigration()
+        tagMirroringRemoved()
 
         print("\nRULE EDITING")
         let samples = (try? await store.ruleSamples()) ?? []
@@ -484,7 +477,7 @@ enum SelfTest {
         if let target = rows.first(where: { $0.directory.hasSuffix("Work") })?.url.deletingLastPathComponent(),
            let source = rows.first(where: { $0.directory.hasSuffix("Inbox") }) {
             if let created = try? AliasManager.createAlias(to: source.url, in: target) {
-                try? await store.recordAlias(docID: source.doc, tagID: nil, path: created.path)
+                try? await store.recordAlias(docID: source.doc, path: created.path)
                 let listed = (try? await store.listDocuments(selection: .folder(target.path),
                                                              query: SearchQuery(""), sort: .added,
                                                              ascending: false)) ?? []
@@ -504,7 +497,7 @@ enum SelfTest {
            let second = rows.first(where: { $0.directory.hasSuffix("Work") })?
                .url.deletingLastPathComponent(),
            let created = try? AliasManager.createAlias(to: source.url, in: second) {
-            try? await store.recordAlias(docID: source.doc, tagID: nil, path: created.path)
+            try? await store.recordAlias(docID: source.doc, path: created.path)
             let mark = (try? await store.latestEventID()) ?? 0
             let landed = try? await indexer.promoteClosestAlias(docID: source.doc)
             print("  deleted \(source.filename.padded(32)) → "
@@ -523,8 +516,7 @@ enum SelfTest {
 
             let undone = await indexer.undo([source.doc], since: mark)
             let restored = (try? await store.documentPath(source.doc)) ?? ""
-            let placements = ((try? await store.aliases(for: source.doc)) ?? [])
-                .filter { $0.tagID == nil }
+            let placements = (try? await store.aliases(for: source.doc)) ?? []
             Check.that("undo returns a promoted document to the folder it was deleted from",
                        undone == 1 && restored == source.path, "\(undone) change(s) undone")
             Check.that("…and writes the alias it stood in for again",
@@ -549,7 +541,7 @@ enum SelfTest {
            let elsewhere = rows.first(where: { $0.directory.hasSuffix("Work") })?
                .url.deletingLastPathComponent(),
            let created = try? AliasManager.createAlias(to: doc.url, in: elsewhere) {
-            try? await store.recordAlias(docID: doc.doc, tagID: nil, path: created.path)
+            try? await store.recordAlias(docID: doc.doc, path: created.path)
             let record = ((try? await store.aliases(for: doc.doc)) ?? [])
                 .first(where: { $0.path == created.path })
             AliasManager.removeAlias(at: created.path, pointingTo: doc.url)
@@ -561,7 +553,7 @@ enum SelfTest {
                 rule: nil, from: doc.path, to: created.path, approved: true)
 
             let undone = await indexer.undo([doc.doc], since: mark)
-            let back = ((try? await store.aliases(for: doc.doc)) ?? []).filter { $0.tagID == nil }
+            let back = (try? await store.aliases(for: doc.doc)) ?? []
             // `&&` takes its right side as a non-async autoclosure, so anything
             // awaited has to be in hand before the check, not inside it.
             let stillHome = (try? await store.documentPath(doc.doc)) ?? ""
@@ -1665,13 +1657,13 @@ enum SelfTest {
         let home = subject.url.deletingLastPathComponent()
         let elsewhere = root.appendingPathComponent("Also Filed", isDirectory: true)
         if let alias = try? AliasManager.createAlias(to: subject.url, in: elsewhere) {
-            try? await store.recordAlias(docID: subject.doc, tagID: nil, path: alias.path)
+            try? await store.recordAlias(docID: subject.doc, path: alias.path)
             try? fm.setAttributes([.posixPermissions: 0o555], ofItemAtPath: home.path)
             var refusal: String?
             do { _ = try await indexer.promoteClosestAlias(docID: subject.doc) }
             catch { refusal = error.localizedDescription }
             try? fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: home.path)
-            let placements = ((try? await store.aliases(for: subject.doc)) ?? []).filter { $0.tagID == nil }
+            let placements = (try? await store.aliases(for: subject.doc)) ?? []
             let master = Store.canonical(subject.url.standardizedFileURL.path)
             let refiled = placements.contains { placement in
                 guard let points = AliasManager.resolve(URL(fileURLWithPath: placement.path)) else { return false }
@@ -2363,9 +2355,9 @@ enum SelfTest {
         if let doc = rows.first(where: { $0.directory.hasSuffix("Personal") }) {
             let folder = root.appendingPathComponent("Work", isDirectory: true)
             if let alias = try? AliasManager.createAlias(to: doc.url, in: folder) {
-                try? await store.recordAlias(docID: doc.doc, tagID: nil, path: alias.path)
+                try? await store.recordAlias(docID: doc.doc, path: alias.path)
                 await indexer.reprocess(ids: [doc.doc])
-                await indexer.syncAliases(docID: doc.doc, target: doc.url)
+                await indexer.forgetVanishedAliases(of: doc.doc)
                 Check.that("a folder alias the user made survives reprocessing",
                            fm.fileExists(atPath: alias.path))
                 AliasManager.removeAlias(at: alias.path, pointingTo: doc.url)

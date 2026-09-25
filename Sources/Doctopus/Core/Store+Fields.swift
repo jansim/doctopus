@@ -241,7 +241,6 @@ extension Store {
         let merged = try db.transaction { () -> Int64 in
             try db.run("UPDATE OR IGNORE document_tags SET tag_id=? WHERE tag_id=?", [.int(target), .int(id)])
             try db.run("DELETE FROM document_tags WHERE tag_id=?", [.int(id)])
-            try db.run("UPDATE OR IGNORE aliases SET tag_id=? WHERE tag_id=?", [.int(target), .int(id)])
             try db.run("DELETE FROM tags WHERE id=?", [.int(id)])
             return target
         }

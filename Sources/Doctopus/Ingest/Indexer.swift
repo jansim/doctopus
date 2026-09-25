@@ -368,7 +368,7 @@ actor Indexer {
                              action: isImport ? .imported : .indexed)
         }
 
-        await syncAliases(docID: id, target: url)
+        await forgetVanishedAliases(of: id)
 
         if !isImport, !isNew, optimized == nil {
             try? await store.logProcessing(docID: id, action: .indexed,
@@ -468,7 +468,7 @@ actor Indexer {
             await suggest(decision, for: id, chosen: chosen.map { URL(fileURLWithPath: $0.path) })
             guard applyingActions else { continue }
             await applyRuleActions(decision, to: id)
-            await syncAliases(docID: id, target: input.url)
+            await forgetVanishedAliases(of: id)
         }
     }
 
@@ -541,36 +541,13 @@ actor Indexer {
         }
     }
 
-    /// Only tag aliases are Doctopus's to prune. Hand-made folder aliases are left
-    /// alone, and nothing is deleted unless it is still our alias to this document.
-    func syncAliases(docID: Int64, target: URL) async {
-        let tags = (try? await store.tags(for: docID)) ?? []
-        let mirroring = tags.filter { $0.mirrors || settings.mirrorTagsAsAliases }
-        let existing = (try? await store.aliases(for: docID)) ?? []
-        let root = store.root
-
-        var wanted: [Int64: URL] = [:]
-        for tag in mirroring { wanted[tag.tagID] = AliasManager.tagFolder(root: root, tag: tag) }
-
-        for alias in existing {
-            guard let tagID = alias.tagID else {
-                if !FileManager.default.fileExists(atPath: alias.path) {
-                    try? await store.deleteAlias(id: alias.id)
-                }
-                continue
-            }
-            let stillThere = FileManager.default.fileExists(atPath: alias.path)
-            if wanted[tagID] == nil || !stillThere {
-                if stillThere { AliasManager.removeAlias(at: alias.path, pointingTo: target) }
-                try? await store.deleteAlias(id: alias.id)
-            }
-        }
-
-        let present = Set(((try? await store.aliases(for: docID)) ?? []).compactMap(\.tagID))
-        for (tagID, folder) in wanted where !present.contains(tagID) {
-            if let created = try? AliasManager.createAlias(to: target, in: folder) {
-                try? await store.recordAlias(docID: docID, tagID: tagID, path: created.path)
-            }
+    /// Forgets the placement aliases that are no longer on disk. Only the
+    /// records go: an alias is the user's once it is filed, so it is theirs to
+    /// delete, and one still there is left alone.
+    func forgetVanishedAliases(of docID: Int64) async {
+        for alias in (try? await store.aliases(for: docID)) ?? []
+        where !FileManager.default.fileExists(atPath: alias.path) {
+            try? await store.deleteAlias(id: alias.id)
         }
     }
 
@@ -585,7 +562,6 @@ actor Indexer {
         let homePath = Store.canonical(home.standardizedFileURL.path)
 
         let placements = ((try? await store.aliases(for: docID)) ?? []).filter { alias in
-            guard alias.tagID == nil else { return false }
             let folder = Store.canonical(
                 URL(fileURLWithPath: alias.path).deletingLastPathComponent()
                     .standardizedFileURL.path)
@@ -623,7 +599,7 @@ actor Indexer {
                 // Nothing logged the alias's removal, so Undo could not bring it back.
                 if let again = try? AliasManager.createAlias(to: url, in: folder),
                    unregistered || again.path != alias.path {
-                    try? await store.recordAlias(docID: docID, tagID: nil, path: again.path)
+                    try? await store.recordAlias(docID: docID, path: again.path)
                 }
                 throw error
             }
@@ -1006,7 +982,7 @@ actor Indexer {
     }
 
     /// Every move of a document's file ends here: the file, its row, the folder
-    /// it left, its event and its tag aliases.
+    /// it left, its event and its alias records.
     @discardableResult
     private func relocate(_ id: Int64, from url: URL, into folder: URL, named name: String,
                           action: EventAction?, detail: String?, rule: String? = nil,
@@ -1030,7 +1006,7 @@ actor Indexer {
             try? await store.logProcessing(docID: id, action: action, detail: detail,
                                            rule: rule, from: url.path, to: target.path, approved: approved)
         }
-        await syncAliases(docID: id, target: target)
+        await forgetVanishedAliases(of: id)
         return target
     }
 
@@ -1073,7 +1049,7 @@ actor Indexer {
         case .unfiled:
             if let current, FileManager.default.fileExists(atPath: current.path),
                let alias = try? AliasManager.createAlias(to: current, in: moved.deletingLastPathComponent()) {
-                try? await store.recordAlias(docID: event.docID, tagID: nil, path: alias.path)
+                try? await store.recordAlias(docID: event.docID, path: alias.path)
             }
         default:
             guard FileManager.default.fileExists(atPath: moved.path) else { break }
@@ -1084,7 +1060,7 @@ actor Indexer {
             else { return false }
             if event.action == .promoted,
                let alias = try? AliasManager.createAlias(to: target, in: moved.deletingLastPathComponent()) {
-                try? await store.recordAlias(docID: event.docID, tagID: nil, path: alias.path)
+                try? await store.recordAlias(docID: event.docID, path: alias.path)
             }
         }
         // An event that stays on record would be handed straight back by

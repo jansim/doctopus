@@ -114,7 +114,7 @@ extension Store {
     }
 
     func folderAliases(for docID: Int64) throws -> [String] {
-        try db.map("SELECT path FROM aliases WHERE doc_id=? AND tag_id IS NULL", [.int(docID)]) {
+        try db.map("SELECT path FROM aliases WHERE doc_id=?", [.int(docID)]) {
             absPath($0.string(0))
         }
     }

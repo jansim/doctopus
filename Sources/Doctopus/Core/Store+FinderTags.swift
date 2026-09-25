@@ -48,7 +48,7 @@ extension Store {
             ORDER BY t.name COLLATE NOCASE
             """, args) { row in
             own[row.int(0), default: []].append(
-                Tag(tagID: row.int(1), name: row.string(2), color: row.int(3), mirrors: false, folder: nil,
+                Tag(tagID: row.int(1), name: row.string(2), color: row.int(3),
                     parentID: row.intOrNil(4), implied: row.bool(5)))
         }
 

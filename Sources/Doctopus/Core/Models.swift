@@ -196,8 +196,6 @@ struct Tag: Identifiable, Hashable, Sendable {
     var tagID: Int64
     var name: String
     var color: Int64
-    var mirrors: Bool
-    var folder: String?
     var count: Int = 0
     var parentID: Int64?
     var depth: Int = 0

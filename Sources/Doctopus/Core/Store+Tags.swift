@@ -4,15 +4,14 @@ extension Store {
 
     func tags() throws -> [Tag] {
         let flat = try db.map("""
-            SELECT t.id, t.name, t.color, t.mirrors, t.folder, COUNT(dt.doc_id), t.parent_id
+            SELECT t.id, t.name, t.color, COUNT(dt.doc_id), t.parent_id
             FROM tags t
             LEFT JOIN document_tags dt ON dt.tag_id = t.id
             LEFT JOIN documents d ON d.id = dt.doc_id AND d.missing=0 AND d.deleted_at IS NULL
             GROUP BY t.id ORDER BY t.name COLLATE NOCASE
             """) {
             Tag(tagID: $0.int(0), name: $0.string(1), color: $0.int(2),
-                mirrors: $0.bool(3), folder: $0.stringOrNil(4), count: Int($0.int(5)),
-                parentID: $0.intOrNil(6))
+                count: Int($0.int(3)), parentID: $0.intOrNil(4))
         }
         return Store.nested(flat)
     }
@@ -155,30 +154,25 @@ extension Store {
         try refreshSearchIndex(affected)
     }
 
-    func setTagMirroring(_ id: Int64, _ on: Bool, folder: String?) throws {
-        try db.run("UPDATE tags SET mirrors=?, folder=? WHERE id=?",
-                   [.bool(on), .text(folder), .int(id)])
-    }
-
     func tags(for docID: Int64) throws -> [Tag] {
         try db.map("""
-            SELECT t.id, t.name, t.color, t.mirrors, t.folder, t.parent_id, dt.auto FROM tags t
+            SELECT t.id, t.name, t.color, t.parent_id, dt.auto FROM tags t
             JOIN document_tags dt ON dt.tag_id=t.id WHERE dt.doc_id=?
             ORDER BY t.name COLLATE NOCASE
             """, [.int(docID)]) {
-            Tag(tagID: $0.int(0), name: $0.string(1), color: $0.int(2), mirrors: $0.bool(3),
-                folder: $0.stringOrNil(4), parentID: $0.intOrNil(5), implied: $0.bool(6))
+            Tag(tagID: $0.int(0), name: $0.string(1), color: $0.int(2),
+                parentID: $0.intOrNil(3), implied: $0.bool(4))
         }
     }
 
-    func recordAlias(docID: Int64, tagID: Int64?, path: String) throws {
-        try db.run("INSERT OR REPLACE INTO aliases(doc_id, tag_id, path, created_at) VALUES(?,?,?,?)",
-                   [.int(docID), .int(tagID), .text(relPath(path)), .double(Date().timeIntervalSince1970)])
+    func recordAlias(docID: Int64, path: String) throws {
+        try db.run("INSERT OR REPLACE INTO aliases(doc_id, path, created_at) VALUES(?,?,?)",
+                   [.int(docID), .text(relPath(path)), .double(Date().timeIntervalSince1970)])
     }
 
-    func aliases(for docID: Int64) throws -> [(id: Int64, tagID: Int64?, path: String)] {
-        try db.map("SELECT id, tag_id, path FROM aliases WHERE doc_id=?", [.int(docID)]) {
-            ($0.int(0), $0.intOrNil(1), absPath($0.string(2)))
+    func aliases(for docID: Int64) throws -> [(id: Int64, path: String)] {
+        try db.map("SELECT id, path FROM aliases WHERE doc_id=?", [.int(docID)]) {
+            ($0.int(0), absPath($0.string(1)))
         }
     }
 

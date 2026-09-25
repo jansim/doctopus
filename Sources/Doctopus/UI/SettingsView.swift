@@ -65,9 +65,6 @@ private struct GeneralSettings: View {
                     TextField("Scan destination folder", text: $model.settings.scanDestination)
                     Text("Relative to this library's folder. Right-clicking a folder in the sidebar always overrides it.")
                         .font(.caption).foregroundStyle(.secondary)
-                    Toggle("Mirror all tags to disk as Finder aliases", isOn: $model.settings.mirrorTagsAsAliases)
-                    Text("Aliases live in a Tags folder inside the library's folder. Individual tags can override this from the sidebar.")
-                        .font(.caption).foregroundStyle(.secondary)
                 }
 
                 Section("Dates", scope: .library) {
@@ -269,11 +266,6 @@ private struct TagSettings: View {
                         Spacer()
                         Text("\(tag.count)")
                             .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
-                        Toggle("Mirror", isOn: Binding(
-                            get: { tag.mirrors },
-                            set: { model.setTagMirroring(tag, enabled: $0) }))
-                            .toggleStyle(.checkbox)
-                            .help("Mirror this tag to disk as Finder aliases")
                         Button {
                             guard let new = TextPrompt.ask(title: "Rename Tag",
                                                            message: "Renaming to an existing tag merges them.",
@@ -294,7 +286,7 @@ private struct TagSettings: View {
             } header: {
                 ScopedHeader(title: "Tags", scope: .library)
             } footer: {
-                Text("Mirrored tags get a folder of Finder aliases inside the indexed root, so tag membership is visible from Finder without duplicating any file.")
+                Text("Renaming a tag to one that already exists merges the two. Tags can be nested by right-clicking them in the sidebar.")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
