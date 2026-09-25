@@ -34,11 +34,11 @@ struct Router: Sendable {
     var deriveWhenNoRule: Bool
 
     func evaluate(text: String, filename: String, findings: DocumentAnalyzer.Findings,
-                  insight: DocumentInsight?, currentDirectory: URL) -> Decision {
+                  insight: DocumentInsight?, currentDirectory: URL, tags: [String] = []) -> Decision {
         let correspondent = insight?.correspondent ?? findings.correspondent
         let docType = insight?.docType ?? findings.docType
         let subject = Rule.Subject(text: text, filename: filename,
-                                   correspondent: correspondent, docType: docType)
+                                   correspondent: correspondent, docType: docType, tags: tags)
 
         var matched: [Rule] = []
         var ruleCandidates: [Candidate] = []

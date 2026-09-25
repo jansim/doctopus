@@ -104,7 +104,8 @@ extension Store {
             : "AND d.id=?"
         return try db.map("""
             SELECT d.id, d.path, d.filename, d.created_at, m.doc_date, ec.name, et.name,
-                   (SELECT f.body FROM doc_fts f WHERE f.rowid = d.id), m.title, m.language
+                   (SELECT f.body FROM doc_fts f WHERE f.rowid = d.id), m.title, m.language,
+                   \(Self.tagNamesColumn)
             FROM documents d
             LEFT JOIN metadata m ON m.doc_id = d.id
             LEFT JOIN entities ec ON ec.id = m.correspondent_id
@@ -115,14 +116,15 @@ extension Store {
                        created: Date(timeIntervalSince1970: $0.double(3)), docDate: $0.date(4),
                        title: $0.stringOrNil(8), language: $0.stringOrNil(9),
                        subject: Rule.Subject(text: $0.stringOrNil(7) ?? "", filename: $0.string(2),
-                                             correspondent: $0.stringOrNil(5), docType: $0.stringOrNil(6)))
+                                             correspondent: $0.stringOrNil(5), docType: $0.stringOrNil(6),
+                                             tags: Self.tagNames($0.stringOrNil(10))))
         }
     }
 
     func ruleSamples(limit: Int = 5000) throws -> [Rule.Subject] {
         try db.map("""
             SELECT d.filename, ec.name, et.name,
-                   (SELECT f.body FROM doc_fts f WHERE f.rowid = d.id)
+                   (SELECT f.body FROM doc_fts f WHERE f.rowid = d.id), \(Self.tagNamesColumn)
             FROM documents d
             LEFT JOIN metadata m ON m.doc_id = d.id
             LEFT JOIN entities ec ON ec.id = m.correspondent_id
@@ -130,7 +132,16 @@ extension Store {
             WHERE d.missing=0 AND d.deleted_at IS NULL ORDER BY d.created_at DESC LIMIT ?
             """, [.int(Int64(limit))]) {
             Rule.Subject(text: $0.stringOrNil(3) ?? "", filename: $0.string(0),
-                         correspondent: $0.stringOrNil(1), docType: $0.stringOrNil(2))
+                         correspondent: $0.stringOrNil(1), docType: $0.stringOrNil(2),
+                         tags: Self.tagNames($0.stringOrNil(4)))
         }
+    }
+
+    /// A document's tag names as one column, for a query over documents `d`.
+    static let tagNamesColumn = "(SELECT group_concat(t.name, char(31)) FROM document_tags dt "
+        + "JOIN tags t ON t.id = dt.tag_id WHERE dt.doc_id = d.id)"
+
+    static func tagNames(_ column: String?) -> [String] {
+        (column ?? "").split(separator: "\u{1f}").map(String.init)
     }
 }

@@ -20,6 +20,9 @@ struct Rule: Identifiable, Hashable, Sendable {
         var filename: String = ""
         var correspondent: String?
         var docType: String?
+        /// What the document is tagged with before this pass. Tags a rule adds
+        /// are not seen by the rules run alongside it, so no rule sets another off.
+        var tags: [String] = []
 
         func value(for field: RuleField) -> String {
             switch field {
@@ -27,6 +30,8 @@ struct Rule: Identifiable, Hashable, Sendable {
             case .filename: return filename
             case .correspondent: return correspondent ?? ""
             case .type: return docType ?? ""
+            // Not joined by whitespace, which a phrase reads straight across.
+            case .tags: return tags.joined(separator: "\u{1f}")
             }
         }
     }
@@ -91,6 +96,7 @@ enum RuleField: String, CaseIterable, Sendable {
     case filename
     case correspondent
     case type
+    case tags
 
     var label: String {
         switch self {
@@ -98,6 +104,7 @@ enum RuleField: String, CaseIterable, Sendable {
         case .filename: return "Filename"
         case .correspondent: return "Correspondent"
         case .type: return "Document type"
+        case .tags: return "Tags"
         }
     }
 
@@ -107,6 +114,7 @@ enum RuleField: String, CaseIterable, Sendable {
         case .filename: return "the filename"
         case .correspondent: return "the correspondent"
         case .type: return "the document type"
+        case .tags: return "the tags"
         }
     }
 }
