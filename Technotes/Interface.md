@@ -4,9 +4,9 @@ A native AppKit/SwiftUI three-pane layout.
 
 ## Sidebar
 
-The physical directory tree, the Recent Processing queue — recently filed items
-with the rules or models that were applied, and an
-Approved / Needs Review toggle — and Paperless-ngx-style smart views: Tags,
+The physical directory tree, Needs Review, Recently Reviewed — the documents
+most recently approved, newest approval first, each with the rules or models
+that were applied and an Approved / Needs Review toggle — and Paperless-ngx-style smart views: Tags,
 Correspondents, Languages, Document Types.
 
 ## Windows
@@ -54,7 +54,7 @@ filters and sort options.
 
 ### Review and assign
 
-In Recent Processing and Needs Review the centre pane splits, and the selected
+In Needs Review and Recently Reviewed the centre pane splits, and the selected
 document is reviewed underneath the list.
 
 A document is reviewed as one proposal with a single Accept. A rule that would

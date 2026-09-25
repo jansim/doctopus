@@ -14,7 +14,7 @@ extension Store {
         try db.run("INSERT INTO processing(event_id, doc_id, status) VALUES(?,?,?)",
                    [.int(eventID), .int(docID), .bool(approved)])
         if !approved {
-            try db.run("UPDATE documents SET approved=0 WHERE id=?", [.int(docID)])
+            try db.run("UPDATE documents SET approved=0, reviewed_at=NULL WHERE id=?", [.int(docID)])
         }
         // Keep the view bounded. Ids are monotonic, so this is a range delete
         // rather than a sort of the whole table on every insert. The offset is

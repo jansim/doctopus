@@ -67,8 +67,8 @@ extension Store {
 
         switch selection {
         case .all, .deleted, .savedView: break
-        case .queue:
-            wheres.append("d.id IN (SELECT doc_id FROM processing)")
+        case .reviewed:
+            wheres.append("d.reviewed_at IS NOT NULL")
         case .folder(let path):
             let rel = relPath(path)
             if !rel.isEmpty {
@@ -187,12 +187,16 @@ extension Store {
                 ON p.id = (SELECT id FROM processing WHERE doc_id = d.id ORDER BY id DESC LIMIT 1)
             LEFT JOIN events pe ON pe.id = p.event_id
             """
-            queueColumns = "p.id, pe.at, pe.action, pe.detail, pe.rule, p.status"
+            // Recently Reviewed dates each row by its approval, not by what the pipeline last did.
+            let at = selection == .reviewed ? "d.reviewed_at" : "pe.at"
+            queueColumns = "p.id, \(at), pe.action, pe.detail, pe.rule, p.status"
         }
 
         let order: String
         if selection == .deleted {
             order = "d.deleted_at DESC"
+        } else if selection == .reviewed {
+            order = "d.reviewed_at DESC, d.id DESC"
         } else if selection.isQueueMode {
             order = "pe.at DESC, d.created_at DESC"
         } else if sort == .relevance && !joinFTS.isEmpty {

@@ -13,7 +13,7 @@ struct SidebarView: View {
                 row(.all, "All Documents", "tray.full", model.stats.total)
                 row(.needsReview, "Needs Review", "exclamationmark.triangle", model.needsReviewCount)
                 row(.untagged, "Untagged", "tag.slash", nil)
-                row(.queue, "Recent Processing", "clock.arrow.circlepath", model.queue.count)
+                row(.reviewed, "Recently Reviewed", "checkmark.circle", nil)
                 if model.stats.deleted > 0 {
                     row(.deleted, "Recently Deleted", "trash", model.stats.deleted)
                 }
