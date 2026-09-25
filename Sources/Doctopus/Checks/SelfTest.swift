@@ -136,6 +136,7 @@ enum SelfTest {
         await contentHashes(store: store, rows: rows)
         await fileIDs(store: store, indexer: indexer)
 
+        await filingExamples(store: store, rows: rows)
         await failuresAreSaid(store: store, indexer: indexer)
         await unreadableFolders(store: store)
         await droppedEvents(store: store)
