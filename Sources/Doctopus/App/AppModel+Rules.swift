@@ -13,8 +13,7 @@ extension AppModel {
     /// Documents waiting for approval, and those a rule would still change.
     var needsReviewCount: Int {
         guard let lib = library else { return 0 }
-        let waiting = lib.queue.filter { !$0.approved }
-        return waiting.count + lib.ruleMatchedDocs.subtracting(waiting.map(\.docID)).count
+        return lib.stats.waiting.union(lib.ruleMatchedDocs).count
     }
 
     /// Debounced: the indexer triggers a refresh per document.

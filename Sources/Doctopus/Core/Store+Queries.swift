@@ -421,7 +421,10 @@ extension Store {
         var total = 0
         var pending = 0
         var failed = 0
-        var needsReview = 0
+        /// Documents in Recent Processing, counted as its list shows them.
+        var queued = 0
+        /// Documents with processing still waiting for approval.
+        var waiting: Set<Int64> = []
         var bytes: Int64 = 0
         var saved: Int64 = 0
         var deleted = 0
@@ -431,13 +434,18 @@ extension Store {
         var s = Stats()
         try db.query("""
             SELECT COUNT(*),
-                   SUM(ocr_state=0), SUM(ocr_state=2), SUM(approved=0),
+                   SUM(ocr_state=0), SUM(ocr_state=2), SUM(id IN (SELECT doc_id FROM processing)),
                    SUM(size), SUM(COALESCE(original_size,size) - size)
             FROM documents WHERE missing=0 AND deleted_at IS NULL
             """) { r in
             s.total = Int(r.int(0)); s.pending = Int(r.int(1)); s.failed = Int(r.int(2))
-            s.needsReview = Int(r.int(3)); s.bytes = r.int(4); s.saved = max(0, r.int(5))
+            s.queued = Int(r.int(3)); s.bytes = r.int(4); s.saved = max(0, r.int(5))
         }
+        s.waiting = Set(try db.map("""
+            SELECT id FROM documents
+            WHERE missing=0 AND deleted_at IS NULL
+              AND id IN (SELECT doc_id FROM processing WHERE status=0)
+            """) { $0.int(0) })
         s.deleted = try deletedCount()
         return s
     }
