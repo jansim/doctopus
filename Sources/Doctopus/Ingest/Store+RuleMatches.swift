@@ -69,12 +69,19 @@ extension Store {
             guard !matched.isEmpty || !suppressed.isEmpty else { continue }
             var found: [RuleMatch] = []
             for rule in all where matched.contains(rule.id) || suppressed.contains(rule.id) {
-                let changes = matched.contains(rule.id) ? check.changes(rule, for: doc.doc) : []
-                let isOutlier = suppressed.contains(rule.id)
-                guard isOutlier || !changes.isEmpty else { continue }
-                found.append(RuleMatch(ruleID: rule.id, ruleName: rule.name,
-                                       changes: changes, suppressed: isOutlier))
+                let effects = matched.contains(rule.id) ? check.effects(rule, for: doc.doc) : (pending: [], inEffect: [])
+                found.append(RuleMatch(ruleID: rule.id, ruleName: rule.name, changes: effects.pending,
+                                       suppressed: suppressed.contains(rule.id), inEffect: effects.inEffect))
             }
+            // What is in effect only matters where another rule disagrees with it.
+            let contested = RuleMatch.conflicts(among: found).flatMap(\.options)
+            for i in found.indices {
+                let id = found[i].ruleID
+                found[i].inEffect.removeAll { change in
+                    !contested.contains { $0.ruleID == id && $0.change == change }
+                }
+            }
+            found.removeAll { !$0.suppressed && $0.changes.isEmpty && $0.inEffect.isEmpty }
             if !found.isEmpty { result[doc.id] = found }
         }
         return result

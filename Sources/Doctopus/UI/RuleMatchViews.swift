@@ -23,13 +23,13 @@ struct RuleMatchBadge: View {
     }
 }
 
-/// Which of a document's pending changes the user has turned down. A conflict
+/// Which of a document's rule changes the user has turned down. A conflict
 /// counts as settled once no more than one of its options is still accepted.
 struct RuleMatchChoices {
     var declined: [Int64: Set<RuleMatch.Change>] = [:]
 
     func accepted(_ match: RuleMatch) -> Set<RuleMatch.Change> {
-        Set(match.changes).subtracting(declined[match.ruleID] ?? [])
+        match.wants.subtracting(declined[match.ruleID] ?? [])
     }
 
     func isAccepted(_ change: RuleMatch.Change, of ruleID: Int64) -> Bool {
@@ -188,7 +188,7 @@ private struct RuleMatchCard: View {
 
     var body: some View {
         let accepted = choices.accepted(match)
-        let partial = accepted.count < match.changes.count
+        let partial = accepted != match.wants
         VStack(alignment: .leading, spacing: 7) {
             VStack(alignment: .leading, spacing: 5) {
                 HStack(spacing: 6) {
@@ -199,14 +199,14 @@ private struct RuleMatchCard: View {
                     Spacer(minLength: 0)
                     if match.suppressed { Badge("Suppressed") }
                 }
-                if match.changes.isEmpty {
+                if match.changes.isEmpty && match.inEffect.isEmpty {
                     Text("Nothing left for this rule to change.")
                         .font(.caption).foregroundStyle(.secondary)
                 } else {
                     VStack(alignment: .leading, spacing: 3) {
-                        ForEach(match.changes, id: \.self) { change in
+                        ForEach(match.changes + match.inEffect, id: \.self) { change in
                             Label {
-                                Text(change.label)
+                                Text(change.label + (match.inEffect.contains(change) ? " (in effect)" : ""))
                                     .strikethrough(!accepted.contains(change))
                                     .lineLimit(2)
                                     .truncationMode(.middle)
@@ -232,7 +232,7 @@ private struct RuleMatchCard: View {
                     }
                     .buttonStyle(.borderedProminent)
                     .tint(.purple)
-                    .disabled(blocked || accepted.isEmpty)
+                    .disabled(blocked || accepted.isEmpty || (!partial && match.changes.isEmpty))
                     .help(blocked
                           ? "Another rule wants something different here — choose between them above"
                           : "Apply “\(match.ruleName)” to this document now")

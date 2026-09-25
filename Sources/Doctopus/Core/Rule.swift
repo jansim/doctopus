@@ -217,10 +217,16 @@ struct RuleMatch: Identifiable, Hashable, Sendable {
     var ruleName: String
     var changes: [Change]
     var suppressed: Bool
+    /// What the rule wants that already holds. Kept only while another rule
+    /// wants something different, so the one already applied has a say.
+    var inEffect: [Change] = []
 
     var id: Int64 { ruleID }
 
-    var isPending: Bool { !suppressed && !changes.isEmpty }
+    var isPending: Bool { !suppressed && !(changes.isEmpty && inEffect.isEmpty) }
+
+    /// Everything the rule stands for here, so declining any of it is a partial take.
+    var wants: Set<Change> { Set(changes + inEffect) }
 
     /// The folder the rule would move the document to, relative to the library.
     var moveTarget: String? {
@@ -269,11 +275,14 @@ struct RuleMatch: Identifiable, Hashable, Sendable {
     }
 
     var summary: String {
-        "Rule “\(ruleName)”: " + changes.map(\.label).joined(separator: "; ")
+        "Rule “\(ruleName)”: " + (changes.map(\.label) + inEffect.map { $0.label + " (in effect)" })
+            .joined(separator: "; ")
     }
 
-    /// Pending rules that want different values for the same single-valued
-    /// action — two folders, two names. Tags add up, so they never conflict.
+    /// Rules that want different values for the same single-valued action —
+    /// two folders, two names — at least one of them not yet applied. A rule
+    /// already in effect counts, or the next one would quietly undo it.
+    /// Tags add up, so they never conflict.
     struct Conflict: Identifiable, Hashable, Sendable {
         var kind: RuleActionKind
         var options: [Option]
@@ -293,15 +302,17 @@ struct RuleMatch: Identifiable, Hashable, Sendable {
     }
 
     static func conflicts(among matches: [RuleMatch]) -> [Conflict] {
-        let pending = matches.filter(\.isPending)
-        guard pending.count > 1 else { return [] }
+        let live = matches.filter { !$0.suppressed }
+        guard live.count > 1 else { return [] }
         return RuleActionKind.allCases.compactMap { kind in
             guard kind != .addTags else { return nil }
-            let options = pending.compactMap { match in
-                match.changes.first { $0.kind == kind }.map {
+            let options = live.compactMap { match in
+                (match.changes + match.inEffect).first { $0.kind == kind }.map {
                     Conflict.Option(ruleID: match.ruleID, ruleName: match.ruleName, change: $0)
                 }
             }
+            // Values already in effect agree with each other, so a
+            // disagreement always involves a change still pending.
             guard Set(options.map(\.change)).count > 1 else { return nil }
             return Conflict(kind: kind, options: options)
         }
