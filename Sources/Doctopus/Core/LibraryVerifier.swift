@@ -62,7 +62,7 @@ enum LibraryVerifier {
             report.issues.append(VerificationReport.Issue(
                 severity: .error,
                 title: "Damaged index",
-                detail: "SQLite’s integrity check failed: \(problem). File › Restore Index puts a backup back."
+                detail: "SQLite’s integrity check failed: \(problem). View › Restore Index puts a backup back."
             ))
         }
 

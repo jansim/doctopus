@@ -38,7 +38,7 @@ A copy is only taken of an index that passes `PRAGMA quick_check`. One that
 fails is said, once, and no backup is taken, so damage never pushes the last
 good copies out. Verify Library runs the same check.
 
-File › Restore Index puts one back through the open connection, after first
+View › Restore Index puts one back through the open connection, after first
 copying the index as it is into `backups/before-restore-…`, which pruning
 never touches. An index too damaged to open at all is offered its newest
 backup when the library is opened; the damaged files are moved into

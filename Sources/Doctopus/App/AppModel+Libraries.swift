@@ -40,7 +40,7 @@ extension AppModel {
             return .failed
         } catch {
             // An index that will not open at all cannot be restored through
-            // File › Restore Index, so the newest backup is offered here.
+            // View › Restore Index, so the newest backup is offered here.
             guard Store.isDamage(error), let backup = Store.backups(in: container).first,
                   confirmRestoreUnopenable(root.lastPathComponent, backup, error) else {
                 errorMessage = "Could not open a library at \(root.lastPathComponent): \(error.localizedDescription)"
@@ -306,7 +306,7 @@ extension AppModel {
                 if case .damaged(let problem) = outcome, !lib.damageReported {
                     lib.damageReported = true
                     self?.errorMessage = "The index of \(lib.displayName) failed SQLite’s integrity check (\(problem)). "
-                        + "No backup was taken, so the last good ones are kept: File › Restore Index puts one back."
+                        + "No backup was taken, so the last good ones are kept: View › Restore Index puts one back."
                 }
                 try? await Task.sleep(for: .seconds(3600))
             }
