@@ -53,9 +53,13 @@ struct FilingEditor: View {
     }
     private var conflicts: [RuleMatch.Conflict] { RuleMatch.conflicts(among: ruleMatches) }
     private var folderConflict: Bool { conflicts.contains { $0.kind == .moveFile } }
-    /// Picking the folder by hand settles which rule's move wins; the ticks settle the rest.
+    /// A folder is always picked, and it decides which rule's move wins; the ticks settle the rest.
     private func isSettled(_ conflict: RuleMatch.Conflict) -> Bool {
-        conflict.kind == .moveFile ? touched : choices.isSettled(conflict)
+        conflict.kind == .moveFile || choices.isSettled(conflict)
+    }
+    /// Which rule's folder the file will live in, if any.
+    private var winningFolderRule: String? {
+        ruleFolders.first { $0.path == primary }?.match.ruleName
     }
     private var unsettled: Bool { !conflicts.allSatisfy(isSettled) }
     private var ruleFolders: [(match: RuleMatch, path: String)] {
@@ -177,8 +181,10 @@ struct FilingEditor: View {
             ForEach(conflicts) { conflict in
                 let settled = isSettled(conflict)
                 Label {
-                    Text(conflict.summary + (settled ? "." : conflict.kind == .moveFile
-                                             ? " — pick the folder above." : " — tick one."))
+                    Text(conflict.summary + (conflict.kind == .moveFile
+                                             ? winningFolderRule.map { " — “\($0)” wins; pick another folder above to change that." }
+                                                ?? " — neither is followed; pick one of their folders above to follow it."
+                                             : settled ? "." : " — tick one."))
                         .fixedSize(horizontal: false, vertical: true)
                 } icon: {
                     Image(systemName: settled ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
