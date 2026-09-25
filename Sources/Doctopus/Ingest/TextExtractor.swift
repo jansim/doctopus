@@ -43,6 +43,12 @@ enum TextExtractor {
         guard let doc = PDFDocument(url: url) else {
             return ExtractedText(source: "unreadable")
         }
+        // Behind a password to open (PDFKit has already tried an empty one),
+        // every page reads as blank: rendering them for Vision would record a
+        // scan with no words rather than a document nobody can read.
+        if doc.isLocked {
+            return ExtractedText(source: TextSource.locked, pageCount: doc.pageCount)
+        }
         var pieces: [String] = []
         var scanned: [Int] = []
         let count = doc.pageCount

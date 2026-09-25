@@ -183,6 +183,11 @@ inspector.
 
 Extracted text is stored in the index and used for deep full-text search.
 
+A PDF that needs a password to open reads as blank pages, so it is not sent
+through Vision: it is indexed as `locked`, shown as password-protected in the
+inspector, and its history says why it has no text. A PDF that only restricts
+printing or copying opens without a password and is read as usual.
+
 ## Optimization
 
 Scans and image-heavy PDFs go through on-device raster optimization and
@@ -195,6 +200,10 @@ vector operators through intact. If the result is not at least 15% smaller, the
 original is kept byte-for-byte. Nothing is optimized until a copy of the
 original is safely kept beside the index; when it cannot be, the file is left
 as it is and Doctopus says why.
+
+An encrypted PDF is never optimized. One that needs a password to open would
+draw its pages blank, and one that only restricts would lose its
+restrictions in the rewrite.
 
 This is automatic only for files Doctopus brings in itself — the copy an
 import makes, and a scan. Anything already in the library is optimized only on

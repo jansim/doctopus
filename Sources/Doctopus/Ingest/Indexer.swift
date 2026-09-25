@@ -287,6 +287,9 @@ actor Indexer {
         do {
             extracted = try TextExtractor.extract(url: url)
             if extracted.source == "unreadable" { problems.append("the file could not be opened to read its text") }
+            if extracted.source == TextSource.locked {
+                problems.append("it is password-protected, so its text could not be read")
+            }
         } catch {
             extracted = ExtractedText(source: "failed")
             problems.append("its text could not be read (\(error.localizedDescription))")

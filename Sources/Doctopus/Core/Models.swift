@@ -3,6 +3,12 @@ import Foundation
 typealias LibraryID = String
 
 
+/// Where a document's text came from, as stored with it.
+enum TextSource {
+    /// A PDF that needs a password to open, so no text could be read.
+    static let locked = "locked"
+}
+
 enum OCRState: Int64, Sendable {
     case pending = 0, done = 1, failed = 2, skipped = 3
 
