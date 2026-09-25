@@ -255,10 +255,12 @@ extension AppModel {
         if !notAdded.isEmpty {
             errorMessage = "Could not finish filing “\(row.filename)”:\n\n" + notAdded.joined(separator: "\n")
         }
+        // An approval shows for itself, the document leaving Needs Review; a toast on top is noise.
+        if approved { return }
         if parts.isEmpty {
             guard notAdded.isEmpty else { return }
-            parts.append(approved ? "Approved" : "Nothing to change")
-        } else if approved { parts.append("approved") }
+            parts.append("Nothing to change")
+        }
         let text = parts.joined(separator: ", ")
         notify(text.prefix(1).uppercased() + text.dropFirst() + ".", parts == ["Nothing to change"] ? .info : .success)
     }
@@ -266,45 +268,32 @@ extension AppModel {
     func approve(_ rows: [DocumentRow], newArrivals: ReviewTreatment, alreadyInLibrary: ReviewTreatment) {
         guard let lib = library else { return }
         Task {
-            var moved = 0, optimized = 0, restored = 0, failed = 0
-            var saved: Int64 = 0
+            var failed = 0
             var failures: [String] = []
             var notMoved: [String] = []
             for row in rows {
                 let treatment = row.fromOutside ? newArrivals : alreadyInLibrary
                 if treatment.move, let best = await suggestedFolder(for: row) {
                     let result = await lib.indexer.move(ids: [row.doc], to: URL(fileURLWithPath: best, isDirectory: true))
-                    if result.done == 1 {
-                        moved += 1
-                    } else {
+                    if result.done != 1 {
                         failed += 1
                         notMoved += result.failures
                     }
                 }
                 do { try await lib.store.setDocumentApproved(row.doc, true) }
                 catch { failures.append("“\(row.filename)”: \(error.localizedDescription)"); continue }
-                guard let version = treatment.version else { continue }
-                switch await keep(version, of: row, in: lib) {
-                case .optimized(let bytes): optimized += 1; saved += bytes
-                case .restored: restored += 1
-                case .unchanged, .compact: break
-                }
+                if let version = treatment.version { _ = await keep(version, of: row, in: lib) }
             }
             refreshAll()
             reloadDetail()
 
             report(failures: notMoved, "file")
             report(failures: failures, "approve")
+            // The approvals show for themselves, the documents leaving Needs Review,
+            // so only the ones that were approved but stayed put are worth a word.
             let approvedCount = rows.count - failures.count
-            guard approvedCount > 0 else { return }
-            var parts = ["Approved \(approvedCount) document\(approvedCount == 1 ? "" : "s")"]
-            if moved > 0 { parts.append("moved \(moved)") }
-            if optimized > 0 { parts.append("optimized \(optimized), saving \(ByteFormat.string(saved))") }
-            if restored > 0 { parts.append("restored \(restored) to the original") }
-            if failed > 0 {
-                parts.append("\(failed) could not be moved and \(failed == 1 ? "was" : "were") left where \(failed == 1 ? "it is" : "they are")")
-            }
-            notify(parts.joined(separator: ", ") + ".", failed > 0 ? .warning : .success)
+            guard approvedCount > 0, failed > 0 else { return }
+            notify("Approved \(approvedCount) document\(approvedCount == 1 ? "" : "s"), but \(failed) could not be moved and \(failed == 1 ? "was" : "were") left where \(failed == 1 ? "it is" : "they are").", .warning)
         }
     }
 

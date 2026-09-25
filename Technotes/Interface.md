@@ -5,9 +5,11 @@ A native AppKit/SwiftUI three-pane layout.
 ## Sidebar
 
 The physical directory tree, Needs Review, Recently Reviewed — the documents
-most recently approved, newest approval first, each with the rules or models
-that were applied and an Approved / Needs Review toggle — and Paperless-ngx-style smart views: Tags,
-Correspondents, Languages, Document Types.
+approved in the last 30 days, newest approval first and grouped into the last 7
+days and the last 30, each with the rules or models that were applied — and
+Paperless-ngx-style smart views: Tags, Correspondents, Languages, Document
+Types. Only Needs Review has a checkbox on each document; one already reviewed
+goes back for review from its context menu.
 
 ## Windows
 

@@ -67,7 +67,7 @@ struct DocumentListView: View {
         }
         switch model.selection {
         case .needsReview: return "Everything the pipeline filed has been reviewed, and no rule has anything left to change."
-        case .reviewed: return "Documents you approve show up here, most recent first."
+        case .reviewed: return "Documents you approve show up here for 30 days, most recent first."
         case .deleted: return "Documents you move to the Trash wait here, so putting one back brings its tags and history with it."
         case .outliers: return "No document is marked as an outlier for this rule."
         default: return "Documents added to this folder appear here as they are indexed. Right-click to scan one in from your iPhone."
@@ -141,13 +141,16 @@ private struct DocumentTableView: View {
               sortOrder: sortOrder, columnCustomization: $model.listColumns) {
             TableColumn("Document", sortUsing: DocumentSort(field: .name)) { row in
                 HStack(spacing: 8) {
-                    if model.selection.isQueueMode {
+                    // Ticking off is what Needs Review is for; what is already reviewed has nothing to tick.
+                    if model.selection == .needsReview {
                         Toggle("", isOn: Binding(
                             get: { row.queue?.approved ?? true },
                             set: { model.setApproved([row], $0) }))
                             .toggleStyle(.checkbox)
                             .labelsHidden()
                             .help(row.queue?.approved == true ? "Approved" : "Needs review")
+                    }
+                    if model.selection.isQueueMode {
                         RoundedRectangle(cornerRadius: 1.5)
                             .fill(Arrival(row).tint)
                             .frame(width: 3, height: 22)
@@ -254,8 +257,18 @@ private struct DocumentTableView: View {
                 .customizationID("status")
                 .disabledCustomizationBehavior([.resize, .reorder])
         } rows: {
-            ForEach(model.documents) { row in
-                TableRow(row).draggable(DocumentDragItem(row))
+            if model.selection == .reviewed {
+                ForEach(ReviewedPeriod.groups(model.documents, now: .now)) { group in
+                    Section(group.period.title) {
+                        ForEach(group.rows) { row in
+                            TableRow(row).draggable(DocumentDragItem(row))
+                        }
+                    }
+                }
+            } else {
+                ForEach(model.documents) { row in
+                    TableRow(row).draggable(DocumentDragItem(row))
+                }
             }
         }
         .tableStyle(.inset(alternatesRowBackgrounds: true))
@@ -346,17 +359,19 @@ private struct DocumentGalleryView: View {
         ScrollView {
             LazyVGrid(columns: [GridItem(.adaptive(minimum: cell, maximum: cell * 1.4), spacing: 18)],
                       spacing: 20) {
-                ForEach(model.documents) { row in
-                    GalleryCell(row: row, width: cell)
-                        .draggable(DocumentDragItem(row)) {
-                            DocumentDragPreview(row: row, count: model.dragCount(from: row))
+                if model.selection == .reviewed {
+                    ForEach(ReviewedPeriod.groups(model.documents, now: .now)) { group in
+                        Section {
+                            cells(group.rows)
+                        } header: {
+                            Text(group.period.title)
+                                .font(.headline)
+                                .foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
                         }
-                        // One tap handler reading the click count: a stacked double-tap gesture
-                        // makes SwiftUI hold every single click back.
-                        .onTapGesture { click(row) }
-                        .contextMenu {
-                            DocumentMenu(rows: model.selectedIDs.contains(row.id) ? model.selectedRows : [row])
-                        }
+                    }
+                } else {
+                    cells(model.documents)
                 }
             }
             .padding(18)
@@ -366,6 +381,21 @@ private struct DocumentGalleryView: View {
                 .contentShape(Rectangle())
                 .onTapGesture { model.selectedIDs = [] }
                 .contextMenu { BackgroundMenu() }
+        }
+    }
+
+    private func cells(_ rows: [DocumentRow]) -> some View {
+        ForEach(rows) { row in
+            GalleryCell(row: row, width: cell)
+                .draggable(DocumentDragItem(row)) {
+                    DocumentDragPreview(row: row, count: model.dragCount(from: row))
+                }
+                // One tap handler reading the click count: a stacked double-tap gesture
+                // makes SwiftUI hold every single click back.
+                .onTapGesture { click(row) }
+                .contextMenu {
+                    DocumentMenu(rows: model.selectedIDs.contains(row.id) ? model.selectedRows : [row])
+                }
         }
     }
 
@@ -444,7 +474,7 @@ private struct GalleryCell: View {
                     }
                 }
                 .overlay(alignment: .topLeading) {
-                    if let queue = row.queue {
+                    if let queue = row.queue, model.selection == .needsReview {
                         Toggle("", isOn: Binding(
                             get: { queue.approved },
                             set: { model.setApproved([row], $0) }))

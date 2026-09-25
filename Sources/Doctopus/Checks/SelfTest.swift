@@ -103,6 +103,7 @@ enum SelfTest {
         await promotedAlias(store: store, indexer: indexer, rows: rows)
         await undoneAlias(store: store, indexer: indexer, rows: rows)
         await recentlyReviewed(store: store)
+        await recentlyReviewedPeriods(store: store)
         await queue(store: store)
         await importAFile(store: store, indexer: indexer, settings: settings, root: root, rows: rows)
         await importAFolder(store: store, indexer: indexer, root: root, rows: rows)
