@@ -126,6 +126,7 @@ struct DocumentDetail: Sendable {
     var tags: [Tag] = []
     var tagSuggestions: [TagSuggestion] = []
     var pathSuggestions: [PathSuggestion] = []
+    var arrivalDirectory: String?
     var similarFolders: [PathSuggestion] = []
     var similarDocuments: [DocumentRow] = []
     var aliases: [String] = []

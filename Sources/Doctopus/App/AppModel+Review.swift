@@ -32,9 +32,16 @@ struct OptimizationPreview: Sendable {
 }
 
 extension DocumentDetail {
-    /// New arrivals start on their best suggestion; anything already in the library stays put.
+    /// New arrivals start on their best suggestion, unless they were moved by hand since
+    /// arriving; anything already in the library stays put.
     var defaultFolder: String {
-        row.fromOutside ? pathSuggestions.first?.path ?? row.directory : row.directory
+        guard row.fromOutside, !movedSinceArrival else { return row.directory }
+        return pathSuggestions.first?.path ?? row.directory
+    }
+
+    /// Moved elsewhere since it arrived, in Doctopus or in Finder: that folder was picked on purpose.
+    var movedSinceArrival: Bool {
+        arrivalDirectory.map { $0 != Store.canonical(row.directory) } ?? false
     }
 
     var isOptimized: Bool { row.originalSize != nil }

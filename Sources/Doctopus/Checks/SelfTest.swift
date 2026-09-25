@@ -605,7 +605,10 @@ enum SelfTest {
             Check.that("re-importing a byte-identical document is skipped as duplicate",
                        dupResult.imported == 0 && dupResult.duplicates == 1)
 
-            if let copied { try? FileManager.default.removeItem(at: copied.url) }
+            if let copied {
+                try? FileManager.default.removeItem(at: copied.url)
+                try? await store.deleteDocument(copied.doc)
+            }
             try? FileManager.default.removeItem(at: outside)
         }
 
@@ -638,7 +641,10 @@ enum SelfTest {
                        "\(result.imported) imported, \(arrived.count) indexed")
             Check.that("importing a folder leaves the folder alone",
                        [top, nested].allSatisfy { FileManager.default.fileExists(atPath: $0.path) })
-            for row in arrived { try? FileManager.default.removeItem(at: row.url) }
+            for row in arrived {
+                try? FileManager.default.removeItem(at: row.url)
+                try? await store.deleteDocument(row.doc)
+            }
         }
         try? FileManager.default.removeItem(at: folder)
 
@@ -1499,7 +1505,9 @@ enum SelfTest {
 
         print("\nSANITY CHECK / VERIFICATION")
         let healthyReport = (try? await LibraryVerifier.verify(store: store)) ?? VerificationReport()
-        Check.that("verification of healthy library reports zero errors", healthyReport.errorsCount == 0)
+        Check.that("verification of healthy library reports zero errors", healthyReport.errorsCount == 0,
+                   healthyReport.issues.filter { $0.severity == .error }
+                       .map { "\($0.title): \($0.detail ?? "")" }.joined(separator: "; "))
 
         print("\nCONTENT HASHES")
         if let sample = rows.first, let detail = try? await store.detail(sample.doc),
@@ -2175,6 +2183,20 @@ enum SelfTest {
                                                           sort: .added, ascending: false)) ?? [])
                 .first { $0.id == row?.id }
             Check.that("…marked as a new arrival", listed?.fromOutside == true)
+            if let row, let detail = try? await store.detail(row.doc) {
+                Check.that("…whose review starts on a suggested home",
+                           detail.defaultFolder != inbox.path, detail.defaultFolder)
+                let picked = root.appendingPathComponent("Filed/B", isDirectory: true)
+                _ = await indexer.move(ids: [row.doc], to: picked)
+                let moved = try? await store.detail(row.doc)
+                Check.that("…but once moved by hand, starts where it was put",
+                           moved?.row.fromOutside == true && moved?.defaultFolder == picked.path,
+                           moved?.defaultFolder ?? "no detail")
+                _ = await indexer.move(ids: [row.doc], to: inbox)
+                let back = try? await store.detail(row.doc)
+                Check.that("…and back in the Inbox, starts on a suggestion again",
+                           back?.defaultFolder != inbox.path, back?.defaultFolder ?? "no detail")
+            }
             if let row {
                 // Approved, it is in the library; anything later is about a document already there.
                 try? await store.setDocumentApproved(row.doc, true)

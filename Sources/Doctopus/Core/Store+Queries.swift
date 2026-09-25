@@ -22,10 +22,21 @@ extension Store {
     /// Approving the arrival settles it into the library, so a later event cannot make it new again.
     static let fromOutsideColumn = """
         EXISTS (SELECT 1 FROM processing op JOIN events o ON o.id = op.event_id
-                WHERE op.doc_id = d.id AND op.status = 0
-                AND (o.action = 'imported'
-                     OR (o.action = 'routed' AND COALESCE(o.detail, '') NOT LIKE 'Applied rule %')))
+                WHERE op.doc_id = d.id AND op.status = 0 AND \(arrivalEvent))
         """
+    private static let arrivalEvent = """
+        (o.action = 'imported' OR (o.action = 'routed' AND COALESCE(o.detail, '') NOT LIKE 'Applied rule %'))
+        """
+
+    func arrivalDirectory(for docID: Int64) throws -> String? {
+        try db.first("""
+            SELECT o.to_path FROM processing op JOIN events o ON o.id = op.event_id
+            WHERE op.doc_id = ? AND op.status = 0 AND o.to_path IS NOT NULL AND \(Store.arrivalEvent)
+            ORDER BY o.id DESC LIMIT 1
+            """, [.int(docID)]) {
+            Store.canonical((absPath($0.string(0)) as NSString).deletingLastPathComponent)
+        }
+    }
 
     func documentRow(_ r: Database.Row) -> DocumentRow {
         DocumentRow(
@@ -352,6 +363,7 @@ extension Store {
         d.tags = try tags(for: id)
         d.tagSuggestions = try tagSuggestions(for: id)
         d.pathSuggestions = try pathSuggestions(for: id)
+        if d.row.fromOutside { d.arrivalDirectory = try arrivalDirectory(for: id) }
         d.similarFolders = try similarFolders(for: id)
         d.similarDocuments = (try? similarDocuments(for: id)) ?? []
         d.folderAliases = try folderAliases(for: id)
