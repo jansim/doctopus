@@ -17,6 +17,9 @@ struct RuleEditor: View {
         var rule = rule
         if rule.conditions.isEmpty { rule.conditions = [RuleCondition()] }
         if rule.actions.isEmpty { rule.actions = [RuleAction(kind: .moveFile)] }
+        // Any and All agree until there is a second condition, so a rule that
+        // has not chosen yet starts on All — the narrower of the two.
+        if rule.liveConditions.count < 2 { rule.requiresAll = true }
         _draft = State(initialValue: rule)
         isNew = rule.id == 0
         self.library = library
@@ -97,8 +100,7 @@ struct RuleEditor: View {
             }
             .disabled(draft.conditions.count < 2)
             ForEach($draft.conditions) { $condition in
-                ConditionRow(condition: $condition,
-                             removable: draft.conditions.count > 1) {
+                ConditionRow(condition: $condition) {
                     draft.conditions.removeAll { $0.id == condition.id }
                 }
             }
@@ -153,8 +155,7 @@ struct RuleEditor: View {
     private var actionsSection: some View {
         Section {
             ForEach($draft.actions) { $action in
-                ActionRow(action: $action, library: library,
-                          removable: draft.actions.count > 1) {
+                ActionRow(action: $action, library: library) {
                     draft.actions.removeAll { $0.id == action.id }
                 }
             }
@@ -244,7 +245,6 @@ struct RuleEditor: View {
 
 private struct ConditionRow: View {
     @Binding var condition: RuleCondition
-    let removable: Bool
     let remove: () -> Void
 
     var body: some View {
@@ -261,7 +261,7 @@ private struct ConditionRow: View {
                 .labelsHidden()
                 .fixedSize()
                 Spacer(minLength: 0)
-                RemoveButton(help: "Remove this condition", enabled: removable, action: remove)
+                RemoveButton(help: "Remove this condition", action: remove)
             }
             HStack(spacing: 6) {
                 Picker("", selection: $condition.mode) {
@@ -297,7 +297,6 @@ private struct ConditionRow: View {
 private struct ActionRow: View {
     @Binding var action: RuleAction
     let library: Library
-    let removable: Bool
     let remove: () -> Void
 
     var body: some View {
@@ -323,7 +322,7 @@ private struct ActionRow: View {
                     .buttonStyle(.borderless)
                     .help("Choose a folder")
                 }
-                RemoveButton(help: "Remove this action", enabled: removable, action: remove)
+                RemoveButton(help: "Remove this action", action: remove)
             }
             if let templateKind {
                 HStack(spacing: 4) {
@@ -364,7 +363,6 @@ private struct ActionRow: View {
 
 private struct RemoveButton: View {
     let help: String
-    let enabled: Bool
     let action: () -> Void
 
     var body: some View {
@@ -372,7 +370,6 @@ private struct RemoveButton: View {
             Image(systemName: "minus.circle")
         }
         .buttonStyle(.borderless)
-        .disabled(!enabled)
         .help(help)
     }
 }
