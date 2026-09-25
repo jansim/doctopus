@@ -1,4 +1,5 @@
 import Foundation
+import PDFKit
 
 /// What the pipeline does when the disk does not answer the way it should.
 extension SelfTest {
@@ -336,5 +337,87 @@ extension SelfTest {
                        reopened != nil && keptDamaged)
         }
         print("  damaged index           \(outcome)")
+    }
+
+    /// PDFs behind a password: one that needs it to open, and one that only
+    /// restricts what may be done with it.
+    static func passwordProtectedPDFs(store: Store, scanned: URL) async {
+        print("\nPASSWORD-PROTECTED PDFS")
+        let fm = FileManager.default
+        let problems = Problems()
+        let indexer = indexer(for: store, problems: problems)
+        let outside = fm.temporaryDirectory
+            .appendingPathComponent("doctopus-locked-\(UUID().uuidString)", isDirectory: true)
+        try? fm.createDirectory(at: outside, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: outside) }
+
+        // Each gets a unique byte so neither is taken for a duplicate of the fixture.
+        func protected(_ name: String, _ options: [PDFDocumentWriteOption: Any]) -> URL? {
+            guard let doc = PDFDocument(url: scanned) else { return nil }
+            doc.documentAttributes?[PDFDocumentAttribute.subjectAttribute] = UUID().uuidString
+            let url = outside.appendingPathComponent(name)
+            return doc.write(to: url, withOptions: options) ? url : nil
+        }
+        guard let locked = protected("Locked Statement.pdf", [.userPasswordOption: "open sesame",
+                                                               .ownerPasswordOption: "owner"]),
+              let restricted = protected("Restricted Statement.pdf", [.ownerPasswordOption: "owner",
+                                                                      .accessPermissionsOption: 0])
+        else {
+            Check.that("password-protected PDFs can be made", false)
+            return
+        }
+
+        let lockedCopy = outside.appendingPathComponent("probe-locked.pdf")
+        let restrictedCopy = outside.appendingPathComponent("probe-restricted.pdf")
+        try? fm.copyItem(at: locked, to: lockedCopy)
+        try? fm.copyItem(at: restricted, to: restrictedCopy)
+        let lockedBefore = FileScanner.hash(lockedCopy)
+        let restrictedBefore = FileScanner.hash(restrictedCopy)
+        // The fixtures are too small to be worth optimizing; these thresholds
+        // make any rewrite go through, so only the protection can stop one.
+        var eager = Optimizer.Options()
+        eager.minimumPageBytes = 0
+        eager.minimumSaving = -100
+        let lockedOptimized = try? Optimizer.optimize(url: lockedCopy, options: eager)
+        let restrictedOptimized = try? Optimizer.optimize(url: restrictedCopy, options: eager)
+        Check.that("a PDF locked with a password is never optimized, so never rewritten blank",
+                   lockedOptimized == nil && FileScanner.hash(lockedCopy) == lockedBefore)
+        Check.that("…nor one that only restricts, whose restrictions a rewrite would drop",
+                   restrictedOptimized == nil && FileScanner.hash(restrictedCopy) == restrictedBefore)
+        Check.that("a locked PDF's page is not rendered blank for a model to look at",
+                   PageImage.firstPage(of: locked, maxDimension: 512) == nil)
+
+        let lockedHash = FileScanner.hash(locked)
+        let summary = await indexer.importFiles([locked, restricted], into: store.root)
+        Check.that("both import", summary.imported == 2, "\(summary.imported) imported, \(summary.failures)")
+        let rows = ((try? await store.listDocuments(selection: .all, query: SearchQuery(""),
+                                                    sort: .added, ascending: false)) ?? [])
+        guard let lockedRow = rows.first(where: { $0.filename == locked.lastPathComponent }),
+              let restrictedRow = rows.first(where: { $0.filename == restricted.lastPathComponent })
+        else {
+            Check.that("the imported PDFs are listed", false)
+            return
+        }
+        let lockedDetail = try? await store.detail(lockedRow.doc)
+        let restrictedDetail = try? await store.detail(restrictedRow.doc)
+        let said = ((try? await store.history(for: lockedRow.doc)) ?? [])
+            .first { $0.detail?.contains("password-protected") == true }?.detail
+        print("  locked                  \(lockedDetail?.ocrSource ?? "—"), \(said ?? "nothing said")")
+        Check.that("a locked PDF is recorded as password-protected, not as a scan with no words",
+                   lockedDetail?.ocrSource == TextSource.locked)
+        Check.that("…its history says why it has no text", said != nil)
+        Check.that("…and the imported copy is byte for byte what came in",
+                   lockedHash != nil && FileScanner.hash(lockedRow.url) == lockedHash)
+        Check.that("a PDF that only restricts is read as usual",
+                   (restrictedDetail?.ocrWords ?? 0) > 0 && restrictedDetail?.ocrSource != TextSource.locked,
+                   "\(restrictedDetail?.ocrWords ?? 0) words via \(restrictedDetail?.ocrSource ?? "—")")
+        let report = (try? await LibraryVerifier.verify(store: store)) ?? VerificationReport()
+        Check.that("verification does not take a locked PDF's missing text for a fault",
+                   !report.issues.contains { $0.title == "Empty extracted text" && $0.detail?.contains("Locked Statement") == true })
+
+        for row in [lockedRow, restrictedRow] {
+            try? fm.removeItem(at: row.url)
+            try? await store.deleteDocument(row.doc)
+        }
     }
 }

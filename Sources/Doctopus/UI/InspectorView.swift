@@ -316,6 +316,7 @@ private struct DetailInspector: View {
         case "pdf-layer": return "embedded text"
         case "vision": return "Vision OCR"
         case "mixed": return "text + OCR"
+        case TextSource.locked: return "password-protected"
         default: return s
         }
     }
@@ -405,7 +406,9 @@ private struct DetailInspector: View {
     private var textSection: some View {
         Section2("Extracted Text") {
             if detail.text.isEmpty {
-                Text(row.ocrState == .pending ? "Not indexed yet." : "No text found.")
+                Text(row.ocrState == .pending ? "Not indexed yet."
+                     : detail.ocrSource == TextSource.locked ? "Password-protected: the text cannot be read without it."
+                     : "No text found.")
                     .font(.callout).foregroundStyle(.tertiary)
             } else {
                 DisclosureGroup(isExpanded: $showRawText) {

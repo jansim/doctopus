@@ -48,7 +48,8 @@ enum LibraryVerifier {
 
             if doc.ocrState == .done {
                 let text = (try? await store.ocrText(doc.id)) ?? ""
-                if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                   (try? await store.detail(doc.id))?.ocrSource != TextSource.locked {
                     report.issues.append(VerificationReport.Issue(
                         severity: .warning,
                         title: "Empty extracted text",

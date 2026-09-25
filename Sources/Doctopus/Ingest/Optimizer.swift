@@ -31,6 +31,10 @@ enum Optimizer {
         guard originalSize > options.minimumPageBytes else { return nil }
 
         guard let cg = CGPDFDocument(url as CFURL), cg.numberOfPages > 0 else { return nil }
+        // Locked, its pages draw blank and would be rasterized as such; merely
+        // restricted, the rewrite would quietly drop the restrictions. Either
+        // way the file is not ours to rewrite.
+        guard !cg.isEncrypted else { return nil }
         let pdfkit = PDFDocument(url: url)
         let pageCount = cg.numberOfPages
         let bytesPerPage = originalSize / Int64(pageCount)

@@ -33,6 +33,7 @@ enum PageImage {
 
     private static func pdfFirstPage(_ url: URL, maxDimension: Int) -> Rendered? {
         guard let doc = CGPDFDocument(url as CFURL), doc.numberOfPages > 0,
+              doc.isUnlocked || doc.unlockWithPassword(""),
               let page = doc.page(at: 1) else { return nil }
         let box = page.getBoxRect(.cropBox)
         guard box.width > 1, box.height > 1 else { return nil }

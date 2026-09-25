@@ -1604,6 +1604,9 @@ enum SelfTest {
         if let template = rows.first(where: { $0.ext == "pdf" && FileManager.default.fileExists(atPath: $0.path) }) {
             await indexBackups(template: template.url)
         }
+        if let scanned = rows.first(where: { $0.filename == "scan 003.pdf" && FileManager.default.fileExists(atPath: $0.path) }) {
+            await passwordProtectedPDFs(store: store, scanned: scanned.url)
+        }
 
         Check.finish("pipeline self-test")
     }
