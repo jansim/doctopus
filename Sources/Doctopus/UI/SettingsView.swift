@@ -3,19 +3,25 @@ import AppKit
 
 struct SettingsView: View {
     @Environment(AppModel.self) private var model
+    @State private var tab = Pane.general
+
+    enum Pane { case general, fields, tags, routing, rules, optimization, intelligence }
 
     var body: some View {
-        TabView {
-            GeneralSettings().tabItem { Label("General", systemImage: "gearshape") }
-            FieldSettings().tabItem { Label("Fields", systemImage: "list.bullet.rectangle") }
-            TagSettings().tabItem { Label("Tags", systemImage: "tag") }
-            RoutingSettings().tabItem { Label("Routing", systemImage: "arrow.triangle.branch") }
-            RulesSettings().tabItem { Label("Rules", systemImage: "line.3.horizontal.decrease") }
-            OptimizationSettings().tabItem { Label("Optimization", systemImage: "arrow.down.circle") }
-            IntelligenceSettings().tabItem { Label("Intelligence", systemImage: "sparkles") }
+        TabView(selection: $tab) {
+            GeneralSettings().tabItem { Label("General", systemImage: "gearshape") }.tag(Pane.general)
+            FieldSettings().tabItem { Label("Fields", systemImage: "list.bullet.rectangle") }.tag(Pane.fields)
+            TagSettings().tabItem { Label("Tags", systemImage: "tag") }.tag(Pane.tags)
+            RoutingSettings().tabItem { Label("Routing", systemImage: "arrow.triangle.branch") }.tag(Pane.routing)
+            RulesSettings().tabItem { Label("Rules", systemImage: "line.3.horizontal.decrease") }.tag(Pane.rules)
+            OptimizationSettings().tabItem { Label("Optimization", systemImage: "arrow.down.circle") }.tag(Pane.optimization)
+            IntelligenceSettings().tabItem { Label("Intelligence", systemImage: "sparkles") }.tag(Pane.intelligence)
         }
         .frame(width: 620, height: 470)
         .noticeOverlay(model)
+        .onChange(of: model.ruleToEdit, initial: true) {
+            if model.ruleToEdit != nil { tab = .rules }
+        }
     }
 }
 

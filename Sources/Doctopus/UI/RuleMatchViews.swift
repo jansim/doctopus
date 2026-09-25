@@ -23,6 +23,29 @@ struct RuleMatchBadge: View {
     }
 }
 
+/// Opens one of a conflict's rules in the rules editor, for when the fix
+/// belongs in the rule rather than in a choice made for this one document.
+struct EditConflictingRule: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.openSettings) private var openSettings
+    let conflict: RuleMatch.Conflict
+
+    var body: some View {
+        Menu("Edit Rule") {
+            ForEach(conflict.options, id: \.ruleID) { option in
+                Button("“\(option.ruleName)”…") {
+                    model.editRule(option.ruleID)
+                    openSettings()
+                }
+            }
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .font(.caption)
+        .help("Change one of these rules so they stop disagreeing")
+    }
+}
+
 /// Which of a document's pending changes the user has turned down. A conflict
 /// counts as settled once no more than one of its options is still accepted.
 struct RuleMatchChoices {
@@ -129,15 +152,19 @@ struct RuleMatchesNotice: View {
 
     private func choice(_ conflict: RuleMatch.Conflict) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            Label {
-                Text(conflict.summary + (choices.isSettled(conflict) ? "." : " — choose one:"))
-                    .fixedSize(horizontal: false, vertical: true)
-            } icon: {
-                Image(systemName: choices.isSettled(conflict)
-                      ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+            HStack(alignment: .firstTextBaseline) {
+                Label {
+                    Text(conflict.summary + (choices.isSettled(conflict) ? "." : " — choose one:"))
+                        .fixedSize(horizontal: false, vertical: true)
+                } icon: {
+                    Image(systemName: choices.isSettled(conflict)
+                          ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                }
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.purple)
+                Spacer(minLength: 4)
+                EditConflictingRule(conflict: conflict)
             }
-            .font(.caption.weight(.medium))
-            .foregroundStyle(.purple)
             Picker(conflict.kind.label, selection: Binding(
                 get: { choices.chosen(in: conflict) },
                 set: { if let id = $0 { choices.choose(id, in: conflict) } })) {

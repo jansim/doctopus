@@ -140,6 +140,12 @@ extension AppModel {
         }
     }
 
+    /// Asks the Rules pane to open a rule in its editor. The caller opens the
+    /// Settings window, which may not exist yet, so the pane picks it up on load.
+    func editRule(_ ruleID: Int64) {
+        ruleToEdit = ruleID
+    }
+
     func showOutliers(of ruleID: Int64) {
         searchText = ""
         selection = .outliers(rule: ruleID)

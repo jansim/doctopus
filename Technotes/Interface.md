@@ -70,6 +70,11 @@ and, where they conflict, asks for one of them per disagreement; Apply stays
 disabled on the rules involved until it has an answer, and Apply All settles
 every match at once.
 
+Wherever a conflict is shown, in review or in the inspector, an Edit Rule menu
+beside it lists the rules involved. Picking one opens Settings on the Rules
+pane with that rule's editor already up, for when the disagreement is the
+rules' fault rather than something to settle one document at a time.
+
 On the left, everything that was worked out — title, fields, date, tags and tag
 suggestions — is editable in place, or can be discarded in one go; the file is
 untouched and Analyze can fill it in again.
