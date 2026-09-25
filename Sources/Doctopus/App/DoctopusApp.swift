@@ -144,6 +144,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             ScanCoordinator.shared.onScanFailed = { workspace.scanTarget(for: nil)?.scanFailed($0) }
             SpacePreview.install { workspace.current?.quickLook() }
             OptionReveal.install { held in workspace.current?.revealingFolders = held }
+            // Only in a library's own window: Settings and sheets keep their ⌘A.
+            SelectAllDocuments.install { key in
+                guard let model = workspace.current, let key, key === model.window else { return false }
+                model.selectAll()
+                return true
+            }
         }
     }
 

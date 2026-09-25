@@ -41,6 +41,7 @@ enum UITest {
             await clickSelectsARow(model, snapshots: snapshots)
             await clickSelectsAGalleryThumbnail(model, snapshots: snapshots)
             galleryModifierClicks(model)
+            commandASelectsEverything(model)
             dragCountsTheSelection(model)
             folderPickerResolvesPaths(model)
             await headerClickSorts(model, snapshots: snapshots)
@@ -190,6 +191,26 @@ enum UITest {
                                            anchor: -1)
         Check.that("⇧ with an anchor no longer in the pane selects the one cell",
                    stale == .init(selection: [order[2]], anchor: order[2]))
+    }
+
+    /// Asks `SelectAllDocuments` rather than posting a keystroke: a local
+    /// monitor only sees events the run loop takes off the queue itself.
+    private static func commandASelectsEverything(_ model: AppModel) {
+        Check.that("⌘A is taken for selecting documents",
+                   SelectAllDocuments.applies(characters: "a", modifiers: .command, editingText: false))
+        Check.that("but left to a text field being edited",
+                   !SelectAllDocuments.applies(characters: "a", modifiers: .command, editingText: true))
+        Check.that("and ⌘⇧A, ⌥A and a plain A are left alone",
+                   !SelectAllDocuments.applies(characters: "a", modifiers: [.command, .shift], editingText: false)
+                       && !SelectAllDocuments.applies(characters: "a", modifiers: .option, editingText: false)
+                       && !SelectAllDocuments.applies(characters: "a", modifiers: [], editingText: false))
+
+        model.selectedIDs = model.documents.first.map { [$0.id] } ?? []
+        model.selectAll()
+        Check.that("selecting all selects every document in the pane",
+                   model.selectedIDs == Set(model.documents.map(\.id)),
+                   "\(model.selectedIDs.count) of \(model.documents.count)")
+        model.selectedIDs = []
     }
 
     private static func dragCountsTheSelection(_ model: AppModel) {
