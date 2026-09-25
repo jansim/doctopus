@@ -12,9 +12,7 @@ concurrency:
 
 jobs:
   test:
-    # A branch in this repository is already checked on push, so its pull
-    # request would only run the same commit a second time. Pull requests from
-    # forks have no push run here and still get one.
+    # Same-repo branches already run on push; only fork PRs need this event.
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
 
     # macOS 26 for the SDK: the app weak-links FoundationModels so it can still
@@ -32,9 +30,6 @@ jobs:
           swift --version && xcodebuild -version
           echo "id=$( (swift --version; xcodebuild -version) 2>&1 | shasum | cut -c1-12)" >> "$GITHUB_OUTPUT"
 
-      # The last build's products, so only what changed is compiled again. A
-      # fresh checkout gives every file a new mtime, which is why the build
-      # below has the driver compare contents instead.
       - name: Restore build cache
         uses: actions/cache@v4
         with:
@@ -45,10 +40,7 @@ jobs:
           restore-keys: |
             build-${{ steps.toolchain.outputs.id }}-${{ hashFiles('Package.swift', 'Package.resolved') }}-
 
-      # Debug rather than release: whole-module optimization type-checks and
-      # compiles the one big module as a single job and can't be incremental,
-      # and the checks don't need an optimized binary. Nothing here reads debug
-      # info either, and without it a cold debug build is several times faster.
+      # Debug builds incrementally; file hashing because checkout resets mtimes.
       - name: Build
         run: Scripts/build.sh debug -Xswiftc -gnone -Xswiftc -enable-incremental-file-hashing
 

@@ -536,8 +536,9 @@ enum UITest {
         model.file(candidate, in: URL(fileURLWithPath: primary.path), alsoIn: [secondary],
                    approve: true, advance: true)
         let filed = await poll(timeout: 20, { await model.loadDetail(candidate.id) }) {
-            $0?.row.directory == primary.path && $0?.row.approved == true
-                && $0?.folderAliases.contains { ($0 as NSString).deletingLastPathComponent == secondary } == true
+            (loaded: DocumentDetail?) -> Bool in
+            guard let loaded, loaded.row.directory == primary.path, loaded.row.approved else { return false }
+            return loaded.folderAliases.contains { ($0 as NSString).deletingLastPathComponent == secondary }
         }
         let moved = filed?.row.directory == primary.path && filed?.row.approved == true
         Check.that("filing moves it to the chosen folder, aliases it into another and approves it", moved,
@@ -547,7 +548,9 @@ enum UITest {
 
         model.discardGeneratedInfo([filed?.row ?? candidate])
         let discarded = await poll(timeout: 10, { await model.loadDetail(candidate.id) }) {
-            $0 != nil && $0?.row.title == nil && $0?.row.docType == nil && $0?.pathSuggestions.isEmpty == true
+            (loaded: DocumentDetail?) -> Bool in
+            guard let loaded else { return false }
+            return loaded.row.title == nil && loaded.row.docType == nil && loaded.pathSuggestions.isEmpty
         }
         let cleared = discarded != nil && discarded?.row.title == nil && discarded?.pathSuggestions.isEmpty == true
         Check.that("discarding generated info clears it and keeps the file", cleared
