@@ -2147,6 +2147,17 @@ enum SelfTest {
                                                           sort: .added, ascending: false)) ?? [])
                 .first { $0.id == row?.id }
             Check.that("…marked as a new arrival", listed?.fromOutside == true)
+            if let row {
+                // Approved, it is in the library; anything later is about a document already there.
+                try? await store.setDocumentApproved(row.doc, true)
+                try? await store.logProcessing(docID: row.doc, action: .optimized, detail: nil, rule: nil,
+                                               from: nil, to: nil, approved: false)
+                let again = ((try? await store.listDocuments(selection: .needsReview, query: SearchQuery(""),
+                                                             sort: .added, ascending: false)) ?? [])
+                    .first { $0.id == row.id }
+                Check.that("…and once approved, back in review as one already in the library",
+                           again != nil && again?.fromOutside == false)
+            }
             try? fm.removeItem(at: tie)
         }
 
