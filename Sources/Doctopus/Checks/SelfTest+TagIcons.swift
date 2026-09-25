@@ -65,7 +65,7 @@ extension SelfTest {
 
     private static func tagIconMigration() {
         let path = FileManager.default.temporaryDirectory
-            .appendingPathComponent("doctopus-tags-v26-\(UUID().uuidString).sqlite").path
+            .appendingPathComponent("doctopus-tags-v27-\(UUID().uuidString).sqlite").path
         defer { try? FileManager.default.removeItem(atPath: path) }
         guard let db = try? Database(path: path) else {
             Check.that("a database in the old shape can be opened", false); return
@@ -74,7 +74,7 @@ extension SelfTest {
         CREATE TABLE tags (id INTEGER PRIMARY KEY, name TEXT NOT NULL, color INTEGER NOT NULL DEFAULT 0,
                            parent_id INTEGER REFERENCES tags(id) ON DELETE SET NULL);
         INSERT INTO tags(id, name, color) VALUES (1, 'Kept', 3);
-        PRAGMA user_version=26;
+        PRAGMA user_version=27;
         """)
         do { try Schema.migrate(db) } catch {
             Check.that("an index from before tag icons migrates", false, "\(error)"); return
