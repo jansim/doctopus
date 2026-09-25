@@ -171,7 +171,7 @@ enum SelfTest {
             let name = (sample.path as NSString).lastPathComponent
             let movedFile = renamed + "/" + name
             var rescan: (id: Int64, isNew: Bool, changed: Bool)?
-            if let f = FileScanner.scan(root: URL(fileURLWithPath: renamed)).first(where: { $0.url.lastPathComponent == name }) {
+            if let f = FileScanner.scan(root: URL(fileURLWithPath: renamed)).found.first(where: { $0.url.lastPathComponent == name }) {
                 rescan = try? await store.upsertDocument(
                     Store.FileFacts(path: f.url.path, size: f.size, mtime: f.mtime, created: f.created,
                                     fileID: f.fileID), origin: .inLibrary)
@@ -1598,6 +1598,7 @@ enum SelfTest {
         }
 
         await failuresAreSaid(store: store, indexer: indexer)
+        await unreadableFolders(store: store)
 
         Check.finish("pipeline self-test")
     }
@@ -2130,7 +2131,7 @@ enum SelfTest {
 
         func snapshot() -> [String: String] {
             var out: [String: String] = [:]
-            for f in FileScanner.scan(root: root) { out[f.url.path] = FileScanner.hash(f.url) ?? "" }
+            for f in FileScanner.scan(root: root).found { out[f.url.path] = FileScanner.hash(f.url) ?? "" }
             return out
         }
 

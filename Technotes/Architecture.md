@@ -61,3 +61,10 @@ edited on the way, is still recognised. The watcher falls back to the SHA-256,
 for volumes whose IDs do not persist and moves that got the file a new one.
 Rows stay claimable for thirty days, and a row whose file is in the Trash is
 never forgotten at all.
+
+Not seeing a file is only evidence it is gone when the scan could look. A
+folder the scan cannot read — no permission, a privacy prompt declined, a share
+that dropped out — leaves the documents under it as they were, and a library
+that suddenly lists as empty while its index does not is taken for unreadable
+rather than emptied. Either is said, and nothing is forgotten until a scan has
+seen the whole library.

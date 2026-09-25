@@ -59,8 +59,15 @@ enum LibraryVerifier {
         }
 
         let scanned = FileScanner.scan(root: store.root)
+        for url in scanned.unreadable {
+            report.issues.append(VerificationReport.Issue(
+                severity: .warning,
+                title: "Unreadable folder",
+                detail: "\(url.path) could not be read, so what is in it could not be checked."
+            ))
+        }
         let indexedPaths = Set(allDocs.map { Store.canonical($0.path) })
-        for file in scanned {
+        for file in scanned.found {
             let path = Store.canonical(file.url.path)
             if !indexedPaths.contains(path) {
                 report.issues.append(VerificationReport.Issue(
