@@ -12,6 +12,9 @@ concurrency:
 
 jobs:
   test:
+    # Same-repo branches already run on push; only fork PRs need this event.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+
     # macOS 26 for the SDK: the app weak-links FoundationModels so it can still
     # run on the macOS 15 deployment target, but it has to compile against a
     # toolchain that has the framework.
@@ -22,10 +25,24 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Toolchain
-        run: swift --version && xcodebuild -version
+        id: toolchain
+        run: |
+          swift --version && xcodebuild -version
+          echo "id=$( (swift --version; xcodebuild -version) 2>&1 | shasum | cut -c1-12)" >> "$GITHUB_OUTPUT"
 
+      - name: Restore build cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            .build
+            build/icon
+          key: build-${{ steps.toolchain.outputs.id }}-${{ hashFiles('Package.swift', 'Package.resolved') }}-${{ github.sha }}
+          restore-keys: |
+            build-${{ steps.toolchain.outputs.id }}-${{ hashFiles('Package.swift', 'Package.resolved') }}-
+
+      # Debug builds incrementally; file hashing because checkout resets mtimes.
       - name: Build
-        run: Scripts/build.sh
+        run: Scripts/build.sh debug -Xswiftc -gnone -Xswiftc -enable-incremental-file-hashing
 
       - name: Generate the demo library
         run: swift Testing/makefixtures.swift Testing/DemoLibrary

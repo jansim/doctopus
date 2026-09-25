@@ -1,13 +1,14 @@
 #!/bin/bash
-# Builds Doctopus.app. Usage: Scripts/build.sh [debug|release]
+# Builds Doctopus.app. Usage: Scripts/build.sh [debug|release] [swift build flags…]
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 CONFIG="${1:-release}"
+shift || true
 APP="build/Doctopus.app"
 RES="$APP/Contents/Resources"
 
-swift build -c "$CONFIG"
+swift build -c "$CONFIG" "$@"
 BIN="$(swift build -c "$CONFIG" --show-bin-path)/Doctopus"
 
 rm -rf "$APP"
