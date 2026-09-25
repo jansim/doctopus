@@ -138,6 +138,11 @@ Rules live in Settings › Rules, per library. The editor shows how many
 documents already in the library a rule catches, and where a document would
 land and what it would be called.
 
+Renaming a folder from the sidebar offers to take the rules filing into it
+along. Only a folder a rule names outright counts: `Insurance/{correspondent}`
+follows a renamed `Insurance`, but not a renamed `Insurance/Allianz`, which it
+only reaches by way of the placeholder.
+
 A rule written after the fact, or a file moved by hand, leaves documents the
 rules would still change. These get a purple Rules badge, and the inspector
 names the rule and its changes with Apply and Suppress. Suppressing marks the

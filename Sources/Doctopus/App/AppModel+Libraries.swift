@@ -126,8 +126,11 @@ extension AppModel {
     }
 
     /// The index moves first, so the watcher never sees the new folder while
-    /// its documents are still recorded under the old one.
-    func renameFolder(_ path: String, to name: String) {
+    /// its documents are still recorded under the old one. Rules filing into
+    /// the folder by name are then offered to `confirmRules`, and follow it
+    /// only if that says so.
+    func renameFolder(_ path: String, to name: String,
+                      confirmRules: @escaping @MainActor ([Rule]) -> Bool = { _ in false }) {
         guard let lib = library, lib.owns(path: path) else { return }
         let source = URL(fileURLWithPath: path)
         let destination = source.deletingLastPathComponent().appendingPathComponent(name, isDirectory: true).path
@@ -148,7 +151,24 @@ extension AppModel {
                 selection = .folder(destination + selected.dropFirst(path.count))
             }
             refreshAll()
+            await refileRules(from: path, to: destination, in: lib, confirm: confirmRules)
         }
+    }
+
+    private func refileRules(from path: String, to destination: String, in lib: Library,
+                             confirm: @MainActor ([Rule]) -> Bool) async {
+        let rules = (try? await lib.store.rules()) ?? []
+        let refiled = rules.compactMap {
+            $0.refiling(Store.canonical(path), to: Store.canonical(destination), root: lib.store.root.path)
+        }
+        guard !refiled.isEmpty, confirm(refiled) else { return }
+        do {
+            for rule in refiled { _ = try await lib.store.upsertRule(rule) }
+        } catch {
+            report(error, "update the rules filing into “\(URL(fileURLWithPath: destination).lastPathComponent)”")
+        }
+        rulesChanged()
+        notify(refiled.count == 1 ? "Updated rule “\(refiled[0].name)”" : "Updated \(refiled.count) rules")
     }
 
     /// The window goes with its library, unless it is the last one, which

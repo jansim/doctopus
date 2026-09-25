@@ -365,7 +365,17 @@ struct FolderRow: View {
         guard let name = TextPrompt.ask(title: "Rename Folder",
                                         message: "Renames the folder on disk; documents inside keep their tags and metadata.",
                                         initial: node.name) else { return }
-        model.renameFolder(node.path, to: name)
+        model.renameFolder(node.path, to: name) { rules in
+            let alert = NSAlert()
+            alert.messageText = rules.count == 1
+                ? "Update the rule that files into “\(node.name)”?"
+                : "Update the \(rules.count) rules that file into “\(node.name)”?"
+            alert.informativeText = rules.map { "“\($0.name)” → \($0.destination ?? "")" }
+                .joined(separator: "\n")
+            alert.addButton(withTitle: rules.count == 1 ? "Update Rule" : "Update Rules")
+            alert.addButton(withTitle: "Leave As They Are")
+            return alert.runModal() == .alertFirstButtonReturn
+        }
     }
 }
 

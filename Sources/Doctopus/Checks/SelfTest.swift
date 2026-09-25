@@ -182,6 +182,25 @@ enum SelfTest {
             try? FileManager.default.moveItem(atPath: renamed, toPath: folder)
         }
 
+        let base = store.root.path
+        func filing(_ template: String) -> Rule {
+            Rule(id: 0, name: template, actions: [RuleAction(kind: .addTags, value: "x"),
+                                                  RuleAction(kind: .moveFile, value: template)])
+        }
+        func refiled(_ template: String, _ old: String, _ new: String) -> String? {
+            filing(template).refiling(base + "/" + old, to: base + "/" + new, root: base)?.destination
+        }
+        Check.that("a rule filing into a renamed folder follows it, subfolders and placeholders kept",
+                   refiled("Finances/Invoices/{year}", "Finances", "Money") == "Money/Invoices/{year}"
+                       && refiled("finances/invoices", "Finances/Invoices", "Finances/Bills") == "Finances/Bills"
+                       && refiled(base + "/Finances/{year}", "Finances", "Money") == base + "/Money/{year}",
+                   refiled("Finances/Invoices/{year}", "Finances", "Money") ?? "not refiled")
+        Check.that("…but not one that only reaches it by way of a placeholder, or a namesake",
+                   refiled("Insurance/{correspondent}", "Insurance/Allianz", "Insurance/Allianz SE") == nil
+                       && refiled("Finances-Old/{year}", "Finances", "Money") == nil
+                       && refiled("Other/Finances", "Finances", "Money") == nil
+                       && Rule(id: 0, name: "No folder").refiling(base + "/A", to: base + "/B", root: base) == nil)
+
         print("\nRENAME PREVIEW (\(Naming.defaultTemplate))")
         for row in rows.prefix(4) {
             let ctx = Naming.Context(date: row.docDate ?? row.createdAt, correspondent: row.correspondent,
