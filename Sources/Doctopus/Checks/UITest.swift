@@ -65,6 +65,7 @@ enum UITest {
             await undoTakesBackAMove(model)
             await namingMismatchDraws(model, snapshots: snapshots)
             await libraryFollowsItsFolder(model, fixture: library)
+            cancelEndsAScanRun(model)
             Check.finish("ui checks")
         }
         app.run()

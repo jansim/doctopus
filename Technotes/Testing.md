@@ -65,9 +65,12 @@ build/Doctopus.app/Contents/MacOS/Doctopus --scantest loop   # three rounds back
 
 `loop` is what continuous scanning rests on: whether a device honours a capture
 asked for moments after it finished the last one, and how long `scanRearm` has
-to wait first. The bookkeeping around those rounds — the counter, and which
-interruptions a run resumes from by itself — is plain enough to check in
-`--selftest`, and is.
+to wait first, and — cancelling one round on the device — whether a cancel
+comes back as an empty delivery, which is what ends a run, or as nothing at
+all. The bookkeeping around those rounds — the counter, which interruptions a
+run resumes from by itself, and that a cancel ends it — is plain enough to
+check in `--selftest`, and is; `--uitest` checks a cancel clears what the
+toolbar shows and every timer the run had going.
 
 ## Other command-line modes
 

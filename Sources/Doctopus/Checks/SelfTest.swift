@@ -112,6 +112,7 @@ enum SelfTest {
         metadataSource()
         scanCaptures()
         continuousScanning()
+        continuousScanEnds()
         folderDrops()
         endpoints()
         await replies(indexer: indexer, settings: settings, rows: rows)

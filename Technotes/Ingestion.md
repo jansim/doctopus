@@ -60,6 +60,13 @@ device left the room — and keeps its count and its destination, so Resume
 (⌥⌘S) picks it up exactly where it was. A capture already in flight when the
 run stops is still filed.
 
+A cancel is different: a capture called off on the device, or in the system's
+own panel, comes back as a reply with nothing in it, and that ends the run the
+way the toolbar's stop button does — nothing re-arms, the toolbar clears, and
+the next run starts from nothing. A reply offering only what cannot be read is
+a failure instead, and pauses. A cancel the device never reports back looks
+like any other silence, and pauses once the round times out.
+
 **What a capture is taken as.** A device offers the same capture in several
 forms and lists them in its own order, so the form is chosen by this app's
 preference — PDF first — rather than by whichever the device happened to name
