@@ -12,6 +12,11 @@ concurrency:
 
 jobs:
   test:
+    # A branch in this repository is already checked on push, so its pull
+    # request would only run the same commit a second time. Pull requests from
+    # forks have no push run here and still get one.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+
     # macOS 26 for the SDK: the app weak-links FoundationModels so it can still
     # run on the macOS 15 deployment target, but it has to compile against a
     # toolchain that has the framework.
@@ -22,10 +27,35 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Toolchain
-        run: swift --version && xcodebuild -version
+        id: toolchain
+        run: |
+          swift --version && xcodebuild -version
+          echo "id=$( (swift --version; xcodebuild -version) 2>&1 | shasum | cut -c1-12)" >> "$GITHUB_OUTPUT"
 
+      # The last build's products, so only what changed is compiled again. A
+      # fresh checkout gives every file a new mtime, which is why the build
+      # below has the driver compare contents instead.
+      - name: Restore build cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            .build
+            build/icon
+          key: build-${{ steps.toolchain.outputs.id }}-${{ hashFiles('Package.swift', 'Package.resolved') }}-${{ github.sha }}
+          restore-keys: |
+            build-${{ steps.toolchain.outputs.id }}-${{ hashFiles('Package.swift', 'Package.resolved') }}-
+
+      # Debug rather than release: whole-module optimization type-checks and
+      # compiles the one big module on a single thread and can't be
+      # incremental, and the checks don't need an optimized binary. The
+      # warnings name any function or expression slow enough to type-check to
+      # be worth rewriting.
       - name: Build
-        run: Scripts/build.sh
+        run: >
+          Scripts/build.sh debug
+          -Xswiftc -enable-incremental-file-hashing
+          -Xswiftc -Xfrontend -Xswiftc -warn-long-function-bodies=200
+          -Xswiftc -Xfrontend -Xswiftc -warn-long-expression-type-checking=200
 
       - name: Generate the demo library
         run: swift Testing/makefixtures.swift Testing/DemoLibrary
