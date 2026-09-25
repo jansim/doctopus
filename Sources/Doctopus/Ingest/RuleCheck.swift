@@ -16,20 +16,23 @@ struct RuleCheck: Sendable {
     var root: URL
     var naming = Naming.Options()
 
-    func changes(_ rule: Rule, for doc: Document) -> [RuleMatch.Change] {
+    /// What the rule would change, and what it wants that already holds.
+    func effects(_ rule: Rule, for doc: Document) -> (pending: [RuleMatch.Change], inEffect: [RuleMatch.Change]) {
         let router = Router(rules: [], derivedTemplate: "",
                             root: root, deriveWhenNoRule: false)
         let url = URL(fileURLWithPath: doc.path)
         let correspondent = rule.setCorrespondent ?? doc.correspondent
         let docType = rule.setDocType ?? doc.docType
         var changes: [RuleMatch.Change] = []
+        var inEffect: [RuleMatch.Change] = []
 
         if let template = rule.destination {
             let folder = router.expand(template, correspondent: correspondent,
                                        docType: docType, date: doc.date)
-            if router.isInsideLibrary(folder),
-               folder.standardizedFileURL != url.deletingLastPathComponent().standardizedFileURL {
-                changes.append(.move(to: display(folder)))
+            if router.isInsideLibrary(folder) {
+                let here = folder.standardizedFileURL == url.deletingLastPathComponent().standardizedFileURL
+                if here { inEffect.append(.move(to: display(folder))) }
+                else { changes.append(.move(to: display(folder))) }
             }
         }
 
@@ -40,6 +43,7 @@ struct RuleCheck: Sendable {
                 originalStem: url.deletingPathExtension().lastPathComponent, ext: url.pathExtension,
                 options: naming))
             if name != url.lastPathComponent { changes.append(.rename(to: name)) }
+            else { inEffect.append(.rename(to: name)) }
         }
 
         // A nested tag "a/b" is assigned as "b".
@@ -51,13 +55,15 @@ struct RuleCheck: Sendable {
         }
         if !missing.isEmpty { changes.append(.addTags(missing)) }
 
-        if let value = rule.setCorrespondent, !Self.same(value, doc.correspondent) {
-            changes.append(.setCorrespondent(value))
+        if let value = rule.setCorrespondent {
+            if Self.same(value, doc.correspondent) { inEffect.append(.setCorrespondent(value)) }
+            else { changes.append(.setCorrespondent(value)) }
         }
-        if let value = rule.setDocType, !Self.same(value, doc.docType) {
-            changes.append(.setDocType(value))
+        if let value = rule.setDocType {
+            if Self.same(value, doc.docType) { inEffect.append(.setDocType(value)) }
+            else { changes.append(.setDocType(value)) }
         }
-        return changes
+        return (changes, inEffect)
     }
 
     private static func same(_ a: String, _ b: String?) -> Bool {

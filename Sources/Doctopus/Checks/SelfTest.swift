@@ -1835,8 +1835,36 @@ enum SelfTest {
                    !unsettled && conflicts.allSatisfy(choices.isSettled)
                        && loser.map(choices.accepted) == [.addTags(["conflict-b"])])
 
-        try? await store.deleteRule(first)
+        // A rule already applied still has a say: the one after it must not quietly undo it.
+        let folder = store.relPath((try? await store.detail(payslip.doc))?.row.directory ?? payslip.directory)
         try? await store.deleteRule(second)
+        guard !folder.isEmpty,
+              let here = try? await store.upsertRule(rule("Conflict Here", folder: folder, tag: "conflict-a"))
+        else {
+            Check.that("a rule already in effect is saved", false)
+            try? await store.deleteRule(first)
+            return
+        }
+        let withApplied = ((try? await store.ruleMatches()) ?? [:])[payslip.doc]?
+            .filter { [first, here].contains($0.ruleID) } ?? []
+        let applied = withApplied.first { $0.ruleID == here }
+        let contested = RuleMatch.conflicts(among: withApplied)
+        Check.that("a rule already in effect conflicts with one that would move the document away",
+                   applied?.changes.isEmpty == false && applied?.inEffect == [.move(to: folder)]
+                       && contested.map(\.kind) == [.moveFile]
+                       && Set(contested.first?.options.map(\.ruleID) ?? []) == [first, here],
+                   contested.map(\.summary).joined(separator: "; "))
+
+        try? await store.deleteRule(first)
+        let others = ((try? await store.ruleMatches()) ?? [:])[payslip.doc] ?? []
+        let options = RuleMatch.conflicts(among: others).flatMap(\.options)
+        Check.that("…and what is in effect is only pointed out where another rule disagrees",
+                   others.allSatisfy { match in
+                       match.inEffect.allSatisfy { change in
+                           options.contains { $0.ruleID == match.ruleID && $0.change == change }
+                       }
+                   }, others.map(\.summary).joined(separator: " | "))
+        try? await store.deleteRule(here)
     }
 
     private static func ruleMigration() {
@@ -2147,6 +2175,17 @@ enum SelfTest {
                                                           sort: .added, ascending: false)) ?? [])
                 .first { $0.id == row?.id }
             Check.that("…marked as a new arrival", listed?.fromOutside == true)
+            if let row {
+                // Approved, it is in the library; anything later is about a document already there.
+                try? await store.setDocumentApproved(row.doc, true)
+                try? await store.logProcessing(docID: row.doc, action: .optimized, detail: nil, rule: nil,
+                                               from: nil, to: nil, approved: false)
+                let again = ((try? await store.listDocuments(selection: .needsReview, query: SearchQuery(""),
+                                                             sort: .added, ascending: false)) ?? [])
+                    .first { $0.id == row.id }
+                Check.that("…and once approved, back in review as one already in the library",
+                           again != nil && again?.fromOutside == false)
+            }
             try? fm.removeItem(at: tie)
         }
 

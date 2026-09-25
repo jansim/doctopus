@@ -19,7 +19,9 @@ struct RuleDecision: Hashable, Sendable {
     var match: RuleMatch
     var accepted: Set<RuleMatch.Change>
 
-    var isPartial: Bool { accepted != Set(match.changes) }
+    var isPartial: Bool { accepted != match.wants }
+    /// What is left to do; what is already in effect needs nothing.
+    var toApply: Set<RuleMatch.Change> { accepted.intersection(match.changes) }
 }
 
 struct OptimizationPreview: Sendable {
@@ -121,7 +123,7 @@ extension AppModel {
                 let rules = (try? await lib.store.rules()) ?? []
                 for decision in decisions {
                     let name = decision.match.ruleName
-                    let kinds = Set(decision.accepted.map(\.kind)).subtracting([.moveFile])
+                    let kinds = Set(decision.toApply.map(\.kind)).subtracting([.moveFile])
                     if !kinds.isEmpty, let rule = rules.first(where: { $0.id == decision.match.ruleID }) {
                         let limited = rule.limited(to: kinds)
                         if limited.hasEffect {
