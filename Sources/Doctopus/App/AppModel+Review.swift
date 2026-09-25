@@ -162,6 +162,9 @@ extension AppModel {
                         notes.append("applied “\(name)”")
                     }
                 }
+                let followed = await lib.indexer.followNaming([row.doc])
+                report(failures: followed.failures, "rename")
+                if followed.done > 0 { notes.append("renamed to match the naming template") }
             }
             // A rule may have renamed it, so file what is on disk now.
             let current = await loadDetail(row.id)?.row ?? row

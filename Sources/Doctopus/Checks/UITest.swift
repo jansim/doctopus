@@ -63,6 +63,7 @@ enum UITest {
             await droppingAFolderImportsIt(model)
             await draggingOntoAFolderFilesOrMoves(model)
             await undoTakesBackAMove(model)
+            await namingMismatchDraws(model, snapshots: snapshots)
             await libraryFollowsItsFolder(model, fixture: library)
             Check.finish("ui checks")
         }
@@ -1118,7 +1119,7 @@ enum UITest {
         return condition()
     }
 
-    private static func bitmap(_ view: NSView) -> NSBitmapImageRep? {
+    static func bitmap(_ view: NSView) -> NSBitmapImageRep? {
         view.layoutSubtreeIfNeeded()
         view.displayIfNeeded()
         guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return nil }
@@ -1126,7 +1127,7 @@ enum UITest {
         return rep
     }
 
-    private static func inkedRows(_ view: NSView) -> Int {
+    static func inkedRows(_ view: NSView) -> Int {
         guard let rep = bitmap(view) else { return 0 }
         let background = rep.colorAt(x: rep.pixelsWide - 2, y: rep.pixelsHigh - 2)
         var rows = 0

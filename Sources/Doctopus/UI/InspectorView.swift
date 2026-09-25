@@ -38,6 +38,7 @@ private struct DetailInspector: View {
                 Divider()
                 // In review the panel below the list decides on rule matches.
                 if !model.selection.isQueueMode { RuleMatchSection(row: row) }
+                NamingMismatchSection(row: row)
                 summarySection
                 metadataSection
                 tagsSection

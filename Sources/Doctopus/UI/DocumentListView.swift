@@ -173,10 +173,10 @@ private struct DocumentTableView: View {
                         }
                     }
                     let pending = model.pendingRuleMatches(for: row)
-                    if !pending.isEmpty {
+                    let misnamed = model.pendingNamingMismatch(for: row)
+                    if !pending.isEmpty || misnamed != nil {
                         Spacer(minLength: 4)
-                        RuleMatchBadge(size: 16, conflicting: !RuleMatch.conflicts(among: pending).isEmpty)
-                            .help(RuleMatchBadge.help(pending))
+                        MismatchBadges(rules: pending, naming: misnamed, size: 16)
                     }
                 }
             }
@@ -467,9 +467,9 @@ private struct GalleryCell: View {
                 }
                 .overlay(alignment: .bottomTrailing) {
                     let pending = model.pendingRuleMatches(for: row)
-                    if !pending.isEmpty {
-                        RuleMatchBadge(size: 20, conflicting: !RuleMatch.conflicts(among: pending).isEmpty)
-                            .help(RuleMatchBadge.help(pending))
+                    let misnamed = model.pendingNamingMismatch(for: row)
+                    if !pending.isEmpty || misnamed != nil {
+                        MismatchBadges(rules: pending, naming: misnamed, size: 20)
                             .padding(9)
                     }
                 }

@@ -7,7 +7,7 @@ enum Schema {
 
     private static let steps: [@Sendable (Database) throws -> Void] = [
         v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19,
-        v20, v21, v22, v23, v24,
+        v20, v21, v22, v23, v24, v25,
     ]
     static var current: Int { steps.count }
 
@@ -35,6 +35,15 @@ enum Schema {
             [.text(table), .text(column)]) { $0.int(0) } ?? 0
         guard present == 0 else { return }
         try db.exec("ALTER TABLE \(table) ADD COLUMN \(column) \(declaration)")
+    }
+
+    /// The name the naming template last gave a document, so a later change
+    /// to its fields renames only a file the template named and never one
+    /// somebody named by hand; and whether its name is to be left as it is.
+    private static func v25(_ db: Database) throws {
+        try addColumn(db, table: "documents", column: "auto_name", declaration: "TEXT")
+        try addColumn(db, table: "documents", column: "name_suppressed",
+                      declaration: "INTEGER NOT NULL DEFAULT 0")
     }
 
     /// A document has one note, written like a text box, rather than a list

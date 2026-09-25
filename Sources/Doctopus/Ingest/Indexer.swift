@@ -499,7 +499,12 @@ actor Indexer {
             return
         }
 
-        if let template = decision.rename {
+        // A rule's name comes first; failing one, a file Doctopus brought in
+        // and is filing itself is named by the library's template when names
+        // are enforced automatically.
+        let byTemplate = decision.rename == nil && settings.namingEnforcement == .automatic
+        if let template = decision.rename ?? (byTemplate ? settings.namingTemplate.nilIfBlank : nil) {
+            let rule = byTemplate ? nil : decision.rule
             let name = Naming.render(template, Naming.Context(
                 date: findings.date,
                 correspondent: decision.setCorrespondent ?? insight?.correspondent ?? findings.correspondent,
@@ -508,17 +513,20 @@ actor Indexer {
                 language: insight?.language, counter: nil,
                 originalStem: url.deletingPathExtension().lastPathComponent, ext: url.pathExtension,
                 options: settings.namingOptions))
-            if name != url.lastPathComponent {
+            var named = name == url.lastPathComponent
+            if !named {
                 do {
                     url = try await relocate(id, from: url, into: url.deletingLastPathComponent(), named: name,
-                                             action: .renamed, detail: name, rule: decision.rule)
+                                             action: .renamed, detail: name, rule: rule)
+                    named = true
                 } catch {
                     try? await store.logProcessing(docID: id, action: action,
                                                    detail: "Could not rename to “\(name)”: \(error.localizedDescription)",
-                                                   rule: decision.rule,
+                                                   rule: rule,
                                                    from: url.path, to: url.path, approved: false)
                 }
             }
+            if byTemplate, named { try? await store.recordAutoName(name, for: id) }
         }
 
         guard let destination = decision.destination else {
@@ -888,14 +896,50 @@ actor Indexer {
                                      ext: url.pathExtension,
                                      options: settings.namingOptions)
             let newName = Naming.render(template, ctx)
-            guard newName != url.lastPathComponent else { continue }
+            // The library's own template is what later edits keep a name in
+            // step with; any other gives a name somebody chose.
+            let recorded = template == settings.namingTemplate ? newName : nil
+            guard newName != url.lastPathComponent else {
+                if recorded != nil { try? await store.recordAutoName(recorded, for: id) }
+                continue
+            }
             do {
                 try await relocate(id, from: url, into: url.deletingLastPathComponent(), named: newName,
                                    action: .renamed, detail: newName, rule: template)
+                try? await store.recordAutoName(recorded, for: id)
                 result.done += 1
             } catch { result.fail(url.lastPathComponent, error) }
         }
         onDataChanged()
+        return result
+    }
+
+    /// Renames documents whose fields have just changed to what the library's
+    /// template now makes of them, as far as the naming setting reaches: under
+    /// `followTemplateNames` only a file whose name the template gave it, under
+    /// `automatic` any. A suppressed document, and one a matching rule
+    /// renames, keep their names.
+    func followNaming(_ ids: [Int64]) async -> FileChanges {
+        var result = FileChanges()
+        let enforcement = settings.namingEnforcement
+        guard enforcement.followsEdits, let template = settings.namingTemplate.nilIfBlank else { return result }
+        for id in ids {
+            guard let state = try? await store.namingState(id), !state.suppressed,
+                  enforcement == .automatic || state.autoNamed,
+                  (try? await store.isRuleRenamed(id)) == false,
+                  let row = try? await store.detail(id)?.row else { continue }
+            let url = row.url
+            guard FileManager.default.fileExists(atPath: url.path) else { continue }
+            let name = Naming.render(template, Naming.Context(row, options: settings.namingOptions))
+            guard !Naming.isRendering(url.lastPathComponent, of: name) else { continue }
+            do {
+                try await relocate(id, from: url, into: url.deletingLastPathComponent(), named: name,
+                                   action: .renamed, detail: name, rule: template)
+                try? await store.recordAutoName(name, for: id)
+                result.done += 1
+            } catch { result.fail(url.lastPathComponent, error) }
+        }
+        if result.done > 0 { onDataChanged() }
         return result
     }
 

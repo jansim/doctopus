@@ -72,6 +72,10 @@ and, where they conflict, asks for one of them per disagreement; Apply stays
 disabled on the rules involved until it has an answer, and Apply All settles
 every match at once.
 
+A filename the library's naming template would not give is pointed out the
+same way, in orange, once Settings › General asks for it: a badge in the list
+and a card in the inspector, review included, with Rename and Suppress.
+
 Wherever a conflict is shown, in review or in the inspector, an Edit Rule menu
 beside it lists the rules involved. Picking one opens Settings on the Rules
 pane with that rule's editor already up, for when the disagreement is the
