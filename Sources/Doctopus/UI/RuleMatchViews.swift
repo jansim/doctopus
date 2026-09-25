@@ -211,53 +211,60 @@ private struct RuleMatchCard: View {
 
     var body: some View {
         let accepted = choices.accepted(match)
-        let partial = accepted != match.wants
         VStack(alignment: .leading, spacing: 7) {
-            VStack(alignment: .leading, spacing: 5) {
-                MismatchCardHeader(kind: .rule, title: match.ruleName, suppressed: match.suppressed)
-                if match.changes.isEmpty && match.inEffect.isEmpty {
-                    Text("Nothing left for this rule to change.")
-                        .font(.caption).foregroundStyle(.secondary)
-                } else {
-                    VStack(alignment: .leading, spacing: 3) {
-                        ForEach(match.changes + match.inEffect, id: \.self) { change in
-                            Label {
-                                Text(change.label + (match.inEffect.contains(change) ? " (in effect)" : ""))
-                                    .strikethrough(!accepted.contains(change))
-                                    .lineLimit(2)
-                                    .truncationMode(.middle)
-                                    .fixedSize(horizontal: false, vertical: true)
-                            } icon: {
-                                Image(systemName: change.icon)
-                            }
-                            .font(.caption)
-                        }
-                    }
-                    .foregroundStyle(.secondary)
-                }
-            }
-            .opacity(match.suppressed ? 0.6 : 1)
-
-            HStack(spacing: 8) {
-                if match.suppressed {
-                    Button("Stop Suppressing") { model.setRuleSuppressed(false, match, for: row) }
-                        .help("Point this rule out on this document again")
-                } else {
-                    Button(partial ? "Apply Chosen" : "Apply") {
-                        model.applyRule(match, to: row, accepting: accepted)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(.purple)
-                    .disabled(blocked || accepted.isEmpty || (!partial && match.changes.isEmpty))
-                    .help(blocked
-                          ? "Another rule wants something different here — choose between them above"
-                          : "Apply “\(match.ruleName)” to this document now")
-                    Button("Suppress") { model.setRuleSuppressed(true, match, for: row) }
-                        .help("Mark this document as an outlier: the rule leaves it alone and stops pointing it out")
-                }
-            }
-            .controlSize(.small)
+            summary(accepted: accepted)
+            actions(accepted: accepted)
         }
         .mismatchCard(.rule, suppressed: match.suppressed)
+    }
+
+    private func summary(accepted: Set<RuleMatch.Change>) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            MismatchCardHeader(kind: .rule, title: match.ruleName, suppressed: match.suppressed)
+            if match.changes.isEmpty && match.inEffect.isEmpty {
+                Text("Nothing left for this rule to change.")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else {
+                VStack(alignment: .leading, spacing: 3) {
+                    ForEach(match.changes + match.inEffect, id: \.self) { change in
+                        Label {
+                            Text(change.label + (match.inEffect.contains(change) ? " (in effect)" : ""))
+                                .strikethrough(!accepted.contains(change))
+                                .lineLimit(2)
+                                .truncationMode(.middle)
+                                .fixedSize(horizontal: false, vertical: true)
+                        } icon: {
+                            Image(systemName: change.icon)
+                        }
+                        .font(.caption)
+                    }
+                }
+                .foregroundStyle(.secondary)
+            }
+        }
+        .opacity(match.suppressed ? 0.6 : 1)
+    }
+
+    private func actions(accepted: Set<RuleMatch.Change>) -> some View {
+        let partial = accepted != match.wants
+        return HStack(spacing: 8) {
+            if match.suppressed {
+                Button("Stop Suppressing") { model.setRuleSuppressed(false, match, for: row) }
+                    .help("Point this rule out on this document again")
+            } else {
+                Button(partial ? "Apply Chosen" : "Apply") {
+                    model.applyRule(match, to: row, accepting: accepted)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.purple)
+                .disabled(blocked || accepted.isEmpty || (!partial && match.changes.isEmpty))
+                .help(blocked
+                      ? "Another rule wants something different here — choose between them above"
+                      : "Apply “\(match.ruleName)” to this document now")
+                Button("Suppress") { model.setRuleSuppressed(true, match, for: row) }
+                    .help("Mark this document as an outlier: the rule leaves it alone and stops pointing it out")
+            }
+        }
+        .controlSize(.small)
     }
 }
