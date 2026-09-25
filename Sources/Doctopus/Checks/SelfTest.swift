@@ -126,6 +126,7 @@ enum SelfTest {
         await matchModes(store: store)
         await nestedTags(store: store, rows: rows)
         await tagCounts(store: store)
+        await tagIcons(store: store)
         await dates(store: store, rows: rows)
         await revertibleOptimisation(store: store, indexer: indexer, rows: rows)
         await typedFields(store: store, rows: rows)

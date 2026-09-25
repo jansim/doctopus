@@ -101,10 +101,17 @@ struct SidebarView: View {
         .listStyle(.sidebar)
         .safeAreaInset(edge: .bottom, spacing: 0) { StatusFooter() }
         .sheet(item: $iconTarget) { target in
-            IconPicker(title: target.facet.value,
-                       current: target.facet.icon ?? target.field.icon,
-                       fallback: target.field.icon) { icon in
-                model.setValueIcon(target.field, value: target.facet.value, icon: icon)
+            switch target {
+            case .value(let field, let facet):
+                IconPicker(title: facet.value, current: facet.icon ?? field.icon,
+                           fallback: field.icon) { icon in
+                    model.setValueIcon(field, value: facet.value, icon: icon)
+                }
+            case .tag(let tag):
+                IconPicker(title: tag.name, current: tag.icon ?? Tag.defaultIcon,
+                           fallback: Tag.defaultIcon) { icon in
+                    model.setTagIcon(tag, icon)
+                }
             }
         }
     }
@@ -112,7 +119,7 @@ struct SidebarView: View {
     @ViewBuilder
     private var tagRows: some View {
         ForEach(model.tags) { tag in
-            TagRow(tag: tag, siblings: model.tags)
+            TagRow(tag: tag, siblings: model.tags) { iconTarget = .tag(tag) }
         }
         Button {
             guard let name = TextPrompt.ask(title: "New Tag",
@@ -147,7 +154,7 @@ struct SidebarView: View {
 
     @ViewBuilder
     private func facetMenu(_ field: Field, _ facet: Facet) -> some View {
-        Button("Change Icon…") { iconTarget = IconTarget(field: field, facet: facet) }
+        Button("Change Icon…") { iconTarget = .value(field, facet) }
         Button("Rename “\(facet.value)”…") {
             guard let new = TextPrompt.ask(
                 title: "Rename \(field.name)",
@@ -182,6 +189,7 @@ private struct TagRow: View {
     @Environment(AppModel.self) private var model
     let tag: Tag
     var siblings: [Tag] = []
+    var changeIcon: () -> Void = {}
     @State private var targeted = false
 
     var body: some View {
@@ -195,7 +203,7 @@ private struct TagRow: View {
                 CountBadge(tag.count)
             }
         } icon: {
-            Image(systemName: "tag")
+            Image(systemName: tag.icon ?? Tag.defaultIcon)
                 .foregroundStyle(TagColor.color(tag.color))
         }
         .dropHighlight(targeted)
@@ -225,6 +233,7 @@ private struct TagRow: View {
         Menu("Color") {
             TagColorItems(tag: tag)
         }
+        Button("Change Icon…", action: changeIcon)
         Menu("Move Under") {
             Button("Nothing — Top Level") { model.setTagParent(tag, to: nil) }
                 .disabled(tag.parentID == nil)
@@ -519,8 +528,14 @@ struct TagColorItems: View {
     }
 }
 
-struct IconTarget: Identifiable {
-    var field: Field
-    var facet: Facet
-    var id: String { "\(field.key)/\(facet.value)" }
+enum IconTarget: Identifiable {
+    case value(Field, Facet)
+    case tag(Tag)
+
+    var id: String {
+        switch self {
+        case .value(let field, let facet): return "value/\(field.key)/\(facet.value)"
+        case .tag(let tag): return "tag/\(tag.tagID)"
+        }
+    }
 }

@@ -248,6 +248,10 @@ extension Store {
                 """, [.int(target), .int(id)])
             try db.run("UPDATE OR IGNORE document_tags SET tag_id=? WHERE tag_id=?", [.int(target), .int(id)])
             try db.run("DELETE FROM document_tags WHERE tag_id=?", [.int(id)])
+            // The survivor keeps its own icon, and takes the merged one's if it had none.
+            try db.run("""
+                UPDATE tags SET icon=(SELECT icon FROM tags WHERE id=?) WHERE id=? AND icon IS NULL
+                """, [.int(id), .int(target)])
             try db.run("DELETE FROM tags WHERE id=?", [.int(id)])
             return target
         }
@@ -263,6 +267,12 @@ extension Store {
 
     func setTagColor(_ id: Int64, _ color: Int64) throws {
         try db.run("UPDATE tags SET color=? WHERE id=?", [.int(color), .int(id)])
+    }
+
+    /// Nil, or a name that is only whitespace, goes back to the default icon.
+    func setTagIcon(_ id: Int64, _ icon: String?) throws {
+        let clean = icon?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfBlank
+        try db.run("UPDATE tags SET icon=? WHERE id=?", [.text(clean), .int(id)])
     }
 
     func setValueIcon(field: Field, value: String, icon: String?) throws {

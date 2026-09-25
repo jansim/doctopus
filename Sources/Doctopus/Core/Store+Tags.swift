@@ -6,14 +6,14 @@ extension Store {
     /// Trash or gone from disk are joined as nothing, so they are not counted.
     func tags() throws -> [Tag] {
         let flat = try db.map("""
-            SELECT t.id, t.name, t.color, COUNT(d.id), t.parent_id
+            SELECT t.id, t.name, t.color, COUNT(d.id), t.parent_id, t.icon
             FROM tags t
             LEFT JOIN document_tags dt ON dt.tag_id = t.id
             LEFT JOIN documents d ON d.id = dt.doc_id AND d.missing=0 AND d.deleted_at IS NULL
             GROUP BY t.id ORDER BY t.name COLLATE NOCASE
             """) {
             Tag(tagID: $0.int(0), name: $0.string(1), color: $0.int(2),
-                count: Int($0.int(3)), parentID: $0.intOrNil(4))
+                icon: $0.stringOrNil(5), count: Int($0.int(3)), parentID: $0.intOrNil(4))
         }
         return Store.nested(flat)
     }
@@ -197,11 +197,11 @@ extension Store {
 
     func tags(for docID: Int64) throws -> [Tag] {
         try db.map("""
-            SELECT t.id, t.name, t.color, t.parent_id, dt.implied FROM tags t
+            SELECT t.id, t.name, t.color, t.parent_id, dt.implied, t.icon FROM tags t
             JOIN document_tags dt ON dt.tag_id=t.id WHERE dt.doc_id=?
             ORDER BY t.name COLLATE NOCASE
             """, [.int(docID)]) {
-            Tag(tagID: $0.int(0), name: $0.string(1), color: $0.int(2),
+            Tag(tagID: $0.int(0), name: $0.string(1), color: $0.int(2), icon: $0.stringOrNil(5),
                 parentID: $0.intOrNil(3), implied: $0.bool(4))
         }
     }

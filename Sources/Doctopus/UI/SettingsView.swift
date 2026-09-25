@@ -247,6 +247,7 @@ private struct FieldRow: View {
 
 private struct TagSettings: View {
     @Environment(AppModel.self) private var model
+    @State private var iconFor: Tag?
 
     private var tags: [Tag] { model.tags }
 
@@ -269,6 +270,16 @@ private struct TagSettings: View {
                         .menuStyle(.borderlessButton)
                         .menuIndicator(.hidden)
                         .frame(width: 20)
+
+                        Button {
+                            iconFor = tag
+                        } label: {
+                            Image(systemName: tag.icon ?? Tag.defaultIcon)
+                                .foregroundStyle(TagColor.color(tag.color))
+                                .frame(width: 18)
+                        }
+                        .buttonStyle(.borderless)
+                        .help("Change the icon")
 
                         Text(tag.name)
                         Spacer()
@@ -299,6 +310,12 @@ private struct TagSettings: View {
             }
         }
         .formStyle(.grouped)
+        .sheet(item: $iconFor) { tag in
+            IconPicker(title: tag.name, current: tag.icon ?? Tag.defaultIcon,
+                       fallback: Tag.defaultIcon) { icon in
+                model.setTagIcon(tag, icon)
+            }
+        }
     }
 }
 

@@ -38,7 +38,7 @@ struct TagChips: View {
                 ForEach(visible, id: \.tag.id) { entry in
                     let color = TagColor.color(entry.tag.color)
                     HStack(spacing: 3) {
-                        Image(systemName: "tag")
+                        Image(systemName: entry.tag.icon ?? Tag.defaultIcon)
                             .font(.system(size: 8))
                             .foregroundStyle(color)
                         Text(entry.path).font(.caption).lineLimit(1)
@@ -81,7 +81,7 @@ struct TagChip: View {
         let color = TagColor.color(tag.color)
         let shown = displayName ?? tag.name
         ChipBody(compact: compact) {
-            Image(systemName: "tag")
+            Image(systemName: tag.icon ?? Tag.defaultIcon)
                 .font(.system(size: compact ? 8 : 9))
                 .foregroundStyle(color)
             Text(shown).font(.caption)
