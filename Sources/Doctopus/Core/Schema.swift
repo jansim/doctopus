@@ -7,7 +7,7 @@ enum Schema {
 
     private static let steps: [@Sendable (Database) throws -> Void] = [
         v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19,
-        v20, v21, v22,
+        v20, v21, v22, v23,
     ]
     static var current: Int { steps.count }
 
@@ -35,6 +35,13 @@ enum Schema {
             [.text(table), .text(column)]) { $0.int(0) } ?? 0
         guard present == 0 else { return }
         try db.exec("ALTER TABLE \(table) ADD COLUMN \(column) \(declaration)")
+    }
+
+    /// When a document was last approved, for Recently Reviewed. Approvals
+    /// made before this have no time to go by, so they stay out of it.
+    private static func v23(_ db: Database) throws {
+        try addColumn(db, table: "documents", column: "reviewed_at", declaration: "REAL")
+        try db.exec("CREATE INDEX IF NOT EXISTS idx_documents_reviewed ON documents(reviewed_at)")
     }
 
     /// Confidence scores were never more than a tally of which fields were

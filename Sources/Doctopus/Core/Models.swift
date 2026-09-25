@@ -296,7 +296,7 @@ struct FolderNode: Identifiable, Hashable, Sendable {
 
 enum Selection: Hashable, Sendable {
     case all
-    case queue
+    case reviewed
     case folder(String)
     case tag(Int64)
     case finderTag(String)
@@ -308,7 +308,7 @@ enum Selection: Hashable, Sendable {
     /// The documents marked as outliers for one rule.
     case outliers(rule: Int64)
 
-    var isQueueMode: Bool { self == .queue || self == .needsReview }
+    var isQueueMode: Bool { self == .reviewed || self == .needsReview }
 }
 
 enum ViewMode: String, CaseIterable, Sendable, Codable {
