@@ -273,6 +273,8 @@ final class AppModel {
 
     // AppModel+Rules
     var ruleMatchTask: Task<Void, Never>?
+    /// A rule the Rules pane should open in its editor once it has loaded.
+    var ruleToEdit: Int64?
 
     // AppModel+Import, continuous scanning
     var scanSession: ScanSession?
