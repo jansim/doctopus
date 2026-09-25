@@ -41,7 +41,8 @@ Both types are split by subject rather than kept in one file: `Store+Queries`,
 
 Documents live in ordinary directories — `~/Docs/Finances/Tax-2026/` — and
 indexing an existing one restructures nothing and renames nothing. Renaming,
-single or batch, is something you ask for. The full contract is
+single or batch, is something you ask for — once, or as a standing request in
+the library's naming setting. The full contract is
 [File safety](FileSafety.md); [Storage](Storage.md) has the library layout.
 
 Every document has exactly one physical master location. Filing it in further

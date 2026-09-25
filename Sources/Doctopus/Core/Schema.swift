@@ -7,7 +7,7 @@ enum Schema {
 
     private static let steps: [@Sendable (Database) throws -> Void] = [
         v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19,
-        v20, v21, v22, v23, v24, v25,
+        v20, v21, v22, v23, v24, v25, v26,
     ]
     static var current: Int { steps.count }
 
@@ -40,7 +40,7 @@ enum Schema {
     /// Tags no longer mirror to disk as Finder aliases. The aliases they made
     /// are left where they are, since nothing may delete what is on disk
     /// uninvited; the index only forgets them, and keeps the ones filed by hand.
-    private static func v25(_ db: Database) throws {
+    private static func v26(_ db: Database) throws {
         for column in ["mirrors", "folder"] {
             let present = try db.first(
                 "SELECT COUNT(*) FROM pragma_table_info('tags') WHERE name=?",
@@ -52,17 +52,26 @@ enum Schema {
             "SELECT COUNT(*) FROM pragma_table_info('aliases') WHERE name='tag_id'") { $0.int(0) } ?? 0
         guard tagged > 0 else { return }
         try db.exec("""
-        CREATE TABLE aliases_v25 (
+        CREATE TABLE aliases_v26 (
             id         INTEGER PRIMARY KEY,
             doc_id     INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
             path       TEXT NOT NULL UNIQUE,
             created_at REAL NOT NULL
         );
-        INSERT INTO aliases_v25(id, doc_id, path, created_at)
+        INSERT INTO aliases_v26(id, doc_id, path, created_at)
         SELECT id, doc_id, path, created_at FROM aliases WHERE tag_id IS NULL;
         DROP TABLE aliases;
-        ALTER TABLE aliases_v25 RENAME TO aliases;
+        ALTER TABLE aliases_v26 RENAME TO aliases;
         """)
+    }
+
+    /// The name the naming template last gave a document, so a later change
+    /// to its fields renames only a file the template named and never one
+    /// somebody named by hand; and whether its name is to be left as it is.
+    private static func v25(_ db: Database) throws {
+        try addColumn(db, table: "documents", column: "auto_name", declaration: "TEXT")
+        try addColumn(db, table: "documents", column: "name_suppressed",
+                      declaration: "INTEGER NOT NULL DEFAULT 0")
     }
 
     /// A document has one note, written like a text box, rather than a list

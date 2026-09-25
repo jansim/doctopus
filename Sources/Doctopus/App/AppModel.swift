@@ -68,6 +68,8 @@ final class AppModel {
             guard let self, self.library === lib, self.settings != self.savedSettings else { return }
             let current = self.settings
             let renamesChanged = current.namingOptions != self.savedSettings?.namingOptions
+                || current.namingTemplate != self.savedSettings?.namingTemplate
+                || current.namingEnforcement != self.savedSettings?.namingEnforcement
             let appWideChanged = current.appWide != self.savedSettings?.appWide
             self.savedSettings = current
             lib.settings = current

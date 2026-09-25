@@ -67,6 +67,48 @@ struct ScanSession: Equatable, Sendable {
     mutating func suspend(_ reason: Pause) { paused = reason }
     mutating func resume() { paused = nil }
 
+    enum Event: Equatable, Sendable {
+        case delivered(documents: Int, pages: Int)
+        /// The capture was called off on the device or in the system's own
+        /// panel. Unlike every `Pause`, that is somebody saying they are done.
+        case cancelled
+        case interrupted(Pause)
+    }
+
+    enum Next: Equatable, Sendable {
+        case scanAgain
+        /// Paused: Resume, or for some pauses a late capture, picks it up.
+        case wait
+        /// The run is over, so there is nothing left to show or to re-arm.
+        case end
+    }
+
+    /// The one place a run decides what follows a round, so the loop can be
+    /// checked without a device in the room.
+    mutating func record(_ event: Event) -> Next {
+        switch event {
+        case .delivered(let documents, let pages):
+            received(documents, pages: pages)
+            return isRunning ? .scanAgain : .wait
+        case .cancelled:
+            return .end
+        case .interrupted(let reason):
+            suspend(reason)
+            return .wait
+        }
+    }
+
+    /// Said when a run ends; nil when it ended before anything came in and the
+    /// one who ended it needs no telling.
+    func summary(cancelled: Bool) -> String? {
+        let scanned = count == 1 ? "Scanned 1 document" : "Scanned \(count) documents"
+        if cancelled {
+            return count == 0 ? "Scanning stopped — the scan was cancelled."
+                : "Scanning stopped — the scan was cancelled. \(scanned) before that."
+        }
+        return count == 0 ? nil : scanned + "."
+    }
+
     var label: String {
         var scanned = count == 1 ? "1 document" : "\(count) documents"
         if pages > count { scanned += " · \(pages) pages" }
@@ -108,6 +150,7 @@ final class ScanCoordinator: NSObject {
     var pendingDestination: URL?
     var onScan: ((ScanDelivery, URL?) -> Void)?
     var onScanFailed: ((String) -> Void)?
+    var onScanCancelled: ((URL?) -> Void)?
 
     private weak var deviceItem: NSMenuItem?
 
@@ -191,9 +234,22 @@ final class ScanCoordinator: NSObject {
             let offered = provider.registeredContentTypes.map(\.identifier).joined(separator: ", ")
             ScanCapture.log.notice("capture \(index + 1, privacy: .public) of \(providers.count, privacy: .public) offers [\(offered, privacy: .public)]")
         }
-        guard !captures.isEmpty else {
+        switch ScanCapture.reply(offered: providers.count, readable: captures.count) {
+        case .cancelled:
+            ScanCapture.log.notice("the capture was cancelled — nothing came back")
+            let destination = pendingDestination
+            pendingDestination = nil
+            DispatchQueue.main.async { [self] in onScanCancelled?(destination) }
+            return true
+        case .unreadable:
             ScanCapture.log.error("nothing offered could be read — the delivery was refused")
+            pendingDestination = nil
+            DispatchQueue.main.async { [self] in
+                onScanFailed?("The scan from your iPhone or iPad came in a form Doctopus cannot read.")
+            }
             return false
+        case .capture:
+            break
         }
         if captures.count < providers.count {
             ScanCapture.log.error("\(providers.count - captures.count, privacy: .public) item(s) offered nothing this app can read")

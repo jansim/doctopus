@@ -27,6 +27,8 @@ final class Library: Identifiable {
     var queue: [ProcessingEntry] = []
     var stats = Store.Stats()
     var ruleMatches: [Int64: [RuleMatch]] = [:]
+    /// Empty unless the naming setting points mismatches out.
+    var namingMismatches: [Int64: NamingMismatch] = [:]
     var outlierRevision = 0
 
     var displayName: String { root.lastPathComponent }

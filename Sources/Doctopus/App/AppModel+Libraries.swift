@@ -385,12 +385,17 @@ extension AppModel {
 
     func offerUndo(_ name: String, of rows: [DocumentRow], since mark: Int64,
                    restoring trashed: [DocumentRow] = []) {
-        guard let undoManager, let lib = library, !rows.isEmpty || !trashed.isEmpty else { return }
+        offerUndo(name, docs: rows.map(\.doc), since: mark, restoring: trashed)
+    }
+
+    func offerUndo(_ name: String, docs: [Int64], since mark: Int64,
+                   restoring trashed: [DocumentRow] = []) {
+        guard let undoManager, let lib = library, !docs.isEmpty || !trashed.isEmpty else { return }
         undoManager.registerUndo(withTarget: self) { model in
             MainActor.assumeIsolated {
                 if !trashed.isEmpty { model.restore(trashed) }
                 Task {
-                    if !rows.isEmpty { await lib.indexer.undo(rows.map(\.doc), since: mark) }
+                    if !docs.isEmpty { await lib.indexer.undo(docs, since: mark) }
                     model.refreshAll()
                 }
             }

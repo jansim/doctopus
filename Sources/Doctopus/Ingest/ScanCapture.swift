@@ -37,6 +37,20 @@ enum ScanCapture {
         return nil
     }
 
+    enum Reply: Equatable, Sendable {
+        case cancelled
+        case unreadable
+        case capture
+    }
+
+    /// A reply with nothing in it is a capture called off before anything was
+    /// taken, not one that failed: there was nothing to read. Either has to be
+    /// answered, or a continuous run goes on showing it is scanning.
+    static func reply(offered: Int, readable: Int) -> Reply {
+        if offered == 0 { return .cancelled }
+        return readable == 0 ? .unreadable : .capture
+    }
+
     static func item(from data: Data, declared: UTType) -> ScannedItem? {
         if declared.conforms(to: .fileURL) {
             guard let url = URL(dataRepresentation: data, relativeTo: nil), url.isFileURL,

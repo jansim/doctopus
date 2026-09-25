@@ -22,8 +22,19 @@ extension AppModel {
         guard let lib = library else { return }
         ruleMatchTask = Task {
             try? await Task.sleep(for: .milliseconds(400))
-            guard let matches = try? await lib.store.ruleMatches(naming: lib.settings.namingOptions),
-                  !Task.isCancelled, lib.ruleMatches != matches else { return }
+            let settings = lib.settings
+            guard let matches = try? await lib.store.ruleMatches(naming: settings.namingOptions),
+                  !Task.isCancelled else { return }
+            // After the rule matches, whose cache says which names are a rule's.
+            var misnamed: [Int64: NamingMismatch] = [:]
+            if settings.namingEnforcement.highlights {
+                misnamed = (try? await lib.store.namingMismatches(template: settings.namingTemplate,
+                                                                  options: settings.namingOptions))
+                    ?? lib.namingMismatches
+            }
+            guard !Task.isCancelled else { return }
+            if lib.namingMismatches != misnamed { lib.namingMismatches = misnamed }
+            guard lib.ruleMatches != matches else { return }
             let changed = lib.ruleMatchedDocs != Library.ruleMatchedDocs(in: matches)
             lib.ruleMatches = matches
             if changed { ruleMatchedDocsChanged() }
@@ -81,7 +92,11 @@ extension AppModel {
                     suppressed += 1
                 }
             }
-            if total.moved + total.renamed > 0 { offerUndo("Apply Rule", of: [row], since: mark) }
+            // A correspondent or type a rule set changes what the template
+            // makes of the name.
+            let followed = await lib.indexer.followNaming([row.doc])
+            report(failures: followed.failures, "rename")
+            if total.moved + total.renamed + followed.done > 0 { offerUndo("Apply Rule", of: [row], since: mark) }
             refreshAll()
             reloadDetail()
             notify(Self.applyMessage(plan, matched: total.matched, suppressed: suppressed, row: row),
