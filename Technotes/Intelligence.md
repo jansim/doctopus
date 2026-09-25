@@ -44,6 +44,31 @@ library, without re-running OCR or touching anything on disk. That is how a
 library indexed before a model was configured gets caught up, or asked again
 with a better one.
 
+## Examples from the library
+
+Each question comes with up to two documents already in the library that are
+most like this one by text — the same more-like-this search as the inspector's
+Similar Documents — and how they were filed: their title, category,
+correspondent, summary and tags, in the shape the answer takes and limited to
+the fields being asked for, beside a short excerpt of their text. That is what
+makes a new electricity bill come back as “Stromrechnung” from “Stadtwerke
+München” with the tags the last one got, rather than a fresh spelling of each.
+The model is told to follow their naming but take every fact from the document
+in front of it.
+
+The six closest are looked at and the two shown are picked from those: a
+document someone has approved in review first, then one nobody has objected
+to, and one still waiting in the review queue last — within each, the more
+similar first. A document with nothing filed yet is never shown, and a document
+is never its own example.
+
+The examples are paid for out of the text sent per document rather than added
+on top, since the on-device model's context is small: the document's excerpt
+shrinks by what they take, down to half at most, and each example's own excerpt
+is a twentieth of the setting, at most 300 characters. They go in the message
+with the document, not the instructions, so the on-device session is still
+reused from one document to the next.
+
 ## The on-device model
 
 `FoundationModels` is weak-linked and every call site is behind

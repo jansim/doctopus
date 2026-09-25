@@ -1597,6 +1597,7 @@ enum SelfTest {
             Check.that("the fixtures have two PDFs to move", false)
         }
 
+        await filingExamples(store: store, rows: rows)
         await failuresAreSaid(store: store, indexer: indexer)
         await unreadableFolders(store: store)
         await droppedEvents(store: store)

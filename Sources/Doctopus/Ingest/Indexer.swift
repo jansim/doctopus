@@ -333,8 +333,10 @@ actor Indexer {
         var insight: DocumentInsight?
         if settings.llmBackend != .off, !extracted.text.isEmpty || settings.sendsPageImage {
             let topTags = (try? await store.tags())?.prefix(10).map(\.name) ?? []
+            let examples = (try? await store.filingExamples(for: id)) ?? []
             insight = await intelligence.enrich(text: extracted.text, filename: name, url: url,
-                                                pageCount: extracted.pageCount, candidateTags: topTags)
+                                                pageCount: extracted.pageCount, candidateTags: topTags,
+                                                examples: examples)
             if insight == nil, !settings.predictedFields.isEmpty,
                extracted.text.count >= LLMPrompt.minimumCharacters {
                 problems.append("the model gave no answer, so only what was read off the document is used")
@@ -707,8 +709,10 @@ actor Indexer {
         let text = (try? await store.ocrText(id)) ?? ""
         guard text.count >= LLMPrompt.minimumCharacters || settings.sendsPageImage else { return .skipped }
         let pages = (try? await store.documentPageCount(id)) ?? nil
+        let examples = (try? await store.filingExamples(for: id)) ?? []
         guard let insight = await intelligence.enrich(text: text, filename: name, url: url,
-                                                      pageCount: pages) else { return .failed }
+                                                      pageCount: pages, examples: examples)
+        else { return .failed }
 
         try? await store.storeMetadata(Store.MetadataPatch(
             docID: id,

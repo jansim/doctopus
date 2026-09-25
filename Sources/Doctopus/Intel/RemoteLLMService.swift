@@ -124,7 +124,7 @@ actor RemoteLLMService {
     func enrich(text: String, filename: String, question: LLMPrompt.Question = .init(),
                 pageImage: PageImage.Rendered? = nil,
                 pageCount: Int? = nil, config: RemoteLLMConfig, limit: Int,
-                candidateTags: [String] = []) async -> DocumentInsight? {
+                candidateTags: [String] = [], examples: [FilingExample] = []) async -> DocumentInsight? {
         guard let base = config.baseURL, config.isConfigured else { return nil }
         let key = base.absoluteString
         let imageKey = "\(key)|\(config.trimmedModel)"
@@ -134,7 +134,8 @@ actor RemoteLLMService {
         while true {
             let prompt = LLMPrompt.user(text: text, filename: filename, limit: limit,
                                         candidateTags: candidateTags, pageCount: pageCount,
-                                        hasPageImage: image != nil)
+                                        hasPageImage: image != nil,
+                                        examples: examples, fields: question.fields)
             do {
                 let reply = try await complete(prompt: prompt, question: question, image: image,
                                                config: config, base: base, format: format)
