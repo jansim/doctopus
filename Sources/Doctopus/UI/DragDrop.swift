@@ -90,8 +90,11 @@ enum FolderDropIntent: Equatable {
     case alias
     case move
 
+    /// A plain drag moves, as it does within a Finder volume. ⌥ files the
+    /// document there as well instead — the key Finder uses for keeping the
+    /// original where it is (⌥ copies, ⌘⌥ makes an alias).
     static func reading(_ modifiers: NSEvent.ModifierFlags) -> FolderDropIntent {
-        modifiers.contains(.command) ? .move : .alias
+        modifiers.contains(.option) ? .alias : .move
     }
 
     nonisolated(unsafe) static var heldModifiers: () -> NSEvent.ModifierFlags = { NSEvent.modifierFlags }
@@ -117,7 +120,7 @@ enum FolderDropIntent: Equatable {
 /// builds the delegate afresh every time the row's body runs, and what was read
 /// while the drag was in the air has to survive into the drop.
 final class FolderDropState {
-    var intent: FolderDropIntent = .alias
+    var intent: FolderDropIntent = .move
 }
 
 /// A `DropDelegate` rather than `dropDestination`, which hands the items over
@@ -136,8 +139,8 @@ struct FolderDropDelegate: DropDelegate {
 
     func dropUpdated(info: DropInfo) -> DropProposal? {
         note(.held)
-        // A move shows the plain arrow; copy would badge a ⌘ drag with the
-        // green plus, which says the opposite of what letting go will do.
+        // A move shows the plain arrow; copy would badge it with the green
+        // plus, which says the opposite of what letting go will do.
         return DropProposal(operation: state.intent == .move ? .move : .copy)
     }
 

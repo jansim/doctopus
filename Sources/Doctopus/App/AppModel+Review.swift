@@ -32,9 +32,16 @@ struct OptimizationPreview: Sendable {
 }
 
 extension DocumentDetail {
-    /// New arrivals start on their best suggestion; anything already in the library stays put.
+    /// New arrivals start on their best suggestion, unless they were moved by hand since
+    /// arriving; anything already in the library stays put.
     var defaultFolder: String {
-        row.fromOutside ? pathSuggestions.first?.path ?? row.directory : row.directory
+        guard row.fromOutside, !movedSinceArrival else { return row.directory }
+        return pathSuggestions.first?.path ?? row.directory
+    }
+
+    /// Moved elsewhere since it arrived, in Doctopus or in Finder: that folder was picked on purpose.
+    var movedSinceArrival: Bool {
+        arrivalDirectory.map { $0 != Store.canonical(row.directory) } ?? false
     }
 
     var isOptimized: Bool { row.originalSize != nil }
@@ -76,6 +83,21 @@ extension AppModel {
             }
             refreshAll()
             reloadDetail()
+        }
+    }
+
+    /// Opens Needs Review on these documents. Any that are not waiting there
+    /// yet are marked as needing review first, so they have somewhere to be.
+    func review(_ rows: [DocumentRow]) {
+        guard let lib = library else { return }
+        Task {
+            for row in rows where row.approved && !lib.ruleMatchedDocs.contains(row.doc) {
+                do { try await lib.store.setDocumentApproved(row.doc, false) }
+                catch { report(error, "mark “\(row.displayTitle)” as needing review") }
+            }
+            selection = .needsReview
+            selectedIDs = Set(rows.map(\.doc))
+            refreshAll()
         }
     }
 

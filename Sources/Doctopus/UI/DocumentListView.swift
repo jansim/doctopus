@@ -43,7 +43,7 @@ struct DocumentListView: View {
             }
         }
         .safeAreaInset(edge: .top, spacing: 0) {
-            if model.selection.isQueueMode { QueueBar() }
+            if model.selection == .needsReview { QueueBar() }
         }
         .safeAreaInset(edge: .bottom, spacing: 0) { ResultsBar() }
     }
@@ -67,7 +67,7 @@ struct DocumentListView: View {
         }
         switch model.selection {
         case .needsReview: return "Everything the pipeline filed has been reviewed, and no rule has anything left to change."
-        case .queue: return "Imports, scans, moves and optimizations show up here as they happen."
+        case .reviewed: return "Documents you approve show up here, most recent first."
         case .deleted: return "Documents you move to the Trash wait here, so putting one back brings its tags and history with it."
         case .outliers: return "No document is marked as an outlier for this rule."
         default: return "Documents added to this folder appear here as they are indexed. Right-click to scan one in from your iPhone."
@@ -488,6 +488,9 @@ private struct DocumentMenu: View {
                 Divider()
                 Button("Approve") { model.setApproved(rows, true) }
                 Button("Mark as Needs Review") { model.setApproved(rows, false) }
+            } else if model.selection != .deleted {
+                Divider()
+                Button("Review…") { model.review(rows) }
             }
             Divider()
             Menu("Tags") {

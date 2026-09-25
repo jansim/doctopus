@@ -16,16 +16,17 @@ extension Store {
                     WHERE id = (SELECT id FROM processing WHERE doc_id=? ORDER BY id DESC LIMIT 1)
                     """, [.int(docID)])
             }
-            try db.run("UPDATE documents SET approved=? WHERE id=?", [.bool(approved), .int(docID)])
+            try db.run("UPDATE documents SET approved=?, reviewed_at=? WHERE id=?",
+                       [.bool(approved), approved ? .double(Date().timeIntervalSince1970) : .null, .int(docID)])
         }
     }
 
     func approveAllPending() throws {
         try db.transaction {
             try db.run("""
-                UPDATE documents SET approved=1
+                UPDATE documents SET approved=1, reviewed_at=?
                 WHERE approved=0 OR id IN (SELECT doc_id FROM processing WHERE status=0)
-                """)
+                """, [.double(Date().timeIntervalSince1970)])
             try db.run("UPDATE processing SET status=1 WHERE status=0")
         }
     }

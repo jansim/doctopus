@@ -870,7 +870,7 @@ enum UITest {
         let fm = FileManager.default
         defer { FolderDropIntent.heldModifiers = { NSEvent.modifierFlags } }
         func fail(_ why: String) {
-            Check.that("a drag onto a folder files the document there as well", false, why)
+            Check.that("⌥ held over a folder files the document there as well", false, why)
         }
         guard let library = model.library else { return fail("no library open") }
 
@@ -907,17 +907,17 @@ enum UITest {
         }
         guard candidates.count >= 2 else { return fail("\(candidates.count) usable documents") }
 
-        FolderDropIntent.heldModifiers = { NSEvent.ModifierFlags() }
+        FolderDropIntent.heldModifiers = { NSEvent.ModifierFlags.option }
         let filed = candidates[0]
         let filedTaken = drop(DocumentDragItem(filed), on: target, in: window)
         let aliased = await settle({
             ((try? fm.contentsOfDirectory(atPath: destination.path)) ?? []).count > 0
         }, timeout: 20)
-        Check.that("a drag onto a folder files the document there as well",
+        Check.that("⌥ held over a folder files the document there as well",
                    filedTaken && aliased && fm.fileExists(atPath: filed.path),
                    "taken \(filedTaken), filed \(aliased), master still in place \(fm.fileExists(atPath: filed.path))")
 
-        FolderDropIntent.heldModifiers = { NSEvent.ModifierFlags.command }
+        FolderDropIntent.heldModifiers = { NSEvent.ModifierFlags() }
         let moving = candidates[1]
         let cameFrom = URL(fileURLWithPath: moving.directory)
         let movedTaken = drop(DocumentDragItem(moving), on: target, in: window)
@@ -925,7 +925,7 @@ enum UITest {
         let arrived = await settle({
             fm.fileExists(atPath: landed.path) && !fm.fileExists(atPath: moving.path)
         }, timeout: 20)
-        Check.that("⌘ held over the folder moves the file instead of filing it twice",
+        Check.that("a plain drag onto a folder moves the file there",
                    movedTaken && arrived,
                    "taken \(movedTaken), at \(name)/\(moving.filename) \(fm.fileExists(atPath: landed.path)), "
                        + "gone from where it was \(!fm.fileExists(atPath: moving.path))")

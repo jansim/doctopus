@@ -22,10 +22,21 @@ extension Store {
     /// Approving the arrival settles it into the library, so a later event cannot make it new again.
     static let fromOutsideColumn = """
         EXISTS (SELECT 1 FROM processing op JOIN events o ON o.id = op.event_id
-                WHERE op.doc_id = d.id AND op.status = 0
-                AND (o.action = 'imported'
-                     OR (o.action = 'routed' AND COALESCE(o.detail, '') NOT LIKE 'Applied rule %')))
+                WHERE op.doc_id = d.id AND op.status = 0 AND \(arrivalEvent))
         """
+    private static let arrivalEvent = """
+        (o.action = 'imported' OR (o.action = 'routed' AND COALESCE(o.detail, '') NOT LIKE 'Applied rule %'))
+        """
+
+    func arrivalDirectory(for docID: Int64) throws -> String? {
+        try db.first("""
+            SELECT o.to_path FROM processing op JOIN events o ON o.id = op.event_id
+            WHERE op.doc_id = ? AND op.status = 0 AND o.to_path IS NOT NULL AND \(Store.arrivalEvent)
+            ORDER BY o.id DESC LIMIT 1
+            """, [.int(docID)]) {
+            Store.canonical((absPath($0.string(0)) as NSString).deletingLastPathComponent)
+        }
+    }
 
     func documentRow(_ r: Database.Row) -> DocumentRow {
         DocumentRow(
@@ -69,8 +80,8 @@ extension Store {
 
         switch selection {
         case .all, .deleted, .savedView: break
-        case .queue:
-            wheres.append("d.id IN (SELECT doc_id FROM processing)")
+        case .reviewed:
+            wheres.append("d.reviewed_at IS NOT NULL")
         case .folder(let path):
             let rel = relPath(path)
             if !rel.isEmpty {
@@ -189,12 +200,16 @@ extension Store {
                 ON p.id = (SELECT id FROM processing WHERE doc_id = d.id ORDER BY id DESC LIMIT 1)
             LEFT JOIN events pe ON pe.id = p.event_id
             """
-            queueColumns = "p.id, pe.at, pe.action, pe.detail, pe.rule, p.status"
+            // Recently Reviewed dates each row by its approval, not by what the pipeline last did.
+            let at = selection == .reviewed ? "d.reviewed_at" : "pe.at"
+            queueColumns = "p.id, \(at), pe.action, pe.detail, pe.rule, p.status"
         }
 
         let order: String
         if selection == .deleted {
             order = "d.deleted_at DESC"
+        } else if selection == .reviewed {
+            order = "d.reviewed_at DESC, d.id DESC"
         } else if selection.isQueueMode {
             order = "pe.at DESC, d.created_at DESC"
         } else if sort == .relevance && !joinFTS.isEmpty {
@@ -352,6 +367,7 @@ extension Store {
         d.tags = try tags(for: id)
         d.tagSuggestions = try tagSuggestions(for: id)
         d.pathSuggestions = try pathSuggestions(for: id)
+        if d.row.fromOutside { d.arrivalDirectory = try arrivalDirectory(for: id) }
         d.similarFolders = try similarFolders(for: id)
         d.similarDocuments = (try? similarDocuments(for: id)) ?? []
         d.folderAliases = try folderAliases(for: id)

@@ -13,7 +13,7 @@ struct SidebarView: View {
                 row(.all, "All Documents", "tray.full", model.stats.total)
                 row(.needsReview, "Needs Review", "exclamationmark.triangle", model.needsReviewCount)
                 row(.untagged, "Untagged", "tag.slash", nil)
-                row(.queue, "Recent Processing", "clock.arrow.circlepath", model.stats.queued)
+                row(.reviewed, "Recently Reviewed", "checkmark.circle", nil)
                 if model.stats.deleted > 0 {
                     row(.deleted, "Recently Deleted", "trash", model.stats.deleted)
                 }
@@ -229,13 +229,7 @@ private struct TagRow: View {
             model.renameTag(tag, to: new)
         }
         Menu("Color") {
-            ForEach(Array(TagColor.names.enumerated()), id: \.offset) { index, name in
-                Button {
-                    model.setTagColor(tag, Int64(index))
-                } label: {
-                    Label(name, systemImage: Int64(index) == tag.color ? "checkmark.circle.fill" : "circle.fill")
-                }
-            }
+            TagColorItems(tag: tag)
         }
         Toggle("Mirror to Disk as Aliases", isOn: Binding(
             get: { tag.mirrors },
@@ -483,8 +477,44 @@ enum TagColor {
     static let palette: [Color] = [.gray, .blue, .green, .orange, .pink, .purple, .red, .teal, .yellow, .mint]
     static let names = ["Graphite", "Blue", "Green", "Orange", "Pink", "Purple", "Red", "Teal", "Yellow", "Mint"]
 
+    static let nsPalette: [NSColor] = [.systemGray, .systemBlue, .systemGreen, .systemOrange, .systemPink,
+                                       .systemPurple, .systemRed, .systemTeal, .systemYellow, .systemMint]
+
     static func color(_ index: Int64) -> Color {
         palette[Int(abs(index)) % palette.count]
+    }
+
+    /// A filled dot in the tag's colour. Menus draw SF Symbols as templates,
+    /// in the text colour, so the swatch is its own non-template image.
+    static func swatch(_ index: Int64) -> NSImage {
+        let fill = nsPalette[Int(abs(index)) % nsPalette.count]
+        let image = NSImage(size: NSSize(width: 12, height: 12), flipped: false) { rect in
+            fill.setFill()
+            NSBezierPath(ovalIn: rect.insetBy(dx: 0.5, dy: 0.5)).fill()
+            return true
+        }
+        image.isTemplate = false
+        return image
+    }
+}
+
+/// The colour choices for a tag's menu, each shown in its own colour, with a
+/// checkmark on the current one.
+struct TagColorItems: View {
+    @Environment(AppModel.self) private var model
+    let tag: Tag
+
+    var body: some View {
+        ForEach(Array(TagColor.names.enumerated()), id: \.offset) { index, name in
+            Toggle(isOn: Binding(get: { Int64(index) == tag.color },
+                                 set: { _ in model.setTagColor(tag, Int64(index)) })) {
+                Label {
+                    Text(name)
+                } icon: {
+                    Image(nsImage: TagColor.swatch(Int64(index)))
+                }
+            }
+        }
     }
 }
 

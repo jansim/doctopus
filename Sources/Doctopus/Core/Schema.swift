@@ -7,7 +7,7 @@ enum Schema {
 
     private static let steps: [@Sendable (Database) throws -> Void] = [
         v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19,
-        v20, v21, v22, v23,
+        v20, v21, v22, v23, v24,
     ]
     static var current: Int { steps.count }
 
@@ -40,14 +40,14 @@ enum Schema {
     /// A document has one note, written like a text box, rather than a list
     /// of them. Notes already written are joined oldest first, a blank line
     /// apart, so nothing anybody wrote is lost.
-    private static func v23(_ db: Database) throws {
+    private static func v24(_ db: Database) throws {
         let listed = try db.first(
             "SELECT COUNT(*) FROM pragma_table_info('notes') WHERE name='id'") { $0.int(0) } ?? 0
         let present = try db.first(
             "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='notes'") { $0.int(0) } ?? 0
         guard listed > 0 || present == 0 else { return }
         try db.exec("""
-        CREATE TABLE notes_v23 (
+        CREATE TABLE notes_v24 (
             doc_id     INTEGER PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE,
             body       TEXT NOT NULL,
             updated_at REAL NOT NULL
@@ -55,7 +55,7 @@ enum Schema {
         """)
         if listed > 0 {
             try db.exec("""
-            INSERT INTO notes_v23(doc_id, body, updated_at)
+            INSERT INTO notes_v24(doc_id, body, updated_at)
             SELECT doc_id, group_concat(body, char(10) || char(10)),
                    MAX(COALESCE(updated_at, created_at))
             FROM (SELECT * FROM notes ORDER BY doc_id, created_at, id)
@@ -63,7 +63,14 @@ enum Schema {
             DROP TABLE notes;
             """)
         }
-        try db.exec("ALTER TABLE notes_v23 RENAME TO notes")
+        try db.exec("ALTER TABLE notes_v24 RENAME TO notes")
+    }
+
+    /// When a document was last approved, for Recently Reviewed. Approvals
+    /// made before this have no time to go by, so they stay out of it.
+    private static func v23(_ db: Database) throws {
+        try addColumn(db, table: "documents", column: "reviewed_at", declaration: "REAL")
+        try db.exec("CREATE INDEX IF NOT EXISTS idx_documents_reviewed ON documents(reviewed_at)")
     }
 
     /// Confidence scores were never more than a tally of which fields were

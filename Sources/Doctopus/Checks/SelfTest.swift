@@ -557,12 +557,32 @@ enum SelfTest {
             }
         }
 
-        print("\nQUEUE MODE (same browser, review columns)")
-        let queued = (try? await store.listDocuments(selection: .queue, query: SearchQuery(""),
-                                                     sort: .added, ascending: false)) ?? []
-        Check.that("queue mode carries a processing row per document",
-                   queued.count == rows.count && queued.allSatisfy { $0.queue != nil })
-        for row in queued.prefix(4) {
+        print("\nRECENTLY REVIEWED (same browser, review columns)")
+        func reviewed() async -> [DocumentRow] {
+            (try? await store.listDocuments(selection: .reviewed, query: SearchQuery(""),
+                                            sort: .added, ascending: false)) ?? []
+        }
+        let current = (try? await store.listDocuments(selection: .all, query: SearchQuery(""),
+                                                      sort: .added, ascending: false)) ?? []
+        if current.count >= 2 {
+            let first = current[0], second = current[1]
+            try? await store.setDocumentApproved(first.doc, true)
+            try? await Task.sleep(for: .milliseconds(20))
+            try? await store.setDocumentApproved(second.doc, true)
+            var queued = await reviewed()
+            Check.that("an approval lands in Recently Reviewed, newest approval first",
+                       queued.prefix(2).map(\.doc) == [second.doc, first.doc]
+                           && queued.prefix(2).allSatisfy { $0.queue?.approved == true })
+            try? await store.setDocumentApproved(first.doc, true)
+            queued = await reviewed()
+            Check.that("approving again moves it back to the top", queued.first?.doc == first.doc)
+            try? await store.setDocumentApproved(second.doc, false)
+            queued = await reviewed()
+            Check.that("sending it back for review takes it out",
+                       !queued.contains { $0.doc == second.doc })
+            try? await store.setDocumentApproved(second.doc, true)
+        }
+        for row in await reviewed().prefix(4) {
             guard let q = row.queue else { continue }
             print("  \(row.filename.padded(36)) \(q.action.rawValue.padded(10)) "
                   + "\(q.approved ? "approved    " : "needs review") \(q.detail ?? "")")
@@ -606,7 +626,10 @@ enum SelfTest {
             Check.that("re-importing a byte-identical document is skipped as duplicate",
                        dupResult.imported == 0 && dupResult.duplicates == 1)
 
-            if let copied { try? FileManager.default.removeItem(at: copied.url) }
+            if let copied {
+                try? FileManager.default.removeItem(at: copied.url)
+                try? await store.deleteDocument(copied.doc)
+            }
             try? FileManager.default.removeItem(at: outside)
         }
 
@@ -639,7 +662,10 @@ enum SelfTest {
                        "\(result.imported) imported, \(arrived.count) indexed")
             Check.that("importing a folder leaves the folder alone",
                        [top, nested].allSatisfy { FileManager.default.fileExists(atPath: $0.path) })
-            for row in arrived { try? FileManager.default.removeItem(at: row.url) }
+            for row in arrived {
+                try? FileManager.default.removeItem(at: row.url)
+                try? await store.deleteDocument(row.doc)
+            }
         }
         try? FileManager.default.removeItem(at: folder)
 
@@ -1499,7 +1525,9 @@ enum SelfTest {
 
         print("\nSANITY CHECK / VERIFICATION")
         let healthyReport = (try? await LibraryVerifier.verify(store: store)) ?? VerificationReport()
-        Check.that("verification of healthy library reports zero errors", healthyReport.errorsCount == 0)
+        Check.that("verification of healthy library reports zero errors", healthyReport.errorsCount == 0,
+                   healthyReport.issues.filter { $0.severity == .error }
+                       .map { "\($0.title): \($0.detail ?? "")" }.joined(separator: "; "))
 
         print("\nCONTENT HASHES")
         if let sample = rows.first, let detail = try? await store.detail(sample.doc),
@@ -1946,12 +1974,12 @@ enum SelfTest {
     private static func noteMigration() {
         print("\nNOTE MIGRATION")
         let path = FileManager.default.temporaryDirectory
-            .appendingPathComponent("doctopus-notes-v22-\(UUID().uuidString).sqlite").path
+            .appendingPathComponent("doctopus-notes-v23-\(UUID().uuidString).sqlite").path
         defer { try? FileManager.default.removeItem(atPath: path) }
         guard let db = try? Database(path: path) else {
             Check.that("a database in the old shape can be opened", false); return
         }
-        // The `notes` table as version 22 left it: any number per document.
+        // The `notes` table as version 23 left it: any number per document.
         try? db.exec("""
         CREATE TABLE documents (id INTEGER PRIMARY KEY);
         INSERT INTO documents(id) VALUES (1), (2);
@@ -1961,7 +1989,7 @@ enum SelfTest {
         );
         INSERT INTO notes(doc_id, body, created_at, updated_at)
         VALUES (1, 'second', 20, NULL), (1, 'first', 10, 30), (2, 'only', 5, NULL);
-        PRAGMA user_version=22;
+        PRAGMA user_version=23;
         """)
         try? Schema.migrate(db)
         let notes = (try? db.map("SELECT doc_id, body, updated_at FROM notes ORDER BY doc_id") {
@@ -2205,6 +2233,20 @@ enum SelfTest {
                                                           sort: .added, ascending: false)) ?? [])
                 .first { $0.id == row?.id }
             Check.that("…marked as a new arrival", listed?.fromOutside == true)
+            if let row, let detail = try? await store.detail(row.doc) {
+                Check.that("…whose review starts on a suggested home",
+                           detail.defaultFolder != inbox.path, detail.defaultFolder)
+                let picked = root.appendingPathComponent("Filed/B", isDirectory: true)
+                _ = await indexer.move(ids: [row.doc], to: picked)
+                let moved = try? await store.detail(row.doc)
+                Check.that("…but once moved by hand, starts where it was put",
+                           moved?.row.fromOutside == true && moved?.defaultFolder == picked.path,
+                           moved?.defaultFolder ?? "no detail")
+                _ = await indexer.move(ids: [row.doc], to: inbox)
+                let back = try? await store.detail(row.doc)
+                Check.that("…and back in the Inbox, starts on a suggestion again",
+                           back?.defaultFolder != inbox.path, back?.defaultFolder ?? "no detail")
+            }
             if let row {
                 // Approved, it is in the library; anything later is about a document already there.
                 try? await store.setDocumentApproved(row.doc, true)
@@ -2403,14 +2445,14 @@ enum SelfTest {
                    !session.isRunning && session.paused?.summary == "Incomplete", session.label)
 
         print("\nFOLDER DROPS")
-        Check.that("a drag with nothing held files the document in a second place",
-                   FolderDropIntent.reading([]) == .alias)
-        Check.that("⌘ moves the master file instead",
-                   FolderDropIntent.reading([.command]) == .move)
-        Check.that("⌘ still means move with other keys alongside it",
-                   FolderDropIntent.reading([.command, .shift]) == .move)
-        Check.that("⌥ on its own is not a move",
+        Check.that("a drag with nothing held moves the master file",
+                   FolderDropIntent.reading([]) == .move)
+        Check.that("⌥ files the document in a second place instead",
                    FolderDropIntent.reading([.option]) == .alias)
+        Check.that("⌘⌥, Finder's alias drag, files it there too",
+                   FolderDropIntent.reading([.command, .option]) == .alias)
+        Check.that("⌘ on its own is still a move",
+                   FolderDropIntent.reading([.command]) == .move)
         func movesInto(_ intent: FolderDropIntent, _ folder: String) -> Bool {
             if case .move(let target) = intent.action(on: folder) { return target == folder }
             return false
