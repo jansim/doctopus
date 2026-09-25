@@ -59,7 +59,8 @@ actor Indexer {
         // An index that cannot say how much it holds cannot say which that is.
         let firstPass: Bool
         let upserted: [(id: Int64, path: String, isNew: Bool, changed: Bool)]
-        let found = FileScanner.scan(root: store.root).map { Self.facts($0) }
+        var scan = FileScanner.scan(root: store.root)
+        let found = scan.found.map { Self.facts($0) }
         do {
             firstPass = try await store.documentCount() == 0
             if cancelled { return nil }
@@ -73,12 +74,24 @@ actor Indexer {
         let fresh = firstPass ? [] : Set(upserted.filter(\.isNew).map(\.id))
 
         var skipped: [String] = []
-        do { _ = try await store.reconcileMissing(seenPaths: Set(found.map(\.path))) }
+        // A library that reads as empty while its index still holds documents is
+        // far likelier unmounted or unreadable than emptied, so it is not taken
+        // at its word. A file deleted for real is still heard by the watcher.
+        let indexed = (try? await store.allDocumentIDs(limit: 1))?.isEmpty == false
+        let readAsEmpty = scan.found.isEmpty && indexed
+        if readAsEmpty { scan.unreadable.append(store.root) }
+        do { _ = try await store.reconcileMissing(scan) }
         catch { skipped.append("marking files that are gone as missing (\(error.localizedDescription))") }
-        do {
-            _ = try await store.purgeMissing()
-            _ = try await store.purgeDeleted()
-        } catch { skipped.append("forgetting files gone for good (\(error.localizedDescription))") }
+        // Forgetting a document forgets everything anyone ever typed about it,
+        // so it waits for a scan that saw the whole library.
+        if scan.isComplete {
+            do {
+                _ = try await store.purgeMissing()
+                _ = try await store.purgeDeleted()
+            } catch { skipped.append("forgetting files gone for good (\(error.localizedDescription))") }
+        } else {
+            onProblem(Self.unreadableProblem(scan, in: store.root, readAsEmpty: readAsEmpty))
+        }
         do {
             let pending = try await store.documentIDsNeedingOCR()
             let known = Set(toProcess.map(\.0))
@@ -92,13 +105,26 @@ actor Indexer {
         return await process(documents: toProcess, phase: "Indexing", isImport: false, found: fresh)
     }
 
-    func handleChanges(paths: [String]) async {
+    /// `rescanning`: folders FSEvents could only say *something* changed in.
+    /// Those are walked again and reconciled, as a full scan would — whatever
+    /// was deleted in there went by without an event of its own.
+    func handleChanges(paths: [String], rescanning: [String] = []) async {
         let rootPrefix = store.root.path + "/"
         let fm = FileManager.default
 
         var toProcess: [(Int64, String)] = []
         var fresh: Set<Int64> = []
         var touched = false
+
+        for directory in rescanning {
+            let path = Store.canonical(directory)
+            guard path == store.root.path || path.hasPrefix(rootPrefix),
+                  !FileScanner.isInsideLibraryContainer(URL(fileURLWithPath: path)) else { continue }
+            // A root that is gone is the library leaving, not its documents.
+            guard fm.fileExists(atPath: store.root.path) else { continue }
+            await resync(directory: URL(fileURLWithPath: path), into: &toProcess, fresh: &fresh)
+            touched = true
+        }
 
         for path in paths {
             guard path == store.root.path || path.hasPrefix(rootPrefix) else { continue }
@@ -149,13 +175,33 @@ actor Indexer {
 
     private func rescan(directory: URL, into toProcess: inout [(Int64, String)],
                         fresh: inout Set<Int64>) async {
-        let found = FileScanner.scan(root: directory).map { Self.facts($0) }
+        let found = FileScanner.scan(root: directory).found.map { Self.facts($0) }
         await relinkMoved(found)
         for facts in found {
             if let r = try? await store.upsertDocument(facts, origin: .inLibrary), r.changed {
                 toProcess.append((r.id, facts.path))
                 if r.isNew { fresh.insert(r.id) }
             }
+        }
+    }
+
+    private func resync(directory: URL, into toProcess: inout [(Int64, String)],
+                        fresh: inout Set<Int64>) async {
+        var isDir: ObjCBool = false
+        let scan = FileManager.default.fileExists(atPath: directory.path, isDirectory: &isDir) && isDir.boolValue
+            ? FileScanner.scan(root: directory) : FileScanner.Scan()
+        let found = scan.found.map { Self.facts($0) }
+        await relinkMoved(found)
+        for facts in found {
+            if let r = try? await store.upsertDocument(facts, origin: .inLibrary), r.changed {
+                toProcess.append((r.id, facts.path))
+                if r.isNew { fresh.insert(r.id) }
+            }
+        }
+        do { _ = try await store.reconcileMissing(scan, within: directory.path) }
+        catch { onProblem("Could not check \(directory.lastPathComponent) for removed files: \(error.localizedDescription)") }
+        if !scan.isComplete {
+            onProblem(Self.unreadableProblem(scan, in: store.root, readAsEmpty: false))
         }
     }
 
@@ -776,6 +822,21 @@ actor Indexer {
 
     private static let factKeys: [URLResourceKey] =
         [.fileSizeKey, .contentModificationDateKey, .creationDateKey] + FileScanner.identityKeys
+
+    static func unreadableProblem(_ scan: FileScanner.Scan, in root: URL, readAsEmpty: Bool) -> String {
+        let name = root.lastPathComponent
+        if readAsEmpty {
+            return "\(name) looked empty, although documents are indexed in it. "
+                + "Nothing was marked missing; if the folder is on a drive or a share, check that it is connected."
+        }
+        let places = scan.unreadable.map { url in
+            url.path == root.path ? name : String(url.path.dropFirst(root.path.count + 1))
+        }
+        let shown = places.prefix(3).map { "“\($0)”" }.joined(separator: ", ")
+            + (places.count > 3 ? " and \(places.count - 3) more" : "")
+        return "Doctopus could not read \(shown) in \(name). "
+            + "Documents there were left as they were, and nothing will be forgotten until it can read them again."
+    }
 
     private static func facts(_ url: URL) -> Store.FileFacts? {
         guard let v = try? url.resourceValues(forKeys: Set(factKeys)) else { return nil }

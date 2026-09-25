@@ -31,19 +31,39 @@ enum FileScanner {
         url.pathComponents.contains { $0.hasSuffix(".doctopus") }
     }
 
-    static func scan(root: URL) -> [Found] {
+    /// What a walk saw, and where it could not look. A file under `unreadable`
+    /// was not seen, which is not the same as not being there.
+    struct Scan: Sendable {
+        var found: [Found] = []
+        var unreadable: [URL] = []
+        var isComplete: Bool { unreadable.isEmpty }
+
+        /// Whether `path` lies at or under a place the walk could not read.
+        func couldNotSee(_ path: String) -> Bool {
+            unreadable.contains { path == $0.path || path.hasPrefix($0.path + "/") }
+        }
+    }
+
+    static func scan(root: URL) -> Scan {
         let keys: [URLResourceKey] = [
             .isRegularFileKey, .isDirectoryKey, .isAliasFileKey, .isHiddenKey,
             .fileSizeKey, .contentModificationDateKey, .creationDateKey,
         ] + identityKeys
+        var unreadable: [URL] = []
+        // Without a handler an unreadable folder — no permission, a privacy prompt
+        // said no, a share dropped out — is skipped as if it were empty.
         guard let e = FileManager.default.enumerator(
             at: root, includingPropertiesForKeys: keys,
-            options: [.skipsHiddenFiles, .skipsPackageDescendants]) else { return [] }
+            options: [.skipsHiddenFiles, .skipsPackageDescendants],
+            errorHandler: { url, _ in unreadable.append(url); return true })
+        else { return Scan(unreadable: [root]) }
 
         var out: [Found] = []
         out.reserveCapacity(512)
         for case let url as URL in e {
-            guard let v = try? url.resourceValues(forKeys: Set(keys)) else { continue }
+            guard let v = try? url.resourceValues(forKeys: Set(keys)) else {
+                unreadable.append(url); continue
+            }
             if v.isDirectory == true {
                 if url.lastPathComponent.hasSuffix(".doctopus") { e.skipDescendants() }
                 continue
@@ -58,7 +78,7 @@ enum FileScanner {
                              created: v.creationDate ?? v.contentModificationDate ?? Date(),
                              fileID: fileID(v)))
         }
-        return out
+        return Scan(found: out, unreadable: unreadable)
     }
 
     static func directories(root: URL) -> [URL] {
@@ -81,7 +101,7 @@ enum FileScanner {
             let v = try? url.resourceValues(forKeys: [.isDirectoryKey, .isPackageKey])
             if v?.isDirectory == true {
                 guard v?.isPackage != true, !url.lastPathComponent.hasSuffix(".doctopus") else { continue }
-                out += scan(root: url).map(\.url)
+                out += scan(root: url).found.map(\.url)
                     .sorted { $0.path.localizedStandardCompare($1.path) == .orderedAscending }
             } else if supportedExtensions.contains(url.pathExtension.lowercased()) {
                 out.append(url)

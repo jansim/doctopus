@@ -61,6 +61,7 @@ enum UITest {
             await droppingAFolderImportsIt(model)
             await draggingOntoAFolderFilesOrMoves(model)
             await undoTakesBackAMove(model)
+            await libraryFollowsItsFolder(model, fixture: library)
             Check.finish("ui checks")
         }
         app.run()
@@ -768,6 +769,45 @@ enum UITest {
         }
         model.editMetadata(row.id, column: "title", value: row.title)
         _ = await settle { model.documents.first { $0.id == row.id }?.title == row.title }
+    }
+
+    /// A library whose folder is renamed while open reopens where it went,
+    /// and one whose folder is deleted closes, rather than going on handing
+    /// out paths that no longer exist.
+    private static func libraryFollowsItsFolder(_ model: AppModel, fixture: URL) async {
+        let fm = FileManager.default
+        let parent = fm.temporaryDirectory
+            .appendingPathComponent("doctopus-uitest-moved-\(UUID().uuidString)", isDirectory: true)
+        let before = parent.appendingPathComponent("Before", isDirectory: true)
+        let after = parent.appendingPathComponent("After", isDirectory: true)
+        try? fm.createDirectory(at: parent, withIntermediateDirectories: true)
+        try? fm.copyItem(at: fixture, to: before)
+        defer { try? fm.removeItem(at: parent) }
+
+        let workspace = Workspace.shared
+        workspace.register(model)
+        let moving = AppModel()
+        workspace.register(moving)
+        defer {
+            moving.windowClosed()
+            workspace.current = model
+        }
+        _ = await moving.openLibrary(container: before.appendingPathComponent("library.doctopus"), quietly: true)
+        guard await settle({ moving.library != nil && !moving.documents.isEmpty }) else {
+            Check.that("a library to move is open", false)
+            return
+        }
+
+        try? fm.moveItem(at: before, to: after)
+        let followed = await settle { moving.library?.root.lastPathComponent == "After" }
+        Check.that("a library whose folder is renamed while open reopens where it went", followed,
+                   moving.library?.root.path ?? "closed: \(moving.errorMessage ?? "no reason")")
+
+        try? fm.removeItem(at: after)
+        let closed = await settle { moving.library == nil }
+        Check.that("…and one whose folder is deleted closes, saying why",
+                   closed && moving.errorMessage?.contains("After") == true,
+                   moving.errorMessage ?? "no message")
     }
 
     /// A second library gets a window, and a model, of its own; the first

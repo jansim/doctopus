@@ -61,3 +61,17 @@ edited on the way, is still recognised. The watcher falls back to the SHA-256,
 for volumes whose IDs do not persist and moves that got the file a new one.
 Rows stay claimable for thirty days, and a row whose file is in the Trash is
 never forgotten at all.
+
+Not seeing a file is only evidence it is gone when the scan could look. A
+folder the scan cannot read — no permission, a privacy prompt declined, a share
+that dropped out — leaves the documents under it as they were, and a library
+that suddenly lists as empty while its index does not is taken for unreadable
+rather than emptied. Either is said, and nothing is forgotten until a scan has
+seen the whole library.
+
+FSEvents does not always report file by file: when it coalesces or drops
+events it only says that something changed somewhere under a folder, and that
+folder is walked again and reconciled the way a full scan would be. The
+library's own folder being moved, renamed or deleted while it is open is
+watched for too. The library reopens wherever its bookmark finds the folder
+and closes, saying so, when it cannot be found.

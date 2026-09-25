@@ -7,6 +7,9 @@ actor Store {
     let containerURL: URL
     let root: URL
     let libraryID: LibraryID
+    /// Held for as long as the app has the library open; nil for the check
+    /// suites and the command-line modes.
+    nonisolated let lock: LibraryLock?
     var fieldCache: [Field]?
 
     // Store+RuleMatches
@@ -14,7 +17,8 @@ actor Store {
 
     private let rootPrefix: String
 
-    init(directory: URL) throws {
+    init(directory: URL, lock: LibraryLock? = nil) throws {
+        self.lock = lock
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let container = URL(fileURLWithPath: Store.canonical(directory.standardizedFileURL.path),
                             isDirectory: true)
@@ -204,11 +208,18 @@ actor Store {
                     .text(EventAction.added.rawValue), .text(detail), .text(source)])
     }
 
-    func reconcileMissing(seenPaths: Set<String>) throws -> Int {
-        let seenRelative = Set(seenPaths.map { relPath($0) })
+    /// Marks every document the scan did not see as missing — except where the
+    /// scan could not look, since a folder that would not open says nothing
+    /// about what is in it.
+    /// `within`: the folder the scan walked, when it was not the whole library.
+    func reconcileMissing(_ scan: FileScanner.Scan, within directory: String? = nil) throws -> Int {
+        let seenRelative = Set(scan.found.map { relPath($0.url.path) })
+        let scope = directory.map { relPath($0) }.flatMap { $0.isEmpty ? nil : $0 + "/" }
         var stale: [Int64] = []
         try db.query("SELECT id, path FROM documents WHERE missing=0 AND deleted_at IS NULL") { row in
-            if !seenRelative.contains(row.string(1)) { stale.append(row.int(0)) }
+            let path = row.string(1)
+            if let scope, !path.hasPrefix(scope) { return }
+            if !seenRelative.contains(path), !scan.couldNotSee(absPath(path)) { stale.append(row.int(0)) }
         }
         let now = Date().timeIntervalSince1970
         try db.transaction {
