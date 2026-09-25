@@ -51,6 +51,7 @@ enum UITest {
             await ruleEditorDraws(model, snapshots: snapshots)
             await rulesPaneDraws(model, snapshots: snapshots)
             await finishedActionsAreToasts(model, snapshots: snapshots)
+            await approvingIsNotAToast(model)
             await uiStatePersists(model)
             await sidebarShowsBothTagSystems(model, snapshots: snapshots)
             await handEditsReachTheHistory(model)
@@ -1092,8 +1093,8 @@ enum UITest {
         }
     }
 
-    private static func poll<T>(timeout: TimeInterval, _ fetch: () async -> T,
-                                until: (T) -> Bool) async -> T {
+    static func poll<T>(timeout: TimeInterval, _ fetch: () async -> T,
+                        until: (T) -> Bool) async -> T {
         let deadline = Date().addingTimeInterval(timeout)
         var value = await fetch()
         while !until(value), Date() < deadline {
@@ -1103,8 +1104,8 @@ enum UITest {
         return value
     }
 
-    private static func settle(_ condition: () -> Bool, timeout: TimeInterval = 30,
-                               every interval: Duration = .milliseconds(200)) async -> Bool {
+    static func settle(_ condition: () -> Bool, timeout: TimeInterval = 30,
+                       every interval: Duration = .milliseconds(200)) async -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
             if condition() { return true }
