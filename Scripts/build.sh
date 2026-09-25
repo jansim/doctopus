@@ -1,9 +1,5 @@
 #!/bin/bash
 # Builds Doctopus.app. Usage: Scripts/build.sh [debug|release] [swift build flags…]
-#
-# Release (the default) is what to run day to day. Debug skips whole-module
-# optimization, so it compiles files in parallel and incrementally, which is
-# what CI uses; extra arguments are handed to `swift build` as they are.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
