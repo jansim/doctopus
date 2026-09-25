@@ -12,6 +12,9 @@ final class Library: Identifiable {
 
     private(set) var indexer: Indexer!
     var watcher: FileWatcher?
+    var backups: Task<Void, Never>?
+    /// Said once per open, not on every hourly look.
+    var damageReported = false
 
     var settings = AppSettings()
 

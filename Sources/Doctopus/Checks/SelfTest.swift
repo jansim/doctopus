@@ -1601,6 +1601,9 @@ enum SelfTest {
         await unreadableFolders(store: store)
         await droppedEvents(store: store)
         await oneWriterAtATime()
+        if let template = rows.first(where: { $0.ext == "pdf" && FileManager.default.fileExists(atPath: $0.path) }) {
+            await indexBackups(template: template.url)
+        }
 
         Check.finish("pipeline self-test")
     }

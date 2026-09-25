@@ -39,8 +39,20 @@ extension AppModel {
             errorMessage = error.description
             return .failed
         } catch {
-            errorMessage = "Could not open a library at \(root.lastPathComponent): \(error.localizedDescription)"
-            return .failed
+            // An index that will not open at all cannot be restored through
+            // File › Restore Index, so the newest backup is offered here.
+            guard Store.isDamage(error), let backup = Store.backups(in: container).first,
+                  confirmRestoreUnopenable(root.lastPathComponent, backup, error) else {
+                errorMessage = "Could not open a library at \(root.lastPathComponent): \(error.localizedDescription)"
+                return .failed
+            }
+            do {
+                try Store.replaceUnopenableIndex(in: container, with: backup)
+                store = try Store(directory: container, lock: LibraryLock.acquire(in: container))
+            } catch {
+                errorMessage = "Could not restore the index of \(root.lastPathComponent): \(error.localizedDescription)"
+                return .failed
+            }
         }
 
         // Identity is the id in `meta.json`, so the same library reached by two
@@ -73,6 +85,7 @@ extension AppModel {
         library = lib
         Preferences.noteRecentLibrary(lib.container)
         startWatching(lib)
+        startBackups(lib)
         adoptSettings(of: lib)
         viewMode = settings.viewMode
         await intelligence.update(settings: settings)
@@ -251,6 +264,8 @@ extension AppModel {
         if scanSession != nil { stopContinuousScan() }
         lib.watcher?.stop()
         lib.watcher = nil
+        lib.backups?.cancel()
+        lib.backups = nil
         // Now, not when the last task lets go of the store: the library may be
         // reopening in this very window.
         lib.store.lock?.release()
@@ -272,6 +287,80 @@ extension AppModel {
             })
         watcher.start(paths: [lib.root.path])
         lib.watcher = watcher
+    }
+
+    /// Snapshots the index once a day while the library is open. The first
+    /// look waits for the opening scan, so it catches what that scan found.
+    private func startBackups(_ lib: Library) {
+        lib.backups?.cancel()
+        lib.backups = Task { [weak self, weak lib] in
+            try? await Task.sleep(for: .seconds(60))
+            while !Task.isCancelled {
+                guard let lib else { return }
+                let outcome: Store.BackupOutcome
+                do { outcome = try await lib.store.backUpIfDue() }
+                catch {
+                    self?.errorMessage = "Could not back up the index of \(lib.displayName): \(error.localizedDescription)"
+                    return
+                }
+                if case .damaged(let problem) = outcome, !lib.damageReported {
+                    lib.damageReported = true
+                    self?.errorMessage = "The index of \(lib.displayName) failed SQLite’s integrity check (\(problem)). "
+                        + "No backup was taken, so the last good ones are kept: File › Restore Index puts one back."
+                }
+                try? await Task.sleep(for: .seconds(3600))
+            }
+        }
+    }
+
+    /// Puts the index back as it was in `backup`, keeping the current one
+    /// among the backups, and reopens the library so every pane reads it.
+    func restoreIndex(from backup: Store.Backup, confirm: @MainActor (String) -> Bool = AppModel.confirmRestore) {
+        guard let lib = library else { return }
+        let when = backup.date.formatted(date: .abbreviated, time: .shortened)
+        guard confirm("Restore the index of \(lib.displayName) from \(when)?") else { return }
+        lib.watcher?.stop()
+        lib.backups?.cancel()
+        Task {
+            await lib.indexer.cancel()
+            do {
+                try await lib.store.restore(from: backup)
+            } catch {
+                report(error, "restore the index of \(lib.displayName)")
+                startWatching(lib)
+                startBackups(lib)
+                return
+            }
+            let container = lib.container
+            detachLibrary(lib)
+            if await openLibrary(container: container, quietly: true) == .opened {
+                notify("Restored the index of \(lib.displayName) from \(when). The one it replaced is kept among the backups.")
+            }
+        }
+    }
+
+    private func confirmRestoreUnopenable(_ name: String, _ backup: Store.Backup, _ error: Error) -> Bool {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "The index of \(name) could not be opened."
+        alert.informativeText = "\(error.localizedDescription)\n\nIt can be restored from the backup of "
+            + backup.date.formatted(date: .abbreviated, time: .shortened)
+            + ". Tags, fields, notes and reviews go back to how they were then; no document is moved or changed. "
+            + "The damaged index is kept in the library’s backups folder."
+        alert.addButton(withTitle: "Restore")
+        alert.addButton(withTitle: "Cancel")
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+
+    static func confirmRestore(_ question: String) -> Bool {
+        let alert = NSAlert()
+        alert.messageText = question
+        alert.informativeText = "Tags, fields, notes, reviews and history go back to how they were then. "
+            + "No document is moved or changed; files added since are picked up again by the scan. "
+            + "The index as it is now is kept among the backups."
+        alert.addButton(withTitle: "Restore")
+        alert.addButton(withTitle: "Cancel")
+        return alert.runModal() == .alertFirstButtonReturn
     }
 
     func reindex() {

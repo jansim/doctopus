@@ -228,6 +228,17 @@ struct DoctopusCommands: Commands {
             Button("Rescan Library") { model.reindex() }
                 .keyboardShortcut("r", modifiers: [.command])
             Button("Verify Library…") { model.verifyLibrary() }
+            Menu("Restore Index") {
+                let backups = model.library?.store.backups() ?? []
+                ForEach(backups) { backup in
+                    Button(backup.date.formatted(date: .abbreviated, time: .shortened)
+                           + (backup.url.lastPathComponent.hasPrefix("before-restore-") ? " (before a restore)" : "")) {
+                        model.restoreIndex(from: backup)
+                    }
+                }
+                if backups.isEmpty { Text("No Backups Yet") }
+            }
+            .disabled(model.library == nil)
             Button("Close Library") { model.closeLibrary() }
                 .disabled(model.library == nil)
             Divider()

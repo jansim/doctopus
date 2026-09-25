@@ -227,4 +227,114 @@ extension SelfTest {
         Check.that("the older Dropbox client's marked folder counts too",
                    SyncedFolder.service(for: legacy) == "Dropbox")
     }
+
+    static func indexBackups(template: URL) async {
+        print("\nINDEX BACKUPS")
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory
+            .appendingPathComponent("doctopus-backups-\(UUID().uuidString)", isDirectory: true)
+        defer { try? fm.removeItem(at: root) }
+        try? fm.createDirectory(at: root, withIntermediateDirectories: true)
+        try? fm.copyItem(at: template, to: root.appendingPathComponent("Kept.pdf"))
+        let container = root.appendingPathComponent("library.doctopus")
+        guard let store = try? Store(directory: container) else {
+            Check.that("a library to back up can be made", false)
+            return
+        }
+        await indexer(for: store, problems: Problems()).indexAll()
+        guard let id = ((try? await store.allDocumentIDs()) ?? []).first else {
+            Check.that("the library to back up has a document", false)
+            return
+        }
+        _ = try? await store.setNote("Written before the backup", for: id)
+
+        let now = Date()
+        let first = try? await store.backUpIfDue(now: now)
+        let second = try? await store.backUpIfDue(now: now.addingTimeInterval(3600))
+        let third = try? await store.backUpIfDue(now: now.addingTimeInterval(Store.backupEvery + 60))
+        func made(_ o: Store.BackupOutcome?) -> Bool { if case .made = o { return true }; return false }
+        func notDue(_ o: Store.BackupOutcome?) -> Bool { if case .notDue = o { return true }; return false }
+        Check.that("a library with no backup is backed up", made(first))
+        Check.that("…not again within the day", notDue(second))
+        Check.that("…and again once a day has passed", made(third))
+
+        guard case .made(let backup) = first else { return }
+        let standalone = !fm.fileExists(atPath: backup.url.path + "-wal")
+        // Read from a copy: opening one with `Database` would turn it to WAL.
+        let probe = root.appendingPathComponent("probe.sqlite")
+        try? fm.copyItem(at: backup.url, to: probe)
+        let copied = (try? Database(path: probe.path).first("SELECT COUNT(*) FROM documents") { $0.int(0) }) ?? nil
+        Check.that("a backup is a standalone index holding the documents",
+                   copied == 1 && standalone, "\(copied.map(String.init) ?? "unreadable"), standalone: \(standalone)")
+
+        _ = try? await store.setNote("Written after the backup", for: id)
+        var setAside: Store.Backup?
+        do { setAside = try await store.restore(from: backup, now: now.addingTimeInterval(7200)) }
+        catch { print("  restore failed          \(error)") }
+        let note = (try? await store.note(for: id)) ?? ""
+        print("  note after restore      \(note)")
+        Check.that("restoring puts the index back as it was", note == "Written before the backup")
+        Check.that("…keeping the index it replaced among the backups",
+                   setAside.map { fm.fileExists(atPath: $0.url.path) } == true
+                       && store.backups().contains { $0.url == setAside?.url })
+
+        for day in 2...12 {
+            _ = try? await store.backUp(now: now.addingTimeInterval(Double(day) * Store.backupEvery))
+        }
+        let kept = store.backups()
+        let scheduled = kept.filter { $0.url.lastPathComponent.hasPrefix("index-") }
+        Check.that("only the newest \(Store.backupsKept) scheduled backups are kept",
+                   scheduled.count == Store.backupsKept, "\(scheduled.count)")
+        Check.that("…and what a restore set aside is never pruned", kept.contains { $0.url == setAside?.url })
+        var healthy = false
+        do { healthy = try await store.integrityProblem() == nil } catch {}
+        Check.that("a healthy index passes its check", healthy)
+
+        // Garbage over the pages past the header: the kind of damage a sync
+        // service copying mid-write leaves behind.
+        let damagedRoot = root.appendingPathComponent("Damaged", isDirectory: true)
+        let damagedContainer = damagedRoot.appendingPathComponent("library.doctopus", isDirectory: true)
+        try? fm.createDirectory(at: damagedContainer, withIntermediateDirectories: true)
+        try? fm.copyItem(at: container.appendingPathComponent("meta.json"),
+                         to: damagedContainer.appendingPathComponent("meta.json"))
+        let damagedIndex = damagedContainer.appendingPathComponent("index.sqlite")
+        try? fm.copyItem(at: scheduled.last!.url, to: damagedIndex)
+        if var bytes = try? Data(contentsOf: damagedIndex), bytes.count > 8192 {
+            let pages = bytes.count / 4096
+            for page in stride(from: 2, to: pages, by: 2) {
+                let start = page * 4096 + 64
+                bytes.replaceSubrange(start..<(start + 512), with: Data(repeating: 0xA5, count: 512))
+            }
+            try? bytes.write(to: damagedIndex)
+        }
+        var outcome = "refused at open"
+        if let damaged = try? Store(directory: damagedContainer) {
+            switch try? await damaged.backUp() {
+            case .damaged(let problem)?: outcome = "damaged: \(problem)"
+            case .made?: outcome = "backed up anyway"
+            default: outcome = "failed"
+            }
+            Check.that("a damaged index is never backed up over the good copies",
+                       outcome.hasPrefix("damaged") && damaged.backups().isEmpty, outcome)
+        } else {
+            var refusal: Error?
+            do { _ = try Store(directory: damagedContainer) } catch { refusal = error }
+            outcome = refusal.map { "\($0)" } ?? "opened"
+            Check.that("an index too damaged to open is recognised as damage", refusal.map(Store.isDamage) == true,
+                       outcome)
+            try? fm.createDirectory(at: Store.backupsDirectory(in: damagedContainer), withIntermediateDirectories: true)
+            let good = scheduled[0].url
+            try? fm.copyItem(at: good, to: Store.backupsDirectory(in: damagedContainer)
+                .appendingPathComponent(good.lastPathComponent))
+            if let good = Store.backups(in: damagedContainer).first {
+                try? Store.replaceUnopenableIndex(in: damagedContainer, with: good)
+            }
+            let reopened = try? Store(directory: damagedContainer)
+            let keptDamaged = ((try? fm.contentsOfDirectory(atPath: Store.backupsDirectory(in: damagedContainer).path)) ?? [])
+                .contains { $0.hasPrefix("damaged-") }
+            Check.that("…and is replaced from a backup, with the damaged files kept aside",
+                       reopened != nil && keptDamaged)
+        }
+        print("  damaged index           \(outcome)")
+    }
 }

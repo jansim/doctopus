@@ -10,6 +10,8 @@ Each indexed folder holds its index in a `library.doctopus` package inside it:
     index.sqlite
     meta.json
     lock
+    backups/
+      index-2026-09-25T140512Z.sqlite
   Finances/
     Tax-2026/
       2026-01-14_finanzamt_bescheid.pdf
@@ -23,6 +25,25 @@ together with its version, so an interrupted upgrade resumes where it stopped.
 `meta.json` also holds the library's id, which is its identity: one that is
 there but will not read is refused with a reason rather than replaced, and only
 a library with no `meta.json` at all is given a new one.
+
+## Backups
+
+The documents survive the index, but nothing else does: tags beyond Finder
+tags, fields, notes, correspondents, reviews and history exist only in
+`index.sqlite`. So while a library is open its index is copied into
+`backups/` once a day, through SQLite's backup API, as one consistent,
+standalone file. The last seven are kept.
+
+A copy is only taken of an index that passes `PRAGMA quick_check`. One that
+fails is said, once, and no backup is taken, so damage never pushes the last
+good copies out. Verify Library runs the same check.
+
+File › Restore Index puts one back through the open connection, after first
+copying the index as it is into `backups/before-restore-…`, which pruning
+never touches. An index too damaged to open at all is offered its newest
+backup when the library is opened; the damaged files are moved into
+`backups/damaged-…`, never deleted. Either way no document is moved or
+changed, and the scan that follows picks up files added since.
 
 ## One Mac at a time
 

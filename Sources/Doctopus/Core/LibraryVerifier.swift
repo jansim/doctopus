@@ -58,6 +58,14 @@ enum LibraryVerifier {
             }
         }
 
+        if let problem = try await store.integrityProblem() {
+            report.issues.append(VerificationReport.Issue(
+                severity: .error,
+                title: "Damaged index",
+                detail: "SQLite’s integrity check failed: \(problem). File › Restore Index puts a backup back."
+            ))
+        }
+
         if let service = SyncedFolder.service(for: store.root) {
             report.issues.append(VerificationReport.Issue(
                 severity: .warning,

@@ -120,6 +120,46 @@ final class Database {
         }
     }
 
+    /// Copies this database, as one consistent snapshot, into a standalone
+    /// file at `path` — no write-ahead log beside it.
+    func backup(to path: String) throws {
+        let other = try Database.plain(path)
+        defer { sqlite3_close_v2(other) }
+        try Database.copy(from: handle, to: other)
+    }
+
+    /// Replaces this database's contents with the file at `path`, through this
+    /// connection, so the write-ahead log and any other connection stay coherent.
+    func restore(from path: String) throws {
+        // Only read, but opened read-write: from a read-only source the copy
+        // fails with SQLITE_CANTOPEN.
+        let other = try Database.plain(path, flags: SQLITE_OPEN_READWRITE)
+        defer { sqlite3_close_v2(other) }
+        try Database.copy(from: other, to: handle)
+    }
+
+    private static func plain(_ path: String,
+                              flags: Int32 = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE) throws -> OpaquePointer {
+        var h: OpaquePointer?
+        guard sqlite3_open_v2(path, &h, flags, nil) == SQLITE_OK, let h else {
+            let msg = h.map { String(cString: sqlite3_errmsg($0)) } ?? "unknown"
+            if let h { sqlite3_close_v2(h) }
+            throw Error.open(msg)
+        }
+        return h
+    }
+
+    private static func copy(from source: OpaquePointer, to destination: OpaquePointer) throws {
+        guard let backup = sqlite3_backup_init(destination, "main", source, "main") else {
+            throw Error.sql("backup", String(cString: sqlite3_errmsg(destination)))
+        }
+        let rc = sqlite3_backup_step(backup, -1)
+        sqlite3_backup_finish(backup)
+        guard rc == SQLITE_DONE else {
+            throw Error.sql("backup", String(cString: sqlite3_errstr(rc)))
+        }
+    }
+
     enum Value {
         case int(Int64)
         case double(Double)
