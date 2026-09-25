@@ -62,6 +62,7 @@ enum UITest {
             await draggingOntoAFolderFilesOrMoves(model)
             await undoTakesBackAMove(model)
             await libraryFollowsItsFolder(model, fixture: library)
+            cancelEndsAScanRun(model)
             Check.finish("ui checks")
         }
         app.run()

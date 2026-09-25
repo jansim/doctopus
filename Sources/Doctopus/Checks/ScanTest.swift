@@ -35,6 +35,11 @@ enum ScanTest {
         func readSelection(from pasteboard: NSPasteboard) -> Bool {
             let elapsed = String(format: "%.1fs", Date().timeIntervalSince(firedAt))
             log("DELIVERED after \(elapsed) types=\(pasteboard.types?.map(\.rawValue) ?? [])")
+            // A continuous run ends on an empty reply; a cancel that sends none
+            // shows up here as a round that times out instead.
+            if pasteboard.types?.isEmpty ?? true {
+                log("  nothing in it: the capture was cancelled")
+            }
             for type in pasteboard.types ?? [] {
                 log("  \(type.rawValue): \(pasteboard.data(forType: type)?.count ?? 0) bytes")
             }

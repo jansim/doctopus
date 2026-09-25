@@ -2510,6 +2510,7 @@ enum SelfTest {
         session.suspend(.incomplete)
         Check.that("a run that lost part of a capture stops and says so rather than scanning on",
                    !session.isRunning && session.paused?.summary == "Incomplete", session.label)
+        continuousScanEnds()
 
         print("\nFOLDER DROPS")
         Check.that("a drag with nothing held moves the master file",
