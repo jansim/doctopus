@@ -1599,6 +1599,7 @@ enum SelfTest {
 
         await failuresAreSaid(store: store, indexer: indexer)
         await unreadableFolders(store: store)
+        await droppedEvents(store: store)
 
         Check.finish("pipeline self-test")
     }

@@ -175,6 +175,14 @@ extension AppModel {
     /// stays at the welcome screen rather than quitting the app.
     func closeLibrary() {
         guard let lib = library else { return }
+        detachLibrary(lib)
+        let workspace = Workspace.shared
+        workspace.persistOpenLibraries()
+        if workspace.windows.count > 1 { window?.close() }
+    }
+
+    /// Empties the window without closing it.
+    private func detachLibrary(_ lib: Library) {
         stopLibrary(lib)
         library = nil
         selection = .all
@@ -184,9 +192,35 @@ extension AppModel {
         detail = nil
         hasMoreDocuments = false
         adoptSettings(of: nil)
-        let workspace = Workspace.shared
-        workspace.persistOpenLibraries()
-        if workspace.windows.count > 1 { window?.close() }
+    }
+
+    /// The library's folder was moved, renamed or deleted while open, or its
+    /// volume went away. Every path the index hands out is now wrong, so the
+    /// library is reopened wherever its bookmark finds it, or closed.
+    func libraryFolderChanged(_ lib: Library) async {
+        guard library === lib else { return }
+        let fm = FileManager.default
+        // Renamed away and back before anyone looked: nothing to do.
+        if fm.fileExists(atPath: lib.container.path) { return }
+
+        var stale = false
+        let found = lib.bookmark.flatMap {
+            try? URL(resolvingBookmarkData: $0, options: [.withoutUI], bookmarkDataIsStale: &stale)
+        }
+        let name = lib.displayName
+        detachLibrary(lib)
+        if let found, !found.path.contains("/.Trash/"),
+           fm.fileExists(atPath: found.appendingPathComponent("library.doctopus").path) {
+            let outcome = await openLibrary(container: found.appendingPathComponent("library.doctopus"),
+                                            quietly: true)
+            if outcome == .opened {
+                notify("\(name) moved to \(found.path); it was reopened there.", .info)
+                return
+            }
+        }
+        errorMessage = "The folder of \(name) was moved, renamed, deleted or disconnected, "
+            + "so the library was closed. Nothing in it was changed. Open it again from wherever it is now."
+        Workspace.shared.persistOpenLibraries()
     }
 
     /// Closing the last window quits the app, and whatever it showed should
@@ -211,9 +245,16 @@ extension AppModel {
     private func startWatching(_ lib: Library) {
         lib.watcher?.stop()
         guard let indexer = lib.indexer else { return }
-        let watcher = FileWatcher { changed in
-            Task { await indexer.handleChanges(paths: changed) }
-        }
+        let watcher = FileWatcher(
+            onChange: { changes in
+                Task { await indexer.handleChanges(paths: changes.paths, rescanning: changes.rescan) }
+            },
+            onRootChanged: { [weak self, weak lib] in
+                Task { @MainActor in
+                    guard let self, let lib else { return }
+                    await self.libraryFolderChanged(lib)
+                }
+            })
         watcher.start(paths: [lib.root.path])
         lib.watcher = watcher
     }

@@ -207,11 +207,14 @@ actor Store {
     /// Marks every document the scan did not see as missing — except where the
     /// scan could not look, since a folder that would not open says nothing
     /// about what is in it.
-    func reconcileMissing(_ scan: FileScanner.Scan) throws -> Int {
+    /// `within`: the folder the scan walked, when it was not the whole library.
+    func reconcileMissing(_ scan: FileScanner.Scan, within directory: String? = nil) throws -> Int {
         let seenRelative = Set(scan.found.map { relPath($0.url.path) })
+        let scope = directory.map { relPath($0) }.flatMap { $0.isEmpty ? nil : $0 + "/" }
         var stale: [Int64] = []
         try db.query("SELECT id, path FROM documents WHERE missing=0 AND deleted_at IS NULL") { row in
             let path = row.string(1)
+            if let scope, !path.hasPrefix(scope) { return }
             if !seenRelative.contains(path), !scan.couldNotSee(absPath(path)) { stale.append(row.int(0)) }
         }
         let now = Date().timeIntervalSince1970

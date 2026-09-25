@@ -18,10 +18,13 @@ extension SelfTest {
                        onProblem: { problems.add($0) })
     }
 
+    /// Nil when the row is gone altogether. The document list leaves missing
+    /// rows out, so a row that exists but is not listed is the missing one.
     static func isMissing(_ id: Int64, in store: Store) async -> Bool? {
-        ((try? await store.listDocuments(selection: .all, query: SearchQuery(""),
-                                         sort: .added, ascending: false)) ?? [])
-            .first { $0.doc == id }?.missing
+        guard (try? await store.documentPath(id)) ?? nil != nil else { return nil }
+        let listed = ((try? await store.listDocuments(selection: .all, query: SearchQuery(""),
+                                                      sort: .added, ascending: false)) ?? [])
+        return !listed.contains { $0.doc == id }
     }
 
     static func unreadableFolders(store: Store) async {
@@ -90,5 +93,71 @@ extension SelfTest {
         Check.that("a library that suddenly lists as empty does not mark its documents missing",
                    id != nil && missing == false)
         Check.that("…and says why", said != nil)
+    }
+
+    static func droppedEvents(store: Store) async {
+        print("\nDROPPED EVENTS")
+        let fm = FileManager.default
+        let problems = Problems()
+        let indexer = indexer(for: store, problems: problems)
+        guard let subject = ((try? await store.listDocuments(selection: .all, query: SearchQuery(""),
+                                                             sort: .added, ascending: false)) ?? [])
+            .first(where: { $0.ext == "pdf" && !$0.missing && fm.fileExists(atPath: $0.path) })
+        else {
+            Check.that("the fixtures have a PDF to lose an event for", false)
+            return
+        }
+
+        // FSEvents coalesced the folder's events: all it says is "look in here".
+        let folder = store.root.appendingPathComponent("Coalesced", isDirectory: true)
+        try? fm.createDirectory(at: folder, withIntermediateDirectories: true)
+        _ = await indexer.move(ids: [subject.doc], to: folder)
+        let moved = folder.appendingPathComponent(subject.filename)
+        let aside = fm.temporaryDirectory.appendingPathComponent("doctopus-dropped-\(UUID().uuidString).pdf")
+        try? fm.moveItem(at: moved, to: aside)
+        await indexer.handleChanges(paths: [], rescanning: [folder.path])
+        Check.that("a document deleted where events were dropped is marked missing on the rescan",
+                   await isMissing(subject.doc, in: store) == true)
+
+        try? fm.moveItem(at: aside, to: moved)
+        await indexer.handleChanges(paths: [], rescanning: [folder.path])
+        Check.that("…and one that came back is found again",
+                   await isMissing(subject.doc, in: store) == false)
+
+        let elsewhere = ((try? await store.listDocuments(selection: .all, query: SearchQuery(""),
+                                                         sort: .added, ascending: false)) ?? [])
+            .filter { !$0.missing && !$0.path.hasPrefix(folder.path + "/") }.count
+        await indexer.handleChanges(paths: [], rescanning: [folder.path])
+        let stillThere = ((try? await store.listDocuments(selection: .all, query: SearchQuery(""),
+                                                          sort: .added, ascending: false)) ?? [])
+            .filter { !$0.missing && !$0.path.hasPrefix(folder.path + "/") }.count
+        Check.that("a rescan of one folder marks nothing outside it missing", elsewhere == stillThere,
+                   "\(elsewhere) → \(stillThere)")
+
+        _ = await indexer.move(ids: [subject.doc], to: subject.url.deletingLastPathComponent())
+        try? fm.removeItem(at: folder)
+
+        await watchedRootMoves()
+    }
+
+    /// The watcher has to say when the folder it watches goes, since every
+    /// event after that is for a path outside it.
+    private static func watchedRootMoves() async {
+        let fm = FileManager.default
+        let parent = fm.temporaryDirectory
+            .appendingPathComponent("doctopus-watch-\(UUID().uuidString)", isDirectory: true)
+        let root = parent.appendingPathComponent("Library", isDirectory: true)
+        try? fm.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: parent) }
+
+        let heard = Problems()
+        let watcher = FileWatcher(onChange: { _ in }, onRootChanged: { heard.add("root") })
+        watcher.start(paths: [Store.canonical(root.path)])
+        try? await Task.sleep(for: .milliseconds(500))
+        try? fm.moveItem(at: root, to: parent.appendingPathComponent("Renamed", isDirectory: true))
+        for _ in 0..<50 where heard.all.isEmpty { try? await Task.sleep(for: .milliseconds(100)) }
+        watcher.stop()
+        print("  watched folder renamed  \(heard.all.isEmpty ? "not heard" : "heard")")
+        Check.that("renaming the watched folder is reported as the root changing", !heard.all.isEmpty)
     }
 }

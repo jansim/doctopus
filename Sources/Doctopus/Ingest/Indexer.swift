@@ -105,13 +105,26 @@ actor Indexer {
         return await process(documents: toProcess, phase: "Indexing", isImport: false, found: fresh)
     }
 
-    func handleChanges(paths: [String]) async {
+    /// `rescanning`: folders FSEvents could only say *something* changed in.
+    /// Those are walked again and reconciled, as a full scan would — whatever
+    /// was deleted in there went by without an event of its own.
+    func handleChanges(paths: [String], rescanning: [String] = []) async {
         let rootPrefix = store.root.path + "/"
         let fm = FileManager.default
 
         var toProcess: [(Int64, String)] = []
         var fresh: Set<Int64> = []
         var touched = false
+
+        for directory in rescanning {
+            let path = Store.canonical(directory)
+            guard path == store.root.path || path.hasPrefix(rootPrefix),
+                  !FileScanner.isInsideLibraryContainer(URL(fileURLWithPath: path)) else { continue }
+            // A root that is gone is the library leaving, not its documents.
+            guard fm.fileExists(atPath: store.root.path) else { continue }
+            await resync(directory: URL(fileURLWithPath: path), into: &toProcess, fresh: &fresh)
+            touched = true
+        }
 
         for path in paths {
             guard path == store.root.path || path.hasPrefix(rootPrefix) else { continue }
@@ -169,6 +182,26 @@ actor Indexer {
                 toProcess.append((r.id, facts.path))
                 if r.isNew { fresh.insert(r.id) }
             }
+        }
+    }
+
+    private func resync(directory: URL, into toProcess: inout [(Int64, String)],
+                        fresh: inout Set<Int64>) async {
+        var isDir: ObjCBool = false
+        let scan = FileManager.default.fileExists(atPath: directory.path, isDirectory: &isDir) && isDir.boolValue
+            ? FileScanner.scan(root: directory) : FileScanner.Scan()
+        let found = scan.found.map { Self.facts($0) }
+        await relinkMoved(found)
+        for facts in found {
+            if let r = try? await store.upsertDocument(facts, origin: .inLibrary), r.changed {
+                toProcess.append((r.id, facts.path))
+                if r.isNew { fresh.insert(r.id) }
+            }
+        }
+        do { _ = try await store.reconcileMissing(scan, within: directory.path) }
+        catch { onProblem("Could not check \(directory.lastPathComponent) for removed files: \(error.localizedDescription)") }
+        if !scan.isComplete {
+            onProblem(Self.unreadableProblem(scan, in: store.root, readAsEmpty: false))
         }
     }
 
