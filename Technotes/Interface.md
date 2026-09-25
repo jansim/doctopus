@@ -25,16 +25,16 @@ A Continuity Camera scan goes to the library of the folder it was sent into.
 
 ### Drag and drop
 
-Dragging documents onto a folder files them there as well, as Finder aliases,
-leaving each master where it is. Holding ⌘ moves the master file into the
-folder instead, the way ⌘ turns a Finder drag between volumes into a move.
+Dragging documents onto a folder moves them there, as a drag within a Finder
+volume does. Holding ⌥ (or ⌘⌥, Finder's alias drag) files them there as well
+instead, as Finder aliases, leaving each master where it is.
 
 The keys are read while the drag is still in the air rather than once it has
 landed: by then they have come up with the mouse button. For as long as a drag
 is over a folder, that folder's document count gives way to what letting go
-would do — *File Here* or *Move Here* — so ⌘ is visible before it is committed
-to. The cursor follows suit: a plain drag carries the copy badge, a ⌘ drag the
-plain arrow of a move.
+would do — *Move Here* or *File Here* — so ⌥ is visible before it is committed
+to. The cursor follows suit: a plain drag carries the plain arrow of a move,
+an ⌥ drag the copy badge.
 
 Dropping onto a tag, a Finder tag or a facet assigns it rather than filing
 anything.

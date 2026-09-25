@@ -2393,14 +2393,14 @@ enum SelfTest {
                    !session.isRunning && session.paused?.summary == "Incomplete", session.label)
 
         print("\nFOLDER DROPS")
-        Check.that("a drag with nothing held files the document in a second place",
-                   FolderDropIntent.reading([]) == .alias)
-        Check.that("⌘ moves the master file instead",
-                   FolderDropIntent.reading([.command]) == .move)
-        Check.that("⌘ still means move with other keys alongside it",
-                   FolderDropIntent.reading([.command, .shift]) == .move)
-        Check.that("⌥ on its own is not a move",
+        Check.that("a drag with nothing held moves the master file",
+                   FolderDropIntent.reading([]) == .move)
+        Check.that("⌥ files the document in a second place instead",
                    FolderDropIntent.reading([.option]) == .alias)
+        Check.that("⌘⌥, Finder's alias drag, files it there too",
+                   FolderDropIntent.reading([.command, .option]) == .alias)
+        Check.that("⌘ on its own is still a move",
+                   FolderDropIntent.reading([.command]) == .move)
         func movesInto(_ intent: FolderDropIntent, _ folder: String) -> Bool {
             if case .move(let target) = intent.action(on: folder) { return target == folder }
             return false
