@@ -112,7 +112,9 @@ optimization savings, alias mappings, raw text, all metadata.
 
 Full keyboard navigation with native Quick Look — Space on any file gives an
 instant preview with text selection and pagination. Double-click, or ⌘↓, hands
-the document to whichever app owns it, the way Finder does.
+the document to whichever app owns it, the way Finder does. ⌘A selects every
+document in the pane from anywhere in the library window, unless a text field
+is being edited.
 
 The sidebar and inspector are shown and hidden from the View menu (⌃⌘S,
 ⌃⌘I), and the inspector stays as it was left. Libraries appear in File › Open

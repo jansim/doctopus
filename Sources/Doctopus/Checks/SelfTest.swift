@@ -182,6 +182,25 @@ enum SelfTest {
             try? FileManager.default.moveItem(atPath: renamed, toPath: folder)
         }
 
+        let base = store.root.path
+        func filing(_ template: String) -> Rule {
+            Rule(id: 0, name: template, actions: [RuleAction(kind: .addTags, value: "x"),
+                                                  RuleAction(kind: .moveFile, value: template)])
+        }
+        func refiled(_ template: String, _ old: String, _ new: String) -> String? {
+            filing(template).refiling(base + "/" + old, to: base + "/" + new, root: base)?.destination
+        }
+        Check.that("a rule filing into a renamed folder follows it, subfolders and placeholders kept",
+                   refiled("Finances/Invoices/{year}", "Finances", "Money") == "Money/Invoices/{year}"
+                       && refiled("finances/invoices", "Finances/Invoices", "Finances/Bills") == "Finances/Bills"
+                       && refiled(base + "/Finances/{year}", "Finances", "Money") == base + "/Money/{year}",
+                   refiled("Finances/Invoices/{year}", "Finances", "Money") ?? "not refiled")
+        Check.that("…but not one that only reaches it by way of a placeholder, or a namesake",
+                   refiled("Insurance/{correspondent}", "Insurance/Allianz", "Insurance/Allianz SE") == nil
+                       && refiled("Finances-Old/{year}", "Finances", "Money") == nil
+                       && refiled("Other/Finances", "Finances", "Money") == nil
+                       && Rule(id: 0, name: "No folder").refiling(base + "/A", to: base + "/B", root: base) == nil)
+
         print("\nRENAME PREVIEW (\(Naming.defaultTemplate))")
         for row in rows.prefix(4) {
             let ctx = Naming.Context(date: row.docDate ?? row.createdAt, correspondent: row.correspondent,
@@ -2053,6 +2072,45 @@ enum SelfTest {
                    !Rule(id: 0, name: "Empty",
                          actions: [RuleAction(kind: .addTags, value: "x")])
                        .matches(Rule.Subject(text: text, filename: payslip.filename)))
+
+        func tagRule(_ pattern: String, negated: Bool = false, mode: MatchMode = .anyWord) -> Rule {
+            Rule(id: 0, name: "Tagged",
+                 conditions: [RuleCondition(field: .tags, pattern: pattern, mode: mode, negated: negated)],
+                 actions: [RuleAction(kind: .setDocType, value: "Tagged")])
+        }
+        let tagged = Rule.Subject(text: text, filename: payslip.filename, tags: ["Work", "tax 2025"])
+        let untagged = Rule.Subject(text: text, filename: payslip.filename)
+        Check.that("a tag condition matches a document carrying the tag",
+                   tagRule("work").matches(tagged) && !tagRule("work").matches(untagged))
+        Check.that("…and a negated one matches a document without it, untagged included",
+                   tagRule("invoice", negated: true).matches(tagged)
+                       && tagRule("work", negated: true).matches(untagged)
+                       && !tagRule("work", negated: true).matches(tagged))
+        Check.that("…and a phrase cannot run across two tags",
+                   tagRule("work tax", mode: .exactPhrase).matches(tagged) == false
+                       && tagRule("tax 2025", mode: .exactPhrase).matches(tagged))
+        Check.that("the router hands a document's tags to the rules",
+                   Router(rules: [tagRule("work")], derivedTemplate: "", root: root, deriveWhenNoRule: false)
+                       .evaluate(text: text, filename: payslip.filename, findings: findings, insight: nil,
+                                 currentDirectory: root, tags: ["Work"]).setDocType == "Tagged")
+
+        var stored = tagRule("tag-condition-check")
+        stored.name = "Tag Condition Check"
+        guard let id = try? await store.upsertRule(stored) else {
+            Check.that("a rule with a tag condition is saved", false)
+            return
+        }
+        func matched() async -> Bool {
+            ((try? await store.ruleMatches()) ?? [:])[payslip.doc]?.contains { $0.ruleID == id } == true
+        }
+        let before = await matched()
+        let tag = try? await store.tagID(named: "tag-condition-check")
+        if let tag { try? await store.assign(tag: tag, to: payslip.doc) }
+        let after = await matched()
+        Check.that("tagging a document brings up the rules that match on that tag",
+                   !before && after, "before \(before), after \(after)")
+        try? await store.deleteRule(id)
+        if let tag { try? await store.deleteTag(tag) }
     }
 
     /// Doctopus may only ever move or rewrite a file it just brought in itself,

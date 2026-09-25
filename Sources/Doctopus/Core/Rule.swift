@@ -20,6 +20,9 @@ struct Rule: Identifiable, Hashable, Sendable {
         var filename: String = ""
         var correspondent: String?
         var docType: String?
+        /// What the document is tagged with before this pass. Tags a rule adds
+        /// are not seen by the rules run alongside it, so no rule sets another off.
+        var tags: [String] = []
 
         func value(for field: RuleField) -> String {
             switch field {
@@ -27,6 +30,8 @@ struct Rule: Identifiable, Hashable, Sendable {
             case .filename: return filename
             case .correspondent: return correspondent ?? ""
             case .type: return docType ?? ""
+            // Not joined by whitespace, which a phrase reads straight across.
+            case .tags: return tags.joined(separator: "\u{1f}")
             }
         }
     }
@@ -61,6 +66,32 @@ struct Rule: Identifiable, Hashable, Sendable {
 
     var hasEffect: Bool { actions.contains { $0.value.nilIfBlank != nil } }
 
+    /// The rule with its folder following one renamed from `old` to `new`, or
+    /// nil if it does not file into that folder. Only a folder written out
+    /// counts: `Insurance/{correspondent}` follows a renamed `Insurance`, but
+    /// not a renamed `Insurance/Allianz`, which it only arrives at by way of a
+    /// placeholder. All three paths are absolute; a template is read relative
+    /// to `root` unless it is written as an absolute path itself.
+    func refiling(_ old: String, to new: String, root: String) -> Rule? {
+        guard let template = destination,
+              let index = actions.firstIndex(where: { $0.kind == .moveFile }) else { return nil }
+        func parts(_ path: String) -> [String] { path.split(separator: "/").map(String.init) }
+        let absolute = template.hasPrefix("/") || template.hasPrefix("~")
+        let base = parts(root)
+        let written = absolute ? parts((template as NSString).expandingTildeInPath) : base + parts(template)
+        let from = parts(old), to = parts(new)
+        // Case-blind, as the file system is. The root itself is never renamed here.
+        guard from.count > base.count, written.count >= from.count,
+              zip(written, from).allSatisfy({ $0.caseInsensitiveCompare($1) == .orderedSame })
+        else { return nil }
+        let moved = to + written.dropFirst(from.count)
+        var copy = self
+        copy.actions[index].value = absolute
+            ? "/" + moved.joined(separator: "/")
+            : moved.dropFirst(base.count).joined(separator: "/")
+        return copy
+    }
+
     /// The same rule doing only some of what it does, for accepting part of a
     /// match. Conditions are kept, so it still only touches what the rule would.
     func limited(to kinds: Set<RuleActionKind>) -> Rule {
@@ -91,6 +122,7 @@ enum RuleField: String, CaseIterable, Sendable {
     case filename
     case correspondent
     case type
+    case tags
 
     var label: String {
         switch self {
@@ -98,6 +130,7 @@ enum RuleField: String, CaseIterable, Sendable {
         case .filename: return "Filename"
         case .correspondent: return "Correspondent"
         case .type: return "Document type"
+        case .tags: return "Tags"
         }
     }
 
@@ -107,6 +140,7 @@ enum RuleField: String, CaseIterable, Sendable {
         case .filename: return "the filename"
         case .correspondent: return "the correspondent"
         case .type: return "the document type"
+        case .tags: return "the tags"
         }
     }
 }

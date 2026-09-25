@@ -380,6 +380,10 @@ actor Indexer {
         }, for: id)
     }
 
+    private func tagNames(of id: Int64) async -> [String] {
+        ((try? await store.tags(for: id)) ?? []).map(\.name)
+    }
+
     private func applyRuleActions(_ decision: Router.Decision, to id: Int64) async {
         if let corr = decision.setCorrespondent {
             try? await store.storeMetadata(Store.MetadataPatch(docID: id, correspondent: corr, source: "rule"))
@@ -409,7 +413,8 @@ actor Indexer {
             let decision = await router(for: id).evaluate(
                 text: input.text, filename: input.url.lastPathComponent, findings: findings,
                 insight: DocumentInsight(correspondent: input.correspondent, docType: input.docType),
-                currentDirectory: input.url.deletingLastPathComponent())
+                currentDirectory: input.url.deletingLastPathComponent(),
+                tags: await tagNames(of: id))
             let chosen = try? await store.pathSuggestions(for: id).first { $0.source == "chosen" }
             await suggest(decision, for: id, chosen: chosen.map { URL(fileURLWithPath: $0.path) })
             guard applyingActions else { continue }
@@ -424,7 +429,7 @@ actor Indexer {
                        moving: Bool, chosen: Bool, action: EventAction) async {
         let decision = await router(for: id).evaluate(
             text: text, filename: url.lastPathComponent, findings: findings, insight: insight,
-            currentDirectory: url.deletingLastPathComponent())
+            currentDirectory: url.deletingLastPathComponent(), tags: await tagNames(of: id))
         await suggest(decision, for: id, chosen: chosen ? url.deletingLastPathComponent() : nil)
         await applyRuleActions(decision, to: id)
         if !decision.tagsFromRule {

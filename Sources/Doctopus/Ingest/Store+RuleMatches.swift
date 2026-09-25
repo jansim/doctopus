@@ -3,8 +3,8 @@ import Foundation
 extension Store {
 
     /// Matched rule IDs per document. Matching reads the full text, so answers
-    /// are kept until the document's text, filename, correspondent or type
-    /// changes, or any rule's conditions do.
+    /// are kept until the document's text, filename, correspondent, type or
+    /// tags change, or any rule's conditions do.
     struct RuleMatchCache {
         var signature = ""
         var entries: [Int64: (key: String, rules: [Int64])] = [:]
@@ -20,9 +20,7 @@ extension Store {
 
         let docs = try db.map("""
             SELECT d.id, d.path, d.filename, d.created_at, d.indexed_at, m.doc_date,
-                   ec.name, et.name, m.title, m.language,
-                   (SELECT group_concat(t.name, char(31)) FROM document_tags dt
-                     JOIN tags t ON t.id = dt.tag_id WHERE dt.doc_id = d.id)
+                   ec.name, et.name, m.title, m.language, \(Self.tagNamesColumn)
             FROM documents d
             LEFT JOIN metadata m ON m.doc_id = d.id
             LEFT JOIN entities ec ON ec.id = m.correspondent_id
@@ -32,13 +30,14 @@ extension Store {
             let filename = row.string(2)
             let correspondent = row.stringOrNil(6)
             let docType = row.stringOrNil(7)
-            let key = [String(row.doubleOrNil(4) ?? 0), filename,
-                       correspondent ?? "", docType ?? ""].joined(separator: "\u{1f}")
+            let tags = Self.tagNames(row.stringOrNil(10))
+            let key = [String(row.doubleOrNil(4) ?? 0), filename, correspondent ?? "", docType ?? "",
+                       tags.sorted().joined(separator: "\u{1d}")].joined(separator: "\u{1f}")
             let doc = RuleCheck.Document(
                 path: absPath(row.string(1)), correspondent: correspondent, docType: docType,
                 date: row.date(5) ?? Date(timeIntervalSince1970: row.double(3)),
                 title: row.stringOrNil(8), language: row.stringOrNil(9),
-                tags: (row.stringOrNil(10) ?? "").split(separator: "\u{1f}").map(String.init))
+                tags: tags)
             return (row.int(0), key, filename, doc)
         }
 
@@ -53,7 +52,7 @@ extension Store {
                 for doc in batch {
                     let subject = Rule.Subject(text: texts[doc.id] ?? "", filename: doc.filename,
                                                correspondent: doc.doc.correspondent,
-                                               docType: doc.doc.docType)
+                                               docType: doc.doc.docType, tags: doc.doc.tags)
                     ruleMatchCache.entries[doc.id] = (doc.key,
                                                       live.filter { $0.matches(subject) }.map(\.id))
                 }

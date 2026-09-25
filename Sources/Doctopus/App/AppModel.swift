@@ -287,6 +287,8 @@ final class AppModel {
     }
     var selectedRows: [DocumentRow] { documents.filter { selectedIDs.contains($0.id) } }
 
+    func selectAll() { selectedIDs = Set(documents.map(\.id)) }
+
     init() {
         self.intelligence = Workspace.shared.intelligence
         self.settings = AppSettings(appWide: Preferences.appWide)

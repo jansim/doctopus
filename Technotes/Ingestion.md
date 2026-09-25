@@ -108,11 +108,18 @@ its library.
 ## Rules
 
 A rule is one or more conditions and one or more actions, in the spirit of a
-mail filter. A condition points at the text, the filename, the correspondent or
-the document type, says how its pattern is read — any of these words, all of
-them, an exact phrase, a regular expression, or roughly this for OCR noise —
-and can be inverted, so "an invoice, but not a credit note" is one rule rather
-than two. The conditions are joined by *any* or *all*.
+mail filter. A condition points at the text, the filename, the correspondent,
+the document type or the tags, says how its pattern is read — any of these
+words, all of them, an exact phrase, a regular expression, or roughly this for
+OCR noise — and can be inverted, so "an invoice, but not a credit note" is one
+rule rather than two. The conditions are joined by *any* or *all*.
+
+A tag condition reads the tags a document already has, each kept apart so a
+phrase never runs across two of them and "does not match" also catches an
+untagged document. The tags a rule adds are not seen by the other rules in the
+same pass — a rule never sets another off. A rule waiting on a tag that another
+rule adds shows up as a pending match afterwards, like any rule written after
+the fact.
 
 Words match whole. A `*` widens one: `rechnung*` also catches
 "Rechnungsnummer", `*rechnung` catches "Gehaltsabrechnung", `*rechnung*` both.
@@ -130,6 +137,11 @@ rule's folder is only a suggestion.
 Rules live in Settings › Rules, per library. The editor shows how many
 documents already in the library a rule catches, and where a document would
 land and what it would be called.
+
+Renaming a folder from the sidebar offers to take the rules filing into it
+along. Only a folder a rule names outright counts: `Insurance/{correspondent}`
+follows a renamed `Insurance`, but not a renamed `Insurance/Allianz`, which it
+only reaches by way of the placeholder.
 
 A rule written after the fact, or a file moved by hand, leaves documents the
 rules would still change. These get a purple Rules badge, and the inspector
@@ -152,7 +164,7 @@ as a partial match: what they still agree on is applied and they are
 suppressed for that document.
 
 Matching reads every document's text, so the store keeps each answer until the
-text, filename, correspondent, type or a rule's conditions change. What a
+text, filename, correspondent, type, tags or a rule's conditions change. What a
 match would change is compared against the index fresh on every pass.
 
 Documents awaiting review are routed again when a rule changes, re-applying
