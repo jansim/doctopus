@@ -37,21 +37,20 @@ extension Store {
             try db.run("DELETE FROM path_suggestions WHERE doc_id=?", [.int(docID)])
             for (rank, c) in candidates.enumerated() {
                 try db.run("""
-                    INSERT OR IGNORE INTO path_suggestions(doc_id, path, confidence, source, explanation, rank)
-                    VALUES(?,?,?,?,?,?)
-                    """, [.int(docID), .text(relPath(c.path)), .double(c.confidence),
-                          .text(c.source), .text(c.explanation), .int(Int64(rank))])
+                    INSERT OR IGNORE INTO path_suggestions(doc_id, path, source, explanation, rank)
+                    VALUES(?,?,?,?,?)
+                    """, [.int(docID), .text(relPath(c.path)), .text(c.source), .text(c.explanation), .int(Int64(rank))])
             }
         }
     }
 
     func pathSuggestions(for docID: Int64) throws -> [PathSuggestion] {
         try db.map("""
-            SELECT path, confidence, source, explanation FROM path_suggestions
+            SELECT path, source, explanation FROM path_suggestions
             WHERE doc_id=? ORDER BY rank
             """, [.int(docID)]) {
-            PathSuggestion(path: absPath($0.string(0)), confidence: $0.double(1),
-                           source: $0.string(2), explanation: $0.stringOrNil(3))
+            PathSuggestion(path: absPath($0.string(0)), source: $0.string(1),
+                           explanation: $0.stringOrNil(2))
         }
     }
 }

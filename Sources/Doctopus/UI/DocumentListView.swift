@@ -268,12 +268,11 @@ private struct DocumentTableView: View {
 }
 
 enum QueueColumn: String, CaseIterable, Identifiable {
-    case action, confidence, when
+    case action, when
     var id: String { rawValue }
     var title: String {
         switch self {
         case .action: return "Action"
-        case .confidence: return "Confidence"
         case .when: return "When"
         }
     }
@@ -298,8 +297,6 @@ private struct QueueCell: View {
                     }
                 }
                 .foregroundStyle(queue.approved ? AnyShapeStyle(.primary) : AnyShapeStyle(Color.orange))
-            case .confidence:
-                if let c = queue.confidence { ConfidenceBadge(value: c) } else { Text("—").foregroundStyle(.tertiary) }
             case .when:
                 Text(queue.at, style: .relative).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
             }

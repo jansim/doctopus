@@ -36,8 +36,7 @@ extension Store {
         try db.transaction {
             try db.run("""
                 UPDATE metadata SET title=NULL, correspondent_id=NULL, doc_type_id=NULL, language=NULL,
-                                    summary=NULL, intent=NULL, amount=NULL, confidence=NULL,
-                                    source=NULL,
+                                    summary=NULL, intent=NULL, amount=NULL, source=NULL,
                                     doc_date = CASE WHEN date_source='manual' THEN doc_date END,
                                     date_source = CASE WHEN date_source='manual' THEN 'manual' END
                 WHERE doc_id=?
@@ -67,10 +66,9 @@ extension Store {
                 WHERE d.missing=0 AND d.deleted_at IS NULL AND d.id<>? AND m.\(idColumn) = ?
                 GROUP BY d.directory ORDER BY COUNT(*) DESC LIMIT ?
                 """, [.int(docID), .int(entityID), .int(Int64(limit))]) { ($0.string(0), Int($0.int(1))) }
-            let total = max(1, rows.reduce(0) { $0 + $1.1 })
             for (dir, count) in rows where seen.insert(dir).inserted {
                 out.append(PathSuggestion(
-                    path: absPath(dir), confidence: Double(count) / Double(total), source: "similar",
+                    path: absPath(dir), source: "similar",
                     explanation: "\(count) other document\(count == 1 ? "" : "s") \(label) “\(value)” \(count == 1 ? "is" : "are") here"))
             }
         }
@@ -130,13 +128,13 @@ extension Store {
         var correspondent: String?
         var docType: String?
         var date: Date?
-        var confidence: Double
+        var dateSource: String?
     }
 
     func routingInput(for docID: Int64) throws -> RoutingInput? {
         try db.first("""
             SELECT d.path, (SELECT f.body FROM doc_fts f WHERE f.rowid = d.id),
-                   ec.name, et.name, m.doc_date, m.confidence
+                   ec.name, et.name, m.doc_date, m.date_source
             FROM documents d
             LEFT JOIN metadata m ON m.doc_id = d.id
             LEFT JOIN entities ec ON ec.id = m.correspondent_id
@@ -145,7 +143,7 @@ extension Store {
             """, [.int(docID)]) {
             RoutingInput(url: URL(fileURLWithPath: absPath($0.string(0))), text: $0.stringOrNil(1) ?? "",
                          correspondent: $0.stringOrNil(2), docType: $0.stringOrNil(3),
-                         date: $0.date(4), confidence: $0.doubleOrNil(5) ?? 0)
+                         date: $0.date(4), dateSource: $0.stringOrNil(5))
         }
     }
 }

@@ -15,7 +15,9 @@ enum DocumentAnalyzer {
         var correspondent: String?
         var docType: String?
         var amount: String?
-        var confidence: Double = 0
+
+        /// False when the date is only the file's own timestamp.
+        var dateWasFound: Bool { dateSource != nil && dateSource != "fs" }
     }
 
     struct Options: Sendable {
@@ -68,13 +70,6 @@ enum DocumentAnalyzer {
             ?? embeddedAuthor(pdfInfo)
         f.amount = amount(in: text)
         f.title = title(url: url, text: text, type: f.docType, correspondent: f.correspondent)
-
-        var score = 0.35
-        if f.dateSource == "ocr" || f.dateSource == "pdf" { score += 0.2 }
-        if f.correspondent != nil { score += 0.2 }
-        if f.docType != nil { score += 0.15 }
-        if !text.isEmpty { score += 0.05 }
-        f.confidence = min(score, 0.95)
         return f
     }
 

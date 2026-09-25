@@ -7,7 +7,7 @@ enum Schema {
 
     private static let steps: [@Sendable (Database) throws -> Void] = [
         v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19,
-        v20, v21,
+        v20, v21, v22,
     ]
     static var current: Int { steps.count }
 
@@ -35,6 +35,18 @@ enum Schema {
             [.text(table), .text(column)]) { $0.int(0) } ?? 0
         guard present == 0 else { return }
         try db.exec("ALTER TABLE \(table) ADD COLUMN \(column) \(declaration)")
+    }
+
+    /// Confidence scores were never more than a tally of which fields were
+    /// found, so nothing stores them any more.
+    private static func v22(_ db: Database) throws {
+        for table in ["events", "path_suggestions", "metadata", "ocr_stats"] {
+            let present = try db.first(
+                "SELECT COUNT(*) FROM pragma_table_info(?) WHERE name='confidence'",
+                [.text(table)]) { $0.int(0) } ?? 0
+            guard present > 0 else { continue }
+            try db.exec("ALTER TABLE \(table) DROP COLUMN confidence")
+        }
     }
 
     /// Documents marked as outliers for a rule, which it then leaves alone.

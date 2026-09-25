@@ -7,7 +7,6 @@ import NaturalLanguage
 
 struct ExtractedText: Sendable {
     var text: String = ""
-    var confidence: Double = 0
     var words: Int = 0
     var source: String = "vision"
     var pageCount: Int?
@@ -59,13 +58,10 @@ enum TextExtractor {
             }
         }
 
-        var confidences: [Double] = []
         if !scanned.isEmpty, let cg = CGPDFDocument(url as CFURL) {
             for index in scanned {
                 guard let image = render(page: cg.page(at: index + 1)) else { continue }
-                let ocr = recognize(image)
-                pieces[index] = ocr.text
-                if ocr.confidence > 0 { confidences.append(ocr.confidence) }
+                pieces[index] = recognize(image)
             }
         }
 
@@ -75,16 +71,7 @@ enum TextExtractor {
         else if scanned.count == count { source = "vision" }
         else { source = "mixed" }
 
-        let confidence: Double
-        if confidences.isEmpty { confidence = text.isEmpty ? 0 : 1.0 }
-        else if source == "mixed" {
-            let digital = Double(count - scanned.count)
-            confidence = (digital + confidences.reduce(0, +)) / Double(count)
-        } else {
-            confidence = confidences.reduce(0, +) / Double(confidences.count)
-        }
-
-        return ExtractedText(text: text, confidence: confidence, source: source, pageCount: count)
+        return ExtractedText(text: text, source: source, pageCount: count)
     }
 
     private static func render(page: CGPDFPage?) -> CGImage? {
@@ -116,11 +103,10 @@ enum TextExtractor {
         guard let src = CGImageSourceCreateWithURL(url as CFURL, nil),
               let image = CGImageSourceCreateImageAtIndex(src, 0, [kCGImageSourceShouldCache: false] as CFDictionary)
         else { return ExtractedText(source: "unreadable") }
-        let ocr = recognize(image)
-        return ExtractedText(text: ocr.text, confidence: ocr.confidence, source: "vision", pageCount: 1)
+        return ExtractedText(text: recognize(image), source: "vision", pageCount: 1)
     }
 
-    private static func recognize(_ image: CGImage) -> (text: String, confidence: Double) {
+    private static func recognize(_ image: CGImage) -> String {
         let request = VNRecognizeTextRequest()
         request.recognitionLevel = .accurate
         request.usesLanguageCorrection = true
@@ -128,9 +114,9 @@ enum TextExtractor {
         request.revision = VNRecognizeTextRequestRevision3
 
         let handler = VNImageRequestHandler(cgImage: image, options: [:])
-        do { try handler.perform([request]) } catch { return ("", 0) }
+        do { try handler.perform([request]) } catch { return "" }
 
-        guard let observations = request.results, !observations.isEmpty else { return ("", 0) }
+        guard let observations = request.results, !observations.isEmpty else { return "" }
 
         // Reading order: Vision returns observations top-to-bottom already, but
         // normalized origin is bottom-left, so sort descending on y then x.
@@ -140,16 +126,7 @@ enum TextExtractor {
             return a.minX < b.minX
         }
 
-        var lines: [String] = []
-        var total = 0.0
-        var n = 0
-        for obs in sorted {
-            guard let best = obs.topCandidates(1).first else { continue }
-            lines.append(best.string)
-            total += Double(best.confidence)
-            n += 1
-        }
-        return (lines.joined(separator: "\n"), n == 0 ? 0 : total / Double(n))
+        return sorted.compactMap { $0.topCandidates(1).first?.string }.joined(separator: "\n")
     }
 
     private static func detectLanguage(_ text: String) -> String? {

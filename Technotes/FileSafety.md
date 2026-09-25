@@ -18,8 +18,9 @@ out what each gets. Concretely:
   original is never touched. A folder dropped in or chosen to import brings in
   the PDFs and images inside it at any depth, flattened into the destination;
   the folder itself is left as it was.
-- Routing is skipped below the confidence threshold, when two candidates are
-  about equally good, and for any destination outside the library. The document
+- Routing is skipped when a derived folder would need a date that was not read
+  off the document, when matching rules name different folders, and for any
+  destination outside the library. The document
   waits in Needs Review with its candidates kept in `path_suggestions`.
 - Doctopus only deletes an alias it made for a tag, and only if the file at
   that path is still an alias to that document. An alias you made by dragging

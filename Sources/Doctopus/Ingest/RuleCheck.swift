@@ -17,7 +17,7 @@ struct RuleCheck: Sendable {
     var naming = Naming.Options()
 
     func changes(_ rule: Rule, for doc: Document) -> [RuleMatch.Change] {
-        let router = Router(rules: [], threshold: 1, derivedTemplate: "",
+        let router = Router(rules: [], derivedTemplate: "",
                             root: root, deriveWhenNoRule: false)
         let url = URL(fileURLWithPath: doc.path)
         let correspondent = rule.setCorrespondent ?? doc.correspondent

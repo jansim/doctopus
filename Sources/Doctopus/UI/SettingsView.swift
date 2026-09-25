@@ -312,15 +312,7 @@ private struct RoutingSettings: View {
                               template: $model.settings.derivedTemplate, kind: .path,
                               library: model.library)
                     .disabled(!model.settings.deriveWhenNoRule)
-                LabeledContent("Confidence threshold") {
-                    HStack {
-                        Slider(value: $model.settings.routingThreshold, in: 0.4...0.99)
-                        Text("\(Int(model.settings.routingThreshold * 100))%")
-                            .monospacedDigit().frame(width: 40)
-                    }
-                }
-                .disabled(!model.settings.deriveWhenNoRule)
-                Text("Only new scans and imports with no folder chosen are routed. A derived folder is only used above the threshold, and when matching rules name different folders a file stays in the Inbox and waits in Needs Review with its suggestions. Files already in your library are never moved automatically, and nothing is ever routed outside it.")
+                Text("Only new scans and imports with no folder chosen are routed. A derived folder needs a correspondent, and a date read off the document when its template uses one; and when matching rules name different folders a file stays in the Inbox and waits in Needs Review with its suggestions. Files already in your library are never moved automatically, and nothing is ever routed outside it.")
                     .font(.caption).foregroundStyle(.secondary)
             } header: {
                 ScopedHeader(title: "Auto-Routing", scope: .library)
