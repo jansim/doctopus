@@ -89,20 +89,22 @@ image.
 ````markdown
 /screenshot
 
-/screenshot Settings
+/screenshot General
 ```sh
 keys , command
-wait_window Settings
+wait_window General
 ```
 ````
 
 - The text after `/screenshot` picks the window by a case-insensitive part of
-  its title; without it, the frontmost window is taken. `/screenshot --screen`
-  takes the whole display.
+  its title; without it, the frontmost window is taken. Settings is titled
+  after its open tab, so `General` above. `/screenshot --screen` takes the
+  whole display.
 - A fenced block after the line is run first. `sh` blocks get `menu Document
   "Quick Look"`, `keys o command shift`, `type_text`, `activate` and
   `wait_window <title>` from `.github/screenshot/helpers.sh`, plus `$APP`,
-  `$DOCTOPUS` and `$LIBRARY`; `applescript` and `jxa` blocks go to `osascript`.
+  `$DOCTOPUS` and `$LIBRARY`, and stop at the first command that fails;
+  `applescript` and `jxa` blocks go to `osascript`.
 - Each `/screenshot` line is one image, up to six per request, and each starts
   from a fresh launch with the preferences wiped and the demo library open.
 - The window's rectangle is captured, so a sheet or popover over it is included.

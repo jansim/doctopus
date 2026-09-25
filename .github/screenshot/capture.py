@@ -99,7 +99,9 @@ def setup(spec, index):
     elif spec["lang"] == "jxa":
         args = ["osascript", "-l", "JavaScript", path]
     else:
-        args = ["bash", "-c", 'source "$1"; source "$2"', "setup",
+        # -e, so a helper that failed is reported instead of the capture
+        # quietly showing the window as it was.
+        args = ["bash", "-e", "-c", 'source "$1"; source "$2"', "setup",
                 os.path.join(HERE, "helpers.sh"), path]
     try:
         done = subprocess.run(args, env=env, capture_output=True, text=True,

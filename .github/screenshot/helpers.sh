@@ -12,11 +12,12 @@ activate() {
 menu() {
     activate
     osascript - "$@" <<'EOF'
-on run path
+on run argv
+    -- `path` and `name` would resolve to the process's own properties in here.
     tell application "System Events" to tell process "Doctopus"
-        set target to menu bar item (item 1 of path) of menu bar 1
-        repeat with name in rest of path
-            set target to menu item (name as text) of menu 1 of target
+        set target to menu bar item (item 1 of argv) of menu bar 1
+        repeat with itemTitle in rest of argv
+            set target to menu item (itemTitle as text) of menu 1 of target
         end repeat
         click target
     end tell
@@ -60,7 +61,8 @@ end run
 EOF
 }
 
-# Waits until a Doctopus window whose title contains $1 is on screen.
+# Waits until a Doctopus window whose title contains $1 is on screen. Settings
+# is titled after its open tab: `wait_window General`.
 wait_window() {
     local title="$1" timeout="${2:-20}"
     local deadline=$((SECONDS + timeout))
@@ -68,6 +70,6 @@ wait_window() {
         "$WINDOWS" Doctopus | cut -f6 | grep -qiF -- "$title" && return 0
         sleep 0.5
     done
-    echo "no window titled '$title' after ${timeout}s" >&2
+    echo "no window titled '$title' after ${timeout}s; open: $("$WINDOWS" Doctopus | cut -f6 | paste -sd, -)" >&2
     return 1
 }
