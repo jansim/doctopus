@@ -54,6 +54,7 @@ enum UITest {
             await uiStatePersists(model)
             await sidebarShowsBothTagSystems(model, snapshots: snapshots)
             await handEditsReachTheHistory(model)
+            await tagCountsFollowEdits(model)
             await optionRevealsFolders(model)
             await secondLibraryOpensApart(model, alongside: library, snapshots: snapshots)
             await reviewPanelFiles(model, snapshots: snapshots)
@@ -1106,7 +1107,7 @@ enum UITest {
         return value
     }
 
-    private static func settle(_ condition: () -> Bool, timeout: TimeInterval = 30,
+    static func settle(_ condition: () -> Bool, timeout: TimeInterval = 30,
                                every interval: Duration = .milliseconds(200)) async -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {

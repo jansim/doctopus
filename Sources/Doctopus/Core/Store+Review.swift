@@ -43,6 +43,7 @@ extension Store {
                 WHERE doc_id=?
                 """, [.int(docID)])
             try db.run("DELETE FROM document_tags WHERE doc_id=? AND auto=1", [.int(docID)])
+            try reconcileImpliedTags([docID])
             try db.run("DELETE FROM tag_suggestions WHERE doc_id=?", [.int(docID)])
             try db.run("DELETE FROM path_suggestions WHERE doc_id=?", [.int(docID)])
             try refreshSearchIndex(docID)
