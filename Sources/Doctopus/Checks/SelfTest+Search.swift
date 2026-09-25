@@ -1,7 +1,6 @@
 import Foundation
 
-/// Finding documents: the query language, the index behind it, and the ways in
-/// from outside the app.
+/// Finding documents: the query language and the index behind it.
 extension SelfTest {
     static func search(store: Store) async {
         print("\nSEARCH")

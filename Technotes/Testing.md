@@ -39,22 +39,6 @@ its `library.doctopus` index there, so `DemoLibrary/` itself is never written
 to. The checks also write a Finder tag to one fixture and put it back
 afterwards.
 
-## Build times
-
-CI builds in debug, without debug info, and keeps `.build` between runs, so a
-push that touches a few files recompiles only those: well under a minute
-instead of the five a release build takes. A fresh checkout gives every file a
-new mtime, which is why the build also asks the driver to compare contents
-(`-enable-incremental-file-hashing`). The same flags work locally:
-
-```bash
-Scripts/build.sh debug -Xswiftc -gnone
-```
-
-Debug info is what made debug builds slow: a single async function of a
-thousand lines or more takes minutes to lower with it, so keep checks split
-into one function per section.
-
 ## Checking a model endpoint
 
 Pointing `--selftest` at an API endpoint additionally runs a live enrichment

@@ -111,8 +111,7 @@ extension SelfTest {
         }
     }
 
-    /// New documents for the import checks, copied from one no rule matches so
-    /// the name each is given is all that decides where it goes.
+    /// Import fixtures copied from a document no rule matches.
     private struct Arrival {
         let store: Store
         let neutral: DocumentRow?
