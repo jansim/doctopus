@@ -225,36 +225,18 @@ extension AppModel {
         }
     }
 
-    func addNote(_ body: String, to doc: Int64) {
-        guard let lib = library, body.nilIfBlank != nil else { return }
+    func setNote(_ body: String, for doc: Int64) {
+        guard let lib = library else { return }
         Task {
             do {
-                _ = try await lib.store.addNote(body, to: doc)
-                try? await lib.store.logEdit(docID: doc, detail: "Note added")
+                let before = try await lib.store.setNote(body, for: doc)
+                let after = body.trimmingCharacters(in: .whitespacesAndNewlines)
+                if before != after {
+                    let detail = after.isEmpty ? "Note deleted"
+                        : before.isEmpty ? "Note added" : "Note edited"
+                    try? await lib.store.logEdit(docID: doc, detail: detail)
+                }
             } catch { report(error, "save the note") }
-            reloadDetail()
-        }
-    }
-
-    func updateNote(_ id: Int64, body: String, in doc: Int64) {
-        guard let lib = library else { return }
-        Task {
-            do {
-                try await lib.store.updateNote(id, body: body)
-                try? await lib.store.logEdit(docID: doc,
-                                             detail: body.nilIfBlank == nil ? "Note deleted" : "Note edited")
-            } catch { report(error, body.nilIfBlank == nil ? "delete the note" : "save the note") }
-            reloadDetail()
-        }
-    }
-
-    func deleteNote(_ id: Int64, in doc: Int64) {
-        guard let lib = library else { return }
-        Task {
-            do {
-                try await lib.store.deleteNote(id)
-                try? await lib.store.logEdit(docID: doc, detail: "Note deleted")
-            } catch { report(error, "delete the note") }
             reloadDetail()
         }
     }

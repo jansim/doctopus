@@ -132,7 +132,7 @@ struct DocumentDetail: Sendable {
     var aliases: [String] = []
     var folderAliases: [String] = []
     var history: [HistoryEvent] = []
-    var notes: [Note] = []
+    var note: String = ""
     var dateCandidates: [DateCandidate] = []
 }
 
@@ -242,15 +242,6 @@ struct ProcessingEntry: Identifiable, Hashable, Sendable {
     var approved: Bool
     var filename: String
     var missing: Bool
-}
-
-struct Note: Identifiable, Hashable, Sendable {
-    var id: Int64
-    var body: String
-    var createdAt: Date
-    var updatedAt: Date?
-
-    var edited: Bool { updatedAt != nil }
 }
 
 struct HistoryEvent: Identifiable, Hashable, Sendable {

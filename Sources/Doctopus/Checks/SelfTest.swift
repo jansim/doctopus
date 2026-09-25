@@ -231,6 +231,7 @@ enum SelfTest {
                    derives("{correspondent}", dateSource: "fs"))
 
         ruleMigration()
+        noteMigration()
 
         print("\nRULE EDITING")
         let samples = (try? await store.ruleSamples()) ?? []
@@ -1274,26 +1275,25 @@ enum SelfTest {
         print("\nNOTES")
         if let subject = rows.first {
             let phrase = "cancelled by phone \(UUID().uuidString.prefix(6).lowercased())"
-            let noteID = (try? await store.addNote(phrase, to: subject.doc)) ?? 0
-            let listed = (try? await store.notes(for: subject.doc)) ?? []
+            try? await store.setNote(phrase, for: subject.doc)
+            let kept = (try? await store.note(for: subject.doc)) ?? ""
             let found = (try? await store.listDocuments(selection: .all, query: SearchQuery(phrase),
                                                         sort: .relevance, ascending: false)) ?? []
-            print("  " + subject.filename.padded(38)
-                  + " \(listed.count) note(s), searchable: \(found.count) hit(s)")
-            Check.that("a note is kept with the document", listed.contains { $0.id == noteID })
+            print("  " + subject.filename.padded(38) + " searchable: \(found.count) hit(s)")
+            Check.that("a note is kept with the document", kept == phrase, kept)
             Check.that("…and is searchable straight away", found.contains { $0.id == subject.id })
 
-            try? await store.updateNote(noteID, body: "the original is in the red folder")
-            let edited = (try? await store.notes(for: subject.doc)) ?? []
-            Check.that("editing a note marks it edited",
-                       edited.first { $0.id == noteID }?.edited == true)
+            try? await store.setNote("the original is in the red folder\n\ncall them back", for: subject.doc)
+            let edited = (try? await store.note(for: subject.doc)) ?? ""
+            Check.that("a document has one note, which an edit replaces",
+                       edited == "the original is in the red folder\n\ncall them back", edited)
             let stale = (try? await store.listDocuments(selection: .all, query: SearchQuery(phrase),
                                                         sort: .relevance, ascending: false)) ?? []
             Check.that("…and the old wording stops matching", stale.isEmpty, "\(stale.count) hit(s)")
 
-            try? await store.deleteNote(noteID)
-            Check.that("a note can be taken away again",
-                       ((try? await store.notes(for: subject.doc)) ?? []).isEmpty)
+            try? await store.setNote("  \n ", for: subject.doc)
+            Check.that("a blank note takes it away again",
+                       ((try? await store.note(for: subject.doc)) ?? "x").isEmpty)
         }
 
         print("\nRECENTLY DELETED")
@@ -1969,6 +1969,36 @@ enum SelfTest {
         let entityPatterns = (try? db.map("SELECT match FROM entities ORDER BY id") { $0.string(0) }) ?? []
         Check.that("a correspondent's own words keep matching what they matched, and a phrase is left alone",
                    entityPatterns == ["stadtwerke*, swm*", "DE12 3456"], "\(entityPatterns)")
+    }
+
+    private static func noteMigration() {
+        print("\nNOTE MIGRATION")
+        let path = FileManager.default.temporaryDirectory
+            .appendingPathComponent("doctopus-notes-v23-\(UUID().uuidString).sqlite").path
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        guard let db = try? Database(path: path) else {
+            Check.that("a database in the old shape can be opened", false); return
+        }
+        // The `notes` table as version 23 left it: any number per document.
+        try? db.exec("""
+        CREATE TABLE documents (id INTEGER PRIMARY KEY);
+        INSERT INTO documents(id) VALUES (1), (2);
+        CREATE TABLE notes (
+            id INTEGER PRIMARY KEY, doc_id INTEGER NOT NULL REFERENCES documents(id), body TEXT NOT NULL,
+            created_at REAL NOT NULL, updated_at REAL
+        );
+        INSERT INTO notes(doc_id, body, created_at, updated_at)
+        VALUES (1, 'second', 20, NULL), (1, 'first', 10, 30), (2, 'only', 5, NULL);
+        PRAGMA user_version=23;
+        """)
+        try? Schema.migrate(db)
+        let notes = (try? db.map("SELECT doc_id, body, updated_at FROM notes ORDER BY doc_id") {
+            ($0.int(0), $0.string(1), $0.double(2))
+        }) ?? []
+        Check.that("a document's notes become one, oldest first, and keep when they were last touched",
+                   notes.count == 2
+                       && notes[0] == (1, "first\n\nsecond", 30) && notes[1] == (2, "only", 5),
+                   "\(notes)")
     }
 
     private static func conditionsAndActions(store: Store, root: URL, text: String,

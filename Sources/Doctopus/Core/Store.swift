@@ -364,8 +364,7 @@ actor Store {
                               JOIN tags t ON t.id = dt.tag_id WHERE dt.doc_id = d.id), ''),
                    COALESCE((SELECT group_concat(v.value, ' ') FROM field_values v
                               WHERE v.doc_id = d.id), ''),
-                   COALESCE((SELECT group_concat(n.body, ' ') FROM notes n
-                              WHERE n.doc_id = d.id), ''),
+                   COALESCE((SELECT n.body FROM notes n WHERE n.doc_id = d.id), ''),
                    d.filename,
                    ?
             FROM documents d
