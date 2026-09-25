@@ -18,20 +18,18 @@ concurrency:
 
 jobs:
   request:
-    # Only here, only for people with write access: the setup block is run as
-    # given. A description only counts on a branch of this repository, since a
-    # fork's pull_request token cannot comment.
+    # Only here. Who may ask is checked below, against their actual permission.
+    # A description only counts on a branch of this repository, since a fork's
+    # pull_request token cannot comment.
     if: >-
       github.repository == 'jansim/doctopus' && (
         (github.event_name == 'issue_comment'
           && github.event.issue.pull_request
-          && contains(github.event.comment.body, '/screenshot')
-          && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))
+          && contains(github.event.comment.body, '/screenshot'))
         || (github.event_name == 'pull_request'
           && github.event.pull_request.head.repo.full_name == github.repository
           && contains(github.event.pull_request.body, '/screenshot')
-          && (github.event.action == 'opened' || github.event.changes.body)
-          && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association)))
+          && (github.event.action == 'opened' || github.event.changes.body)))
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -43,13 +41,32 @@ jobs:
       count: ${{ steps.parse.outputs.count }}
       pr: ${{ github.event.issue.number || github.event.pull_request.number }}
     steps:
+      # The setup block is run as written, so only someone who could push that
+      # code anyway may ask. author_association is not enough: COLLABORATOR
+      # and MEMBER include read-only access. The sender is whoever wrote the
+      # comment or edited the description, not the PR's author.
+      - name: Check access
+        id: access
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SENDER: ${{ github.event.sender.login }}
+        run: |
+          permission=$(gh api "repos/$GITHUB_REPOSITORY/collaborators/$SENDER/permission" --jq .permission)
+          echo "$SENDER has $permission access"
+          case "$permission" in
+            admin|write) echo "allowed=true" >> "$GITHUB_OUTPUT" ;;
+            *) echo "::notice::Ignoring /screenshot from $SENDER, who cannot write to this repository" ;;
+          esac
+
       - uses: actions/checkout@v4
+        if: steps.access.outputs.allowed == 'true'
         with:
           sparse-checkout: .github/screenshot
           persist-credentials: false
 
       - name: Parse
         id: parse
+        if: steps.access.outputs.allowed == 'true'
         env:
           BODY: ${{ github.event.comment.body || github.event.pull_request.body }}
           PREVIOUS: ${{ github.event.changes.body.from }}
@@ -65,7 +82,7 @@ jobs:
           cat "$GITHUB_OUTPUT"
 
       - name: Acknowledge
-        if: github.event_name == 'issue_comment' && steps.parse.outputs.count != '0'
+        if: github.event_name == 'issue_comment' && fromJSON(steps.parse.outputs.count || '0') > 0
         env:
           GH_TOKEN: ${{ github.token }}
           COMMENT: ${{ github.event.comment.id }}
@@ -75,7 +92,7 @@ jobs:
 
   capture:
     needs: request
-    if: needs.request.outputs.count != '0'
+    if: fromJSON(needs.request.outputs.count || '0') > 0
     # Same toolchain as CI.
     runs-on: macos-26
     timeout-minutes: 45
@@ -132,7 +149,7 @@ jobs:
 
   post:
     needs: [request, capture]
-    if: always() && needs.request.result == 'success' && needs.request.outputs.count != '0'
+    if: always() && needs.request.result == 'success' && fromJSON(needs.request.outputs.count || '0') > 0
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -199,9 +216,17 @@ jobs:
             const run = `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`;
             const image = file => `${context.serverUrl}/${owner}/${repo}/blob/${process.env.PAGES_SHA}/${process.env.PAGES_DIR}/${file}?raw=true`;
             const plain = s => s.replace(/[`*_<>[\]]/g, c => '\\' + c);
-            const { errors } = JSON.parse(process.env.SPECS);
+            // results.json was written next to PR code, so it is only trusted
+            // for file names of a known shape; the setup shown comes from SPECS.
+            const { specs, errors } = JSON.parse(process.env.SPECS);
             let results = [];
             try { results = JSON.parse(fs.readFileSync('shots/results.json', 'utf8')); } catch {}
+            if (!Array.isArray(results)) results = [];
+            const png = f => typeof f === 'string' && /^(screenshot|screen)-\d+\.png$/.test(f) ? f : null;
+            const text = s => typeof s === 'string' ? s.slice(0, 2000) : '';
+            results = results.slice(0, specs.length).map((r, i) => ({
+              ...specs[i], title: text(r.title), error: text(r.error), file: png(r.file), screen: png(r.screen),
+            }));
 
             const head = process.env.HEAD ? ` of ${process.env.HEAD.slice(0, 7)}` : '';
             const lines = [`### 📸 Screenshots${head}`, ''];
@@ -214,9 +239,10 @@ jobs:
             }
             for (const r of results) {
               const name = plain(r.title || r.window || 'Doctopus');
-              if (r.error) {
-                lines.push(`**${name}** — ❌ ${plain(r.error.split('\n')[0])}`, '');
-                const detail = r.error.split('\n').slice(1).join('\n');
+              if (r.error || !r.file) {
+                const error = r.error || 'no image was produced';
+                lines.push(`**${name}** — ❌ ${plain(error.split('\n')[0])}`, '');
+                const detail = error.split('\n').slice(1).join('\n').replace(/`/g, "'");
                 if (detail) lines.push('```', detail, '```', '');
                 if (r.screen && process.env.PAGES_SHA) lines.push(`<details><summary>Screen at the time</summary>\n\n![screen](${image(r.screen)})\n</details>`, '');
               } else if (process.env.PAGES_SHA) {

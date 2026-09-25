@@ -107,8 +107,11 @@ wait_window Settings
   from a fresh launch with the preferences wiped and the demo library open.
 - The window's rectangle is captured, so a sheet or popover over it is included.
 
-Only comments by the owner and collaborators count, since the setup block is run
-as written, and a description only counts on a branch of this repository.
-Editing a description re-runs it only when its `/screenshot` requests changed.
+Only someone with write access to the repository can ask — whoever wrote the
+comment or edited the description, checked against their actual permission —
+since the setup block is run as written. A description only counts on a branch
+of this repository. The build and setup run in a job with a read-only token and
+no secrets; only the images leave it. Editing a description re-runs it only
+when its `/screenshot` requests changed.
 The images are committed to the orphan `screenshots` branch, which is what the
 comment links to.
