@@ -7,17 +7,23 @@ extension UITest {
         let before = model.selection, mode = model.viewMode
         defer { model.selection = before; model.viewMode = mode }
         model.viewMode = .list
+        guard let store = model.library?.store, let subject = model.documents.first else {
+            Check.that("a document to review", false)
+            return
+        }
+        // One document through both panes, so each has something to show.
+        try? await store.setDocumentApproved(subject.doc, false)
 
         var checkboxes: [String: Int] = [:]
         let panes: [(String, Selection)] = [("Needs Review", .needsReview), ("Recently Reviewed", .reviewed)]
         for (name, selection) in panes {
+            if selection == .reviewed { try? await store.setDocumentApproved(subject.doc, true) }
             model.selection = selection
+            model.refreshAll()
             // Until the list reloads it still shows the last pane's rows.
+            let approved = selection == .reviewed
             let listed = await settle({
-                let rows = model.documents
-                guard !rows.isEmpty, rows.allSatisfy({ $0.queue != nil }) else { return false }
-                return selection == .reviewed ? rows.allSatisfy { $0.queue?.approved == true }
-                                              : rows.contains { $0.queue?.approved == false }
+                model.documents.contains { $0.doc == subject.doc && $0.queue?.approved == approved }
             }, timeout: 10)
             guard listed else { continue }
             let (window, view) = host(DocumentListView().environment(model), size: NSSize(width: 900, height: 660))
@@ -26,12 +32,11 @@ extension UITest {
             checkboxes[name] = tables(in: view).reduce(0) { $0 + buttons(in: $1).count }
             window.orderOut(nil)
         }
+        try? await store.setDocumentApproved(subject.doc, subject.approved)
+        model.refreshAll()
         let said = checkboxes.map { "\($0.key): \($0.value)" }.sorted().joined(separator: ", ")
-        Check.that("Recently Reviewed lists its documents", checkboxes["Recently Reviewed"] != nil, said)
-        // Needs Review may have been worked through by now; when it has not, it shows what a checkbox is.
-        Check.that("its documents carry no review checkbox, as Needs Review's do",
-                   checkboxes["Recently Reviewed"] == 0 && (checkboxes["Needs Review"].map { $0 > 0 } ?? true),
-                   said)
+        Check.that("Needs Review's documents carry a review checkbox", (checkboxes["Needs Review"] ?? 0) > 0, said)
+        Check.that("Recently Reviewed's carry none", checkboxes["Recently Reviewed"] == 0, said)
     }
 
     private static func tables(in view: NSView) -> [NSTableView] {
