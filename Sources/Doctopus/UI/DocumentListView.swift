@@ -79,22 +79,21 @@ private struct QueueBar: View {
     @Environment(AppModel.self) private var model
 
     private var pending: Int { model.documents.filter { $0.queue?.approved == false }.count }
-    private var ruleMatched: Int {
-        model.documents.filter { !model.pendingRuleMatches(for: $0).isEmpty }.count
+    /// One count: waiting for approval, or (in Needs Review) something a rule would still change.
+    private var toReview: Int {
+        model.documents.filter { row in
+            row.queue?.approved == false
+                || (model.selection == .needsReview && !model.pendingRuleMatches(for: row).isEmpty)
+        }.count
     }
 
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 10) {
-                if pending > 0 {
-                    Label("\(pending) awaiting review", systemImage: "exclamationmark.triangle.fill")
+                if toReview > 0 {
+                    Label("\(toReview) to review", systemImage: "exclamationmark.triangle.fill")
                         .foregroundStyle(.orange)
-                }
-                if model.selection == .needsReview, ruleMatched > 0 {
-                    Label("\(ruleMatched) with new rule matches", systemImage: "line.3.horizontal.decrease.circle.fill")
-                        .foregroundStyle(.purple)
-                }
-                if pending == 0 && (model.selection != .needsReview || ruleMatched == 0) {
+                } else {
                     Label("All caught up", systemImage: "checkmark.circle.fill")
                         .foregroundStyle(.green)
                 }
@@ -173,7 +172,7 @@ private struct DocumentTableView: View {
                     let pending = model.pendingRuleMatches(for: row)
                     if !pending.isEmpty {
                         Spacer(minLength: 4)
-                        RuleMatchBadge(size: 16)
+                        RuleMatchBadge(size: 16, conflicting: !RuleMatch.conflicts(among: pending).isEmpty)
                             .help(RuleMatchBadge.help(pending))
                     }
                 }
@@ -439,7 +438,7 @@ private struct GalleryCell: View {
                 .overlay(alignment: .bottomTrailing) {
                     let pending = model.pendingRuleMatches(for: row)
                     if !pending.isEmpty {
-                        RuleMatchBadge(size: 20)
+                        RuleMatchBadge(size: 20, conflicting: !RuleMatch.conflicts(among: pending).isEmpty)
                             .help(RuleMatchBadge.help(pending))
                             .padding(9)
                     }
