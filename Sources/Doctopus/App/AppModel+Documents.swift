@@ -156,6 +156,15 @@ extension AppModel {
         }
     }
 
+    func setTagIcon(_ tag: Tag, _ icon: String?) {
+        guard let lib = library else { return }
+        Task {
+            do { try await lib.store.setTagIcon(tag.tagID, icon) }
+            catch { report(error, "set the icon for “\(tag.name)”") }
+            refreshAll()
+        }
+    }
+
     func deleteTag(_ tag: Tag) {
         guard let lib = library else { return }
         Task {

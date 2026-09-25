@@ -37,6 +37,15 @@ enum Schema {
         try db.exec("ALTER TABLE \(table) ADD COLUMN \(column) \(declaration)")
     }
 
+    /// A tag's own icon, on its row like a correspondent's, so a rename, a
+    /// merge or a move to another parent cannot orphan it.
+    private static func v27(_ db: Database) throws {
+        let present = try db.first(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='tags'") { $0.int(0) } ?? 0
+        guard present > 0 else { return }
+        try addColumn(db, table: "tags", column: "icon", declaration: "TEXT")
+    }
+
     /// Which tags a document carries only because a tag below them is, so
     /// those can go again with it. They were marked automatic, like a tag a
     /// rule added, which could not tell the two apart; an automatic tag that

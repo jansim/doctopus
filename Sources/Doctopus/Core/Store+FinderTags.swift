@@ -42,13 +42,13 @@ extension Store {
 
         var own: [Int64: [Tag]] = [:]
         try db.query("""
-            SELECT dt.doc_id, t.id, t.name, t.color, t.parent_id, dt.implied FROM document_tags dt
+            SELECT dt.doc_id, t.id, t.name, t.color, t.parent_id, dt.implied, t.icon FROM document_tags dt
             JOIN tags t ON t.id = dt.tag_id
             WHERE dt.doc_id IN (\(placeholders))
             ORDER BY t.name COLLATE NOCASE
             """, args) { row in
             own[row.int(0), default: []].append(
-                Tag(tagID: row.int(1), name: row.string(2), color: row.int(3),
+                Tag(tagID: row.int(1), name: row.string(2), color: row.int(3), icon: row.stringOrNil(6),
                     parentID: row.intOrNil(4), implied: row.bool(5)))
         }
 

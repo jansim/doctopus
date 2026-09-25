@@ -196,6 +196,8 @@ struct Tag: Identifiable, Hashable, Sendable {
     var tagID: Int64
     var name: String
     var color: Int64
+    /// An SF Symbol; nil draws `Tag.defaultIcon`.
+    var icon: String?
     var count: Int = 0
     var parentID: Int64?
     var depth: Int = 0
@@ -204,6 +206,7 @@ struct Tag: Identifiable, Hashable, Sendable {
     var id: Int64 { tagID }
 
     static let maxDepth = 5
+    static let defaultIcon = "tag"
 
     func path(in siblings: [Tag]) -> String {
         var names = [name]
