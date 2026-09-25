@@ -86,6 +86,21 @@ extension AppModel {
         }
     }
 
+    /// Opens Needs Review on these documents. Any that are not waiting there
+    /// yet are marked as needing review first, so they have somewhere to be.
+    func review(_ rows: [DocumentRow]) {
+        guard let lib = library else { return }
+        Task {
+            for row in rows where row.approved && !lib.ruleMatchedDocs.contains(row.doc) {
+                do { try await lib.store.setDocumentApproved(row.doc, false) }
+                catch { report(error, "mark “\(row.displayTitle)” as needing review") }
+            }
+            selection = .needsReview
+            selectedIDs = Set(rows.map(\.doc))
+            refreshAll()
+        }
+    }
+
     func discardGeneratedInfo(_ rows: [DocumentRow]) {
         guard let lib = library else { return }
         Task {

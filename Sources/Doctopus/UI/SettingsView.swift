@@ -255,9 +255,7 @@ private struct TagSettings: View {
                 ForEach(tags) { tag in
                     HStack(spacing: 10) {
                         Menu {
-                            ForEach(Array(TagColor.names.enumerated()), id: \.offset) { index, name in
-                                Button(name) { model.setTagColor(tag, Int64(index)) }
-                            }
+                            TagColorItems(tag: tag)
                         } label: {
                             Circle()
                                 .fill(TagColor.color(tag.color))
