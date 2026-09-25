@@ -8,11 +8,7 @@ struct RuleMatchBadge: View {
     var conflicting = false
 
     var body: some View {
-        Image(systemName: conflicting ? "xmark" : "line.3.horizontal.decrease")
-            .font(.system(size: size * 0.52, weight: .bold))
-            .foregroundStyle(.white)
-            .frame(width: size, height: size)
-            .background(Circle().fill(muted ? Color.secondary.opacity(0.55) : Color.purple))
+        MismatchBadge(kind: .rule, size: size, muted: muted, symbol: conflicting ? "xmark" : nil)
     }
 
     static func help(_ matches: [RuleMatch]) -> String {
@@ -218,14 +214,7 @@ private struct RuleMatchCard: View {
         let partial = accepted != match.wants
         VStack(alignment: .leading, spacing: 7) {
             VStack(alignment: .leading, spacing: 5) {
-                HStack(spacing: 6) {
-                    RuleMatchBadge(size: 16, muted: match.suppressed)
-                    Text(match.ruleName)
-                        .font(.callout.weight(.semibold))
-                        .lineLimit(1)
-                    Spacer(minLength: 0)
-                    if match.suppressed { Badge("Suppressed") }
-                }
+                MismatchCardHeader(kind: .rule, title: match.ruleName, suppressed: match.suppressed)
                 if match.changes.isEmpty && match.inEffect.isEmpty {
                     Text("Nothing left for this rule to change.")
                         .font(.caption).foregroundStyle(.secondary)
@@ -269,11 +258,6 @@ private struct RuleMatchCard: View {
             }
             .controlSize(.small)
         }
-        .padding(9)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 7)
-            .fill(Color.purple.opacity(match.suppressed ? 0.03 : 0.08)))
-        .overlay(RoundedRectangle(cornerRadius: 7)
-            .strokeBorder(match.suppressed ? Color.secondary.opacity(0.2) : Color.purple.opacity(0.3)))
+        .mismatchCard(.rule, suppressed: match.suppressed)
     }
 }

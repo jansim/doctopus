@@ -1607,6 +1607,7 @@ enum SelfTest {
         if let scanned = rows.first(where: { $0.filename == "scan 003.pdf" && FileManager.default.fileExists(atPath: $0.path) }) {
             await passwordProtectedPDFs(store: store, scanned: scanned.url)
         }
+        await filenameEnforcement(store: store)
 
         Check.finish("pipeline self-test")
     }

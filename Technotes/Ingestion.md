@@ -216,3 +216,36 @@ Flexible string interpolation templates — `{date}_{correspondent}_{title}.{ext
 — with fallback chains that resolve missing attributes deterministically. Dates,
 for instance: OCR text date, then embedded PDF metadata, then EXIF for images,
 then the file creation date.
+
+### Holding names to the template
+
+The library's template is the default for Rename…, and Settings › General says
+how far the library holds its filenames to it:
+
+| Setting | Pointed out | Renamed on its own |
+| --- | --- | --- |
+| Only when asked (the default) | No | Never |
+| Point out names that don't match | Yes | Never |
+| Point out, and keep names it gave up to date | Yes | A file the template named, when its fields change |
+| Rename automatically | Yes | Any file, when its fields change; a new arrival Doctopus files itself, on the way in |
+
+A name the template would not give gets an orange badge in the list and a card
+in the inspector with Rename and Suppress — the same presentation as a rule
+match, in orange where rules are purple. Suppressing keeps the file's name for
+good: it is no longer pointed out and never renamed on its own, until Stop
+Suppressing. A number the file had to take because its name was taken
+(`name 2.pdf`) still counts as the template's name.
+
+Which files the template named is recorded in `documents.auto_name` whenever a
+rename comes from the library's own template — Rename… with it, the card's
+Rename, or a rename that followed an edit. A file whose name no longer matches
+that record was named by somebody, in Doctopus or in Finder, and is left
+alone; so is one taken back with Undo. A document a matching rule renames is
+the rule's to name and is neither pointed out nor renamed by the template.
+
+"When its fields change" means an edit made by hand — title, date,
+correspondent, type or any other field, in the inspector or the review — or a
+rule applied from the inspector or the review. Each such rename is logged and
+taken back by Undo like any other. Changing the setting, the template or a
+value across the library (renaming a correspondent in the sidebar) renames
+nothing by itself; neither does Analyze.

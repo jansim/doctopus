@@ -61,6 +61,7 @@ enum UITest {
             await droppingAFolderImportsIt(model)
             await draggingOntoAFolderFilesOrMoves(model)
             await undoTakesBackAMove(model)
+            await namingMismatchDraws(model, snapshots: snapshots)
             await libraryFollowsItsFolder(model, fixture: library)
             Check.finish("ui checks")
         }
@@ -1048,7 +1049,7 @@ enum UITest {
             + view.subviews.flatMap { dropTargets(in: $0) }
     }
 
-    private static func host<V: View>(_ view: V, size: NSSize) -> (NSWindow, NSView) {
+    static func host<V: View>(_ view: V, size: NSSize) -> (NSWindow, NSView) {
         let host = NSHostingView(rootView: view)
         host.frame = NSRect(origin: .zero, size: size)
         let window = NSWindow(contentRect: NSRect(x: -5000, y: -5000, width: size.width, height: size.height),
@@ -1103,8 +1104,8 @@ enum UITest {
         return value
     }
 
-    private static func settle(_ condition: () -> Bool, timeout: TimeInterval = 30,
-                               every interval: Duration = .milliseconds(200)) async -> Bool {
+    static func settle(_ condition: () -> Bool, timeout: TimeInterval = 30,
+                       every interval: Duration = .milliseconds(200)) async -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
             if condition() { return true }
@@ -1113,7 +1114,7 @@ enum UITest {
         return condition()
     }
 
-    private static func bitmap(_ view: NSView) -> NSBitmapImageRep? {
+    static func bitmap(_ view: NSView) -> NSBitmapImageRep? {
         view.layoutSubtreeIfNeeded()
         view.displayIfNeeded()
         guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return nil }
@@ -1121,7 +1122,7 @@ enum UITest {
         return rep
     }
 
-    private static func inkedRows(_ view: NSView) -> Int {
+    static func inkedRows(_ view: NSView) -> Int {
         guard let rep = bitmap(view) else { return 0 }
         let background = rep.colorAt(x: rep.pixelsWide - 2, y: rep.pixelsHigh - 2)
         var rows = 0
@@ -1133,7 +1134,7 @@ enum UITest {
         return rows
     }
 
-    private static func snapshot(_ view: NSView, to path: String) {
+    static func snapshot(_ view: NSView, to path: String) {
         guard let png = bitmap(view)?.representation(using: .png, properties: [:]) else { return }
         try? FileManager.default.createDirectory(
             at: URL(fileURLWithPath: path).deletingLastPathComponent(),

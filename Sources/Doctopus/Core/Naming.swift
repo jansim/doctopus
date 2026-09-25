@@ -21,6 +21,63 @@ enum Naming {
         var options = Options()
     }
 
+    /// How far the library holds its filenames to its naming template.
+    enum Enforcement: String, Codable, CaseIterable, Sendable, Identifiable {
+        /// Names change only when someone renames a file.
+        case manual
+        /// A name the template would not give is pointed out.
+        case highlight
+        /// Pointed out, and a name the template gave follows the document's
+        /// fields when they change. A name someone chose is never touched.
+        case followTemplateNames
+        /// Every name follows the document's fields, and new arrivals Doctopus
+        /// files itself are named by the template.
+        case automatic
+
+        var id: String { rawValue }
+
+        var label: String {
+            switch self {
+            case .manual: return "Only when asked"
+            case .highlight: return "Point out names that don’t match"
+            case .followTemplateNames: return "Point out, and keep names it gave up to date"
+            case .automatic: return "Rename automatically"
+            }
+        }
+
+        var explanation: String {
+            switch self {
+            case .manual:
+                return "Files are renamed only from Rename… in the context menu."
+            case .highlight:
+                return "A document whose filename differs from what the template gives it is marked in orange, with Rename and Suppress."
+            case .followTemplateNames:
+                return "As above, and a file named by the template is renamed again when its title, date or other fields change. A name you gave a file yourself is never changed."
+            case .automatic:
+                return "Every file is renamed when its fields change, and new arrivals Doctopus files itself are named by the template. Suppress keeps a name for good."
+            }
+        }
+
+        var highlights: Bool { self != .manual }
+        var followsEdits: Bool { self == .followTemplateNames || self == .automatic }
+    }
+
+    /// Whether `filename` is `rendered`, or what `uniqueURL` made of it because
+    /// that name was taken — which is still the template's name for it, and
+    /// must not be renamed again on every look.
+    static func isRendering(_ filename: String, of rendered: String) -> Bool {
+        if filename == rendered { return true }
+        let have = filename as NSString, want = rendered as NSString
+        guard have.pathExtension == want.pathExtension else { return false }
+        let stem = want.deletingPathExtension, haveStem = have.deletingPathExtension
+        for separator in [" ", "_"] where haveStem.hasPrefix(stem + separator) {
+            let suffix = haveStem.dropFirst(stem.count + separator.count)
+            if !suffix.isEmpty, suffix.allSatisfy(\.isNumber) { return true }
+            if suffix.count == 8, suffix.allSatisfy(\.isHexDigit) { return true }
+        }
+        return false
+    }
+
     /// A document date is a day, stored as the UTC start of it, so every token
     /// that renders one reads it back in UTC. Rendering in the local timezone
     /// is how `{year}` ends up filing a document issued on 1 January into the
@@ -195,5 +252,17 @@ enum Naming {
             candidate = directory.appendingPathComponent(name)
         }
         return candidate
+    }
+}
+
+extension Naming.Context {
+    /// A document as the index has it, for the one name the template gives it.
+    /// Undated documents go by when they were added, as Rename… does.
+    init(_ row: DocumentRow, options: Naming.Options) {
+        let url = row.url
+        self.init(date: row.docDate ?? row.createdAt, correspondent: row.correspondent,
+                  title: row.title, docType: row.docType, language: row.language, counter: nil,
+                  originalStem: url.deletingPathExtension().lastPathComponent,
+                  ext: url.pathExtension, options: options)
     }
 }

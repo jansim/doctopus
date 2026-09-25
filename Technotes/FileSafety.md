@@ -27,6 +27,12 @@ out what each gets. Concretely:
   onto a folder (a drag with ⌘ held moves the master rather than making one)
   goes when you delete it, or when it is the placement the document itself
   moves into.
+- The naming setting is the one standing request to rename. At its two
+  highest levels an edit to a document's fields renames its file to what the
+  library's template now gives — only a file the template itself named, unless
+  it is set to rename automatically — and never one whose name was suppressed.
+  Choosing the setting renames nothing; see
+  [Holding names to the template](Ingestion.md#holding-names-to-the-template).
 - Move to Trash uses the Trash, never a hard delete, and keeps the index entry
   if trashing fails.
 - Every file change made from the window — a move, a rename, filing, an alias,
