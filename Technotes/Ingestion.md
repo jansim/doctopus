@@ -60,6 +60,13 @@ device left the room — and keeps its count and its destination, so Resume
 (⌥⌘S) picks it up exactly where it was. A capture already in flight when the
 run stops is still filed.
 
+A cancel is different: a capture called off on the device, or in the system's
+own panel, comes back as a reply with nothing in it, and that ends the run the
+way the toolbar's stop button does — nothing re-arms, the toolbar clears, and
+the next run starts from nothing. A reply offering only what cannot be read is
+a failure instead, and pauses. A cancel the device never reports back looks
+like any other silence, and pauses once the round times out.
+
 **What a capture is taken as.** A device offers the same capture in several
 forms and lists them in its own order, so the form is chosen by this app's
 preference — PDF first — rather than by whichever the device happened to name
@@ -216,3 +223,36 @@ Flexible string interpolation templates — `{date}_{correspondent}_{title}.{ext
 — with fallback chains that resolve missing attributes deterministically. Dates,
 for instance: OCR text date, then embedded PDF metadata, then EXIF for images,
 then the file creation date.
+
+### Holding names to the template
+
+The library's template is the default for Rename…, and Settings › General says
+how far the library holds its filenames to it:
+
+| Setting | Pointed out | Renamed on its own |
+| --- | --- | --- |
+| Only when asked (the default) | No | Never |
+| Point out names that don't match | Yes | Never |
+| Point out, and keep names it gave up to date | Yes | A file the template named, when its fields change |
+| Rename automatically | Yes | Any file, when its fields change; a new arrival Doctopus files itself, on the way in |
+
+A name the template would not give gets an orange badge in the list and a card
+in the inspector with Rename and Suppress — the same presentation as a rule
+match, in orange where rules are purple. Suppressing keeps the file's name for
+good: it is no longer pointed out and never renamed on its own, until Stop
+Suppressing. A number the file had to take because its name was taken
+(`name 2.pdf`) still counts as the template's name.
+
+Which files the template named is recorded in `documents.auto_name` whenever a
+rename comes from the library's own template — Rename… with it, the card's
+Rename, or a rename that followed an edit. A file whose name no longer matches
+that record was named by somebody, in Doctopus or in Finder, and is left
+alone; so is one taken back with Undo. A document a matching rule renames is
+the rule's to name and is neither pointed out nor renamed by the template.
+
+"When its fields change" means an edit made by hand — title, date,
+correspondent, type or any other field, in the inspector or the review — or a
+rule applied from the inspector or the review. Each such rename is logged and
+taken back by Undo like any other. Changing the setting, the template or a
+value across the library (renaming a correspondent in the sidebar) renames
+nothing by itself; neither does Analyze.

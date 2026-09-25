@@ -81,7 +81,8 @@ extension Store {
         switch selection {
         case .all, .deleted, .savedView: break
         case .reviewed:
-            wheres.append("d.reviewed_at IS NOT NULL")
+            wheres.append("d.reviewed_at >= ?")
+            args.append(.double(ReviewedPeriod.cutoff(before: .now).timeIntervalSince1970))
         case .folder(let path):
             let rel = relPath(path)
             if !rel.isEmpty {
@@ -200,9 +201,13 @@ extension Store {
                 ON p.id = (SELECT id FROM processing WHERE doc_id = d.id ORDER BY id DESC LIMIT 1)
             LEFT JOIN events pe ON pe.id = p.event_id
             """
-            // Recently Reviewed dates each row by its approval, not by what the pipeline last did.
-            let at = selection == .reviewed ? "d.reviewed_at" : "pe.at"
-            queueColumns = "p.id, \(at), pe.action, pe.detail, pe.rule, p.status"
+            // Recently Reviewed dates each row by its approval, not by what the pipeline last did,
+            // and still has that date once the bounded queue has dropped the document's entry.
+            if selection == .reviewed {
+                queueColumns = "COALESCE(p.id, 0), d.reviewed_at, pe.action, pe.detail, pe.rule, COALESCE(p.status, 1)"
+            } else {
+                queueColumns = "p.id, pe.at, pe.action, pe.detail, pe.rule, p.status"
+            }
         }
 
         let order: String

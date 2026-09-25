@@ -88,11 +88,11 @@ extension SelfTest {
         await agree("at the end")
     }
 
-    /// Before v26 an ancestor attached by its child was only marked automatic,
+    /// Before v27 an ancestor attached by its child was only marked automatic,
     /// the same as a tag a rule or the model added.
     private static func impliedTagMigration() {
         let path = FileManager.default.temporaryDirectory
-            .appendingPathComponent("doctopus-tags-v25-\(UUID().uuidString).sqlite").path
+            .appendingPathComponent("doctopus-tags-v26-\(UUID().uuidString).sqlite").path
         defer { try? FileManager.default.removeItem(atPath: path) }
         guard let db = try? Database(path: path) else {
             Check.that("a database in the old shape can be opened", false); return
@@ -110,7 +110,7 @@ extension SelfTest {
         );
         INSERT INTO document_tags(doc_id, tag_id, auto)
         VALUES (1, 3, 0), (1, 2, 1), (1, 1, 1), (1, 4, 1), (2, 1, 1);
-        PRAGMA user_version=25;
+        PRAGMA user_version=26;
         """)
         do { try Schema.migrate(db) } catch {
             Check.that("an index from before implied tags migrates", false, "\(error)"); return

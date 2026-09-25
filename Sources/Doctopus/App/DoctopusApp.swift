@@ -142,6 +142,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 model.scanDelivered(delivery)
             }
             ScanCoordinator.shared.onScanFailed = { workspace.scanTarget(for: nil)?.scanFailed($0) }
+            ScanCoordinator.shared.onScanCancelled = { workspace.scanTarget(for: $0)?.scanCancelled() }
             SpacePreview.install { workspace.current?.quickLook() }
             OptionReveal.install { held in workspace.current?.revealingFolders = held }
             // Only in a library's own window: Settings and sheets keep their ⌘A.

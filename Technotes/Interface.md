@@ -5,9 +5,11 @@ A native AppKit/SwiftUI three-pane layout.
 ## Sidebar
 
 The physical directory tree, Needs Review, Recently Reviewed — the documents
-most recently approved, newest approval first, each with the rules or models
-that were applied and an Approved / Needs Review toggle — and Paperless-ngx-style smart views: Tags,
-Correspondents, Languages, Document Types.
+approved in the last 30 days, newest approval first and grouped into the last 7
+days and the last 30, each with the rules or models that were applied — and
+Paperless-ngx-style smart views: Tags, Correspondents, Languages, Document
+Types. Only Needs Review has a checkbox on each document; one already reviewed
+goes back for review from its context menu.
 
 ## Windows
 
@@ -69,6 +71,10 @@ with Apply and Suppress. When several match, a purple box above them says so
 and, where they conflict, asks for one of them per disagreement; Apply stays
 disabled on the rules involved until it has an answer, and Apply All settles
 every match at once.
+
+A filename the library's naming template would not give is pointed out the
+same way, in orange, once Settings › General asks for it: a badge in the list
+and a card in the inspector, review included, with Rename and Suppress.
 
 Wherever a conflict is shown, in review or in the inspector, an Edit Rule menu
 beside it lists the rules involved. Picking one opens Settings on the Rules

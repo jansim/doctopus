@@ -87,7 +87,7 @@ statements. FTS5 with `unicode61 remove_diacritics 2`.
 
 | Table | What it holds |
 | --- | --- |
-| `documents` | File path, the file system's `file_id` for it (so a move is followed even when the bytes changed), file hash and the pre-optimization `original_hash` (so a re-import of the original still matches), primary directory, size, compression stats, approval status, and `deleted_at` for a document in the Trash that can still be put back |
+| `documents` | File path, the file system's `file_id` for it (so a move is followed even when the bytes changed), file hash and the pre-optimization `original_hash` (so a re-import of the original still matches), primary directory, size, compression stats, approval status, `deleted_at` for a document in the Trash that can still be put back, `auto_name` for the name the naming template last gave the file, and `name_suppressed` for a name the template is to leave alone |
 | `doc_fts` | FTS5 search table keyed by `rowid = documents.id`, one column per searchable surface — title, correspondent, type, tags, field values, notes, filename, body — with `bm25()` weights so a title hit outranks a body hit. Reading one document's text is a single indexed lookup |
 | `metadata` | Document dates (as days, at the UTC start of them), language, amount, the one-sentence summary, and the entity ids for correspondent and type |
 | `entities` | One row per correspondent or document type, with its icon, colour and an optional identifying pattern. Renaming is one `UPDATE`; renaming onto an existing name is a merge |

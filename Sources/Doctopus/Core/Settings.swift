@@ -55,6 +55,8 @@ struct AppWideSettings: StoredSettings, Sendable, Equatable {
 
 struct LibrarySettings: StoredSettings, Sendable, Equatable {
     var namingTemplate: String = Naming.defaultTemplate
+    /// Manual by default, which is how every library behaved before there was a choice.
+    var namingEnforcement: Naming.Enforcement = .manual
     var filenameUnderscoresForSpaces = false
     var filenameASCIIOnly = false
     var derivedTemplate: String = "{correspondent}/{year}"

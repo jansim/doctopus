@@ -228,6 +228,7 @@ extension AppModel {
     func setFieldValue(_ rows: [DocumentRow], field: Field, value: String?) {
         guard let lib = library else { return }
         Task {
+            let mark = await eventMark()
             for row in rows {
                 do { try await lib.store.setFieldValue(docID: row.doc, field: field, value: value) }
                 catch { report(error, "set \(field.name) on “\(row.displayTitle)”"); continue }
@@ -235,6 +236,7 @@ extension AppModel {
                                              detail: Self.editDetail(field.name, value))
             }
             await lib.indexer.reroute(rows.map(\.doc), applyingActions: false)
+            await followNaming(rows.map(\.doc), since: mark, in: lib)
             reloadDetail()
             refreshAll()
         }
@@ -243,10 +245,12 @@ extension AppModel {
     func setFieldValue(_ doc: Int64, field: Field, value: String?) {
         guard let lib = library else { return }
         Task {
+            let mark = await eventMark()
             do {
                 try await lib.store.setFieldValue(docID: doc, field: field, value: value)
                 try? await lib.store.logEdit(docID: doc, detail: Self.editDetail(field.name, value))
                 await lib.indexer.reroute([doc], applyingActions: false)
+                await followNaming([doc], since: mark, in: lib)
             } catch { report(error, "set \(field.name)") }
             reloadDetail()
             refreshAll()
@@ -328,11 +332,13 @@ extension AppModel {
         guard let lib = library else { return }
         let label = columnLabel(column)
         Task {
+            let mark = await eventMark()
             do {
                 try await lib.store.overwriteMetadataField(doc, column: column, value: value?.nilIfBlank)
                 try? await lib.store.logEdit(docID: doc,
                                              detail: Self.editDetail(label, value))
                 await lib.indexer.reroute([doc], applyingActions: false)
+                await followNaming([doc], since: mark, in: lib)
             } catch { report(error, "set \(label)") }
             reloadDetail()
             reloadDocuments()
@@ -348,12 +354,14 @@ extension AppModel {
     func setDocumentDate(_ doc: Int64, _ date: Date?) {
         guard let lib = library else { return }
         Task {
+            let mark = await eventMark()
             do {
                 try await lib.store.setDocumentDate(doc, date)
                 try? await lib.store.logEdit(
                     docID: doc,
                     detail: Self.editDetail("Date", date.map(DayDate.display)))
                 await lib.indexer.reroute([doc], applyingActions: false)
+                await followNaming([doc], since: mark, in: lib)
             } catch { report(error, "set the date") }
             reloadDetail()
             reloadDocuments()

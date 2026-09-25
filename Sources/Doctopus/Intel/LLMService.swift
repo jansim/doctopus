@@ -54,11 +54,14 @@ actor LLMService {
     var isAvailable: Bool { probe().isReady }
 
     func enrich(text: String, filename: String, question: LLMPrompt.Question = .init(),
-                limit: Int, candidateTags: [String] = []) async -> DocumentInsight? {
+                limit: Int, candidateTags: [String] = [],
+                examples: [FilingExample] = []) async -> DocumentInsight? {
         guard probe().isReady else { return nil }
         #if canImport(FoundationModels)
         if #available(macOS 26.0, *) {
-            let prompt = LLMPrompt.user(text: text, filename: filename, limit: limit, candidateTags: candidateTags)
+            let prompt = LLMPrompt.user(text: text, filename: filename, limit: limit,
+                                        candidateTags: candidateTags,
+                                        examples: examples, fields: question.fields)
             do {
                 let session = currentSession(instructions: question.instructions())
                 let response = try await session.respond(to: prompt, schema: try Self.schema(question.fields))

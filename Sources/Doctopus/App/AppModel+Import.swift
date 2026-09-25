@@ -107,6 +107,7 @@ extension AppModel {
     private var canReceiveScans: Bool { NSApp?.isActive ?? true }
 
     func startContinuousScan(device: String, action: String, into destination: URL?) {
+        endScanRun()
         scanSession = ScanSession(device: device, action: action, destination: destination)
         fireNextScan()
     }
@@ -118,23 +119,16 @@ extension AppModel {
     }
 
     func stopContinuousScan() {
-        scanRound?.cancel()
-        scanRound = nil
-        scanFocusCheck?.cancel()
-        scanFocusCheck = nil
-        let finished = scanSession
-        scanSession = nil
-        guard let finished, finished.count > 0 else { return }
-        notify(finished.count == 1 ? "Scanned 1 document." : "Scanned \(finished.count) documents.")
+        guard let summary = endScanRun()?.summary(cancelled: false) else { return }
+        notify(summary)
     }
 
     func scanDelivered(_ delivery: ScanDelivery) {
-        guard scanSession != nil else { return }
-        scanRound?.cancel()
-        scanRound = nil
-        scanSession?.received(delivery.items.count, pages: delivery.pages)
-        guard scanSession?.isRunning == true else { return }
-        fireNextScan(after: Self.scanRearm)
+        follow(.delivered(documents: delivery.items.count, pages: delivery.pages))
+    }
+
+    func scanCancelled() {
+        follow(.cancelled)
     }
 
     func scanFailed(_ message: String) {
@@ -167,11 +161,39 @@ extension AppModel {
     }
 
     private func suspendScan(_ reason: ScanSession.Pause) {
+        follow(.interrupted(reason))
+    }
+
+    private func follow(_ event: ScanSession.Event) {
+        guard var session = scanSession else { return }
+        scanRound?.cancel()
+        scanRound = nil
+        switch session.record(event) {
+        case .scanAgain:
+            scanSession = session
+            fireNextScan(after: Self.scanRearm)
+        case .wait:
+            scanFocusCheck?.cancel()
+            scanFocusCheck = nil
+            scanSession = session
+        case .end:
+            endScanRun()
+            if let summary = session.summary(cancelled: event == .cancelled) {
+                notify(summary, .info)
+            }
+        }
+    }
+
+    /// Everything a run leaves running goes with it, so the toolbar is cleared
+    /// and a run started next does not inherit a timer from this one.
+    @discardableResult
+    private func endScanRun() -> ScanSession? {
         scanRound?.cancel()
         scanRound = nil
         scanFocusCheck?.cancel()
         scanFocusCheck = nil
-        scanSession?.suspend(reason)
+        defer { scanSession = nil }
+        return scanSession
     }
 
     private func fireNextScan(after delay: Duration = .zero) {

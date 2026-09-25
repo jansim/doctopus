@@ -56,6 +56,14 @@ private struct GeneralSettings: View {
                     TemplateField(title: "Default rename template",
                                   template: $model.settings.namingTemplate, kind: .filename,
                                   naming: model.settings.namingOptions)
+                    Picker("Keep filenames to the template", selection: $model.settings.namingEnforcement) {
+                        ForEach(Naming.Enforcement.allCases) { level in
+                            Text(level.label).tag(level)
+                        }
+                    }
+                    Text(model.settings.namingEnforcement.explanation)
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                     Toggle("Replace spaces with underscores in filenames",
                            isOn: $model.settings.filenameUnderscoresForSpaces)
                     Toggle("Replace special characters with ASCII in filenames",

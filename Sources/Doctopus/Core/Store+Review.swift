@@ -6,7 +6,7 @@ extension Store {
     /// settles every entry it has — otherwise an older "imported" entry left
     /// undecided keeps it in Needs Review after the newest one is ticked. Sending
     /// it back for review reopens only the newest, which is the one on show.
-    func setDocumentApproved(_ docID: Int64, _ approved: Bool) throws {
+    func setDocumentApproved(_ docID: Int64, _ approved: Bool, at when: Date = .now) throws {
         try db.transaction {
             if approved {
                 try db.run("UPDATE processing SET status=1 WHERE doc_id=?", [.int(docID)])
@@ -17,7 +17,7 @@ extension Store {
                     """, [.int(docID)])
             }
             try db.run("UPDATE documents SET approved=?, reviewed_at=? WHERE id=?",
-                       [.bool(approved), approved ? .double(Date().timeIntervalSince1970) : .null, .int(docID)])
+                       [.bool(approved), approved ? .double(when.timeIntervalSince1970) : .null, .int(docID)])
         }
     }
 

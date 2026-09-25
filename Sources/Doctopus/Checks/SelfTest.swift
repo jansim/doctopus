@@ -104,6 +104,7 @@ enum SelfTest {
         await promotedAlias(store: store, indexer: indexer, rows: rows)
         await undoneAlias(store: store, indexer: indexer, rows: rows)
         await recentlyReviewed(store: store)
+        await recentlyReviewedPeriods(store: store)
         await queue(store: store)
         await importAFile(store: store, indexer: indexer, settings: settings, root: root, rows: rows)
         await importAFolder(store: store, indexer: indexer, root: root, rows: rows)
@@ -112,6 +113,7 @@ enum SelfTest {
         metadataSource()
         scanCaptures()
         continuousScanning()
+        continuousScanEnds()
         folderDrops()
         endpoints()
         await replies(indexer: indexer, settings: settings, rows: rows)
@@ -137,6 +139,7 @@ enum SelfTest {
         await contentHashes(store: store, rows: rows)
         await fileIDs(store: store, indexer: indexer)
 
+        await filingExamples(store: store, rows: rows)
         await failuresAreSaid(store: store, indexer: indexer)
         await unreadableFolders(store: store)
         await droppedEvents(store: store)
@@ -147,6 +150,7 @@ enum SelfTest {
         if let scanned = rows.first(where: { $0.filename == "scan 003.pdf" && FileManager.default.fileExists(atPath: $0.path) }) {
             await passwordProtectedPDFs(store: store, scanned: scanned.url)
         }
+        await filenameEnforcement(store: store)
 
         Check.finish("pipeline self-test")
     }
