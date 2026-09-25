@@ -53,7 +53,7 @@ statements. FTS5 with `unicode61 remove_diacritics 2`.
 | `metadata` | Document dates (as days, at the UTC start of them), language, amount, the one-sentence summary, and the entity ids for correspondent and type |
 | `entities` | One row per correspondent or document type, with its icon, colour and an optional identifying pattern. Renaming is one `UPDATE`; renaming onto an existing name is a merge |
 | `date_candidates` | Every date found in a document, not just the one that won, so the review can offer the runner-up as a chip |
-| `notes` | What no field models — "cancelled by phone on the 4th" — indexed with the document's own text |
+| `notes` | One free-text note per document for what no field models — "cancelled by phone on the 4th" — indexed with the document's own text |
 | `tags`, `document_tags` | Relational junction for multi-tag assignment. Tags nest up to five deep, and assigning a child attaches every ancestor |
 | `tag_suggestions` | Model-proposed tags awaiting acceptance or dismissal, kept apart from `document_tags` so they never count toward a tag's sidebar total |
 | `path_suggestions` | Every folder the router considered for a new document, best first — what the review offers, and all there is to go on when it moved nothing |

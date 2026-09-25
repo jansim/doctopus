@@ -25,7 +25,6 @@ private struct DetailInspector: View {
     let detail: DocumentDetail
     @State private var showRawText = false
     @State private var showAllHistory = false
-    @State private var noteDraft = ""
     @State private var tagInput = ""
     @State private var finderTagInput = ""
     @State private var confirmingDeleteOriginal = false
@@ -365,29 +364,8 @@ private struct DetailInspector: View {
 
     private var notesSection: some View {
         Section2("Notes") {
-            ForEach(detail.notes) { note in
-                NoteRow(note: note, document: row.id)
-            }
-            HStack(alignment: .top, spacing: 6) {
-                TextField("Add a note…", text: $noteDraft, axis: .vertical)
-                    .textFieldStyle(.roundedBorder)
-                    .lineLimit(1...4)
-                    .font(.callout)
-                    .onSubmit(addNote)
-                if noteDraft.nilIfBlank != nil {
-                    Button("Add", action: addNote)
-                        .buttonStyle(.borderless)
-                        .font(.caption)
-                }
-            }
+            NoteEditor(saved: detail.note, document: row.id)
         }
-    }
-
-    private func addNote() {
-        let body = noteDraft
-        guard body.nilIfBlank != nil else { return }
-        noteDraft = ""
-        model.addNote(body, to: row.id)
     }
 
     private var historySection: some View {
@@ -449,59 +427,50 @@ private struct DetailInspector: View {
     }
 }
 
-private struct NoteRow: View {
+/// A text box for the document's one note, saved when it loses focus or the
+/// inspector moves on to another document.
+private struct NoteEditor: View {
     @Environment(AppModel.self) private var model
-    let note: Note
+    let saved: String
     let document: Int64
 
-    @State private var editing = false
     @State private var draft = ""
+    @FocusState private var focused: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            if editing {
-                TextField("Note", text: $draft, axis: .vertical)
-                    .textFieldStyle(.roundedBorder)
-                    .lineLimit(1...6)
-                    .font(.callout)
-                    .onSubmit(commit)
-                HStack(spacing: 8) {
-                    Button("Save", action: commit).font(.caption)
-                    Button("Cancel") { editing = false }.font(.caption)
-                    Spacer()
-                    Button("Delete", role: .destructive) {
-                        editing = false
-                        model.deleteNote(note.id, in: document)
-                    }
-                    .font(.caption)
+        TextEditor(text: $draft)
+            .font(.callout)
+            .scrollContentBackground(.hidden)
+            .focused($focused)
+            .padding(.horizontal, 3)
+            .padding(.vertical, 5)
+            .frame(minHeight: 80, maxHeight: 200)
+            .fixedSize(horizontal: false, vertical: true)
+            .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 6))
+            .overlay(alignment: .topLeading) {
+                if draft.isEmpty {
+                    Text("Anything worth remembering about this document…")
+                        .font(.callout)
+                        .foregroundStyle(.tertiary)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 5)
+                        .allowsHitTesting(false)
                 }
-                .buttonStyle(.borderless)
-            } else {
-                Text(note.body)
-                    .font(.callout)
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                Text(note.createdAt.formatted(date: .abbreviated, time: .shortened)
-                     + (note.edited ? " · edited" : ""))
-                    .font(.caption2).foregroundStyle(.tertiary)
             }
-        }
-        .padding(.vertical, 2)
-        .contentShape(Rectangle())
-        .onTapGesture {
-            guard !editing else { return }
-            draft = note.body
-            editing = true
-        }
-        .contextMenu {
-            Button("Edit") { draft = note.body; editing = true }
-            Button("Delete", role: .destructive) { model.deleteNote(note.id, in: document) }
-        }
+            .overlay {
+                RoundedRectangle(cornerRadius: 6)
+                    .strokeBorder(focused ? Color.accentColor.opacity(0.6) : Color(nsColor: .separatorColor),
+                                  lineWidth: focused ? 2 : 1)
+            }
+            .onAppear { draft = saved }
+            .onChange(of: saved) { _, new in if !focused { draft = new } }
+            .onChange(of: focused) { _, now in if !now { save() } }
+            .onDisappear(perform: save)
     }
 
-    private func commit() {
-        editing = false
-        model.updateNote(note.id, body: draft, in: document)
+    private func save() {
+        guard draft.trimmingCharacters(in: .whitespacesAndNewlines) != saved else { return }
+        model.setNote(draft, for: document)
     }
 }
 
