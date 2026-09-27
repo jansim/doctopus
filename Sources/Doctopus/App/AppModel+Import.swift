@@ -112,14 +112,8 @@ extension AppModel {
         fireNextScan()
     }
 
-    func resumeContinuousScan() {
-        guard scanSession != nil else { return }
-        scanSession?.resume()
-        fireNextScan()
-    }
-
     func stopContinuousScan() {
-        guard let summary = endScanRun()?.summary(cancelled: false) else { return }
+        guard let summary = endScanRun()?.summary(stopped: nil) else { return }
         notify(summary)
     }
 
@@ -128,7 +122,7 @@ extension AppModel {
     }
 
     func scanCancelled() {
-        follow(.cancelled)
+        follow(.stopped(.cancelled))
     }
 
     func scanFailed(_ message: String) {
@@ -136,8 +130,7 @@ extension AppModel {
             errorMessage = message
             return
         }
-        suspendScan(.failed)
-        notify(message, .warning)
+        follow(.stopped(.failed), detail: message)
     }
 
     func scanIncomplete(_ message: String) {
@@ -145,26 +138,24 @@ extension AppModel {
             errorMessage = message
             return
         }
-        suspendScan(.incomplete)
-        notify(message, .warning)
+        follow(.stopped(.incomplete), detail: message)
     }
 
     func appResignedActive() {
-        guard scanSession?.isRunning == true else { return }
+        guard scanSession != nil else { return }
         scanFocusCheck?.cancel()
         scanFocusCheck = Task { [weak self] in
             try? await Task.sleep(for: Self.scanFocusGrace)
-            guard !Task.isCancelled, let self, self.scanSession?.isRunning == true,
+            guard !Task.isCancelled, let self, self.scanSession != nil,
                   !self.canReceiveScans else { return }
-            self.suspendScan(.lostFocus)
+            self.follow(.stopped(.lostFocus))
         }
     }
 
-    private func suspendScan(_ reason: ScanSession.Pause) {
-        follow(.interrupted(reason))
-    }
-
-    private func follow(_ event: ScanSession.Event) {
+    /// Any round that does not bring a capture back ends the run. A capture
+    /// already on its way is still filed when it lands; it just does not ask
+    /// for another.
+    private func follow(_ event: ScanSession.Event, detail: String? = nil) {
         guard var session = scanSession else { return }
         scanRound?.cancel()
         scanRound = nil
@@ -172,15 +163,11 @@ extension AppModel {
         case .scanAgain:
             scanSession = session
             fireNextScan(after: Self.scanRearm)
-        case .wait:
-            scanFocusCheck?.cancel()
-            scanFocusCheck = nil
-            scanSession = session
         case .end:
             endScanRun()
-            if let summary = session.summary(cancelled: event == .cancelled) {
-                notify(summary, .info)
-            }
+            guard case .stopped(let stop) = event, let summary = session.summary(stopped: stop)
+            else { return }
+            notify(detail.map { "\($0) \(summary)" } ?? summary, stop.isWarning ? .warning : .info)
         }
     }
 
@@ -205,7 +192,7 @@ extension AppModel {
             // would come back to a key window that is not ours and be refused,
             // and the user would have been sent to their phone for nothing.
             guard self.canReceiveScans else {
-                self.suspendScan(.lostFocus)
+                self.follow(.stopped(.lostFocus))
                 return
             }
 
@@ -213,7 +200,7 @@ extension AppModel {
             for attempt in 0..<2 {
                 if attempt > 0 { try? await Task.sleep(for: Self.scanRetry) }
                 guard !Task.isCancelled,
-                      let session = self.scanSession, session.isRunning else { return }
+                      let session = self.scanSession else { return }
                 if ScanCoordinator.shared.scan(device: session.device, action: session.action,
                                                into: session.destination) {
                     fired = true
@@ -221,13 +208,13 @@ extension AppModel {
                 }
             }
             guard fired else {
-                self.suspendScan(.deviceGone)
+                self.follow(.stopped(.deviceGone))
                 return
             }
 
             try? await Task.sleep(for: Self.scanTimeout)
-            guard !Task.isCancelled, self.scanSession?.isRunning == true else { return }
-            self.suspendScan(.timedOut)
+            guard !Task.isCancelled, self.scanSession != nil else { return }
+            self.follow(.stopped(.timedOut))
         }
     }
 }

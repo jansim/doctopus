@@ -16,37 +16,30 @@ struct ScanDevice: Identifiable, Hashable, Sendable {
 }
 
 struct ScanSession: Equatable, Sendable {
-    enum Pause: Equatable, Sendable {
+    /// Why a run ended other than by somebody clicking Stop. There is no
+    /// pausing: whatever stops a round stops the run, and starting another is
+    /// one click away.
+    enum Stop: Equatable, Sendable {
+        /// The capture was called off on the device or in the system's own panel.
+        case cancelled
         case lostFocus
         case timedOut
         case failed
         case incomplete
         case deviceGone
 
-        var summary: String {
+        /// Nil where the failure is already said in its own words.
+        var reason: String? {
             switch self {
-            case .deviceGone: return "Device gone"
-            case .incomplete: return "Incomplete"
-            default: return "Paused"
+            case .cancelled: return "the scan was cancelled"
+            case .lostFocus: return "Doctopus was no longer the active app, so a scan had nowhere to land"
+            case .timedOut: return "nothing arrived from the device"
+            case .deviceGone: return "the device is no longer offering that"
+            case .failed, .incomplete: return nil
             }
         }
 
-        var detail: String {
-            switch self {
-            case .lostFocus:
-                return "Paused because Doctopus is not the active app — a scan has nowhere to land. Click Resume to carry on."
-            case .timedOut:
-                return "Nothing arrived from the device, so the scan was probably cancelled there. Click Resume to ask again."
-            case .failed:
-                return "The last capture could not be read. Click Resume to try again."
-            case .incomplete:
-                return "Part of the last scan could not be read, so the run stopped rather than carry on. Check what arrived, then click Resume."
-            case .deviceGone:
-                return "The device is no longer offering that. Bring it back in range and click Resume."
-            }
-        }
-
-        var isResolvedByDelivery: Bool { self != .lostFocus }
+        var isWarning: Bool { self == .failed || self == .incomplete }
     }
 
     var device: String
@@ -54,31 +47,19 @@ struct ScanSession: Equatable, Sendable {
     var destination: URL?
     var count: Int = 0
     var pages: Int = 0
-    var paused: Pause? = nil
-
-    var isRunning: Bool { paused == nil }
 
     mutating func received(_ documents: Int, pages: Int) {
         count += documents
         self.pages += pages
-        if paused?.isResolvedByDelivery == true { paused = nil }
     }
-
-    mutating func suspend(_ reason: Pause) { paused = reason }
-    mutating func resume() { paused = nil }
 
     enum Event: Equatable, Sendable {
         case delivered(documents: Int, pages: Int)
-        /// The capture was called off on the device or in the system's own
-        /// panel. Unlike every `Pause`, that is somebody saying they are done.
-        case cancelled
-        case interrupted(Pause)
+        case stopped(Stop)
     }
 
     enum Next: Equatable, Sendable {
         case scanAgain
-        /// Paused: Resume, or for some pauses a late capture, picks it up.
-        case wait
         /// The run is over, so there is nothing left to show or to re-arm.
         case end
     }
@@ -89,22 +70,19 @@ struct ScanSession: Equatable, Sendable {
         switch event {
         case .delivered(let documents, let pages):
             received(documents, pages: pages)
-            return isRunning ? .scanAgain : .wait
-        case .cancelled:
+            return .scanAgain
+        case .stopped:
             return .end
-        case .interrupted(let reason):
-            suspend(reason)
-            return .wait
         }
     }
 
-    /// Said when a run ends; nil when it ended before anything came in and the
-    /// one who ended it needs no telling.
-    func summary(cancelled: Bool) -> String? {
+    /// Said when a run ends; nil when it was stopped by hand before anything
+    /// came in and the one who stopped it needs no telling.
+    func summary(stopped: Stop?) -> String? {
         let scanned = count == 1 ? "Scanned 1 document" : "Scanned \(count) documents"
-        if cancelled {
-            return count == 0 ? "Scanning stopped — the scan was cancelled."
-                : "Scanning stopped — the scan was cancelled. \(scanned) before that."
+        if let stopped {
+            let stop = stopped.reason.map { "Scanning stopped — \($0)." } ?? "Scanning stopped."
+            return count == 0 ? stop : "\(stop) \(scanned)."
         }
         return count == 0 ? nil : scanned + "."
     }
@@ -112,14 +90,11 @@ struct ScanSession: Equatable, Sendable {
     var label: String {
         var scanned = count == 1 ? "1 document" : "\(count) documents"
         if pages > count { scanned += " · \(pages) pages" }
-        guard let reason = paused else {
-            return count == 0 ? "Waiting for the first scan…" : "Scanning · \(scanned)"
-        }
-        return count == 0 ? reason.summary : "\(reason.summary) · \(scanned)"
+        return count == 0 ? "Waiting for the first scan…" : "Scanning · \(scanned)"
     }
 
     var help: String {
-        paused?.detail ?? "“\(action)” on \(device), one document after another. Each is filed as it arrives."
+        "“\(action)” on \(device), one document after another. Each is filed as it arrives."
     }
 }
 
@@ -363,21 +338,12 @@ struct ScanSessionStatus: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            if session.isRunning {
-                ProgressView()
-                    .progressViewStyle(.circular)
-                    .controlSize(.small)
-            } else {
-                Image(systemName: "pause.circle.fill")
-                    .foregroundStyle(.secondary)
-            }
+            ProgressView()
+                .progressViewStyle(.circular)
+                .controlSize(.small)
             Text(session.label)
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(.secondary)
-            if !session.isRunning {
-                Button("Resume") { model.resumeContinuousScan() }
-                    .controlSize(.small)
-            }
             Button { model.stopContinuousScan() } label: {
                 Image(systemName: "xmark.circle.fill")
             }
