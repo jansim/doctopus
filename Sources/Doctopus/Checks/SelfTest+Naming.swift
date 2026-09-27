@@ -164,10 +164,10 @@ extension SelfTest {
             // A chosen folder, and names only when asked: nothing else here would rename it.
             await scanner.importFiles([capture], into: store.root.appendingPathComponent("Scanned Here"),
                                       movingSource: true)
+            let renamedPrefix = String(template.prefix(while: { $0 != "{" }))
             return ((try? await store.listDocuments(selection: .all, query: SearchQuery(""),
                                                     sort: .added, ascending: false)) ?? [])
-                .first { $0.filename.hasPrefix(String(template.prefix(while: { $0 != "{" })))
-                    || $0.filename == capture.lastPathComponent }
+                .first { $0.filename.hasPrefix(renamedPrefix) || $0.filename == capture.lastPathComponent }
         }
 
         let scanned = await scan(named: true, template: "doctopus-scanned-{original}")
