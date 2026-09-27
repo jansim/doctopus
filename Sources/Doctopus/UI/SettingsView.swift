@@ -479,9 +479,8 @@ struct IntelligenceSettings: View {
                     .font(.caption).foregroundStyle(.secondary)
                 HStack {
                     Button("Analyze Selected Documents") { model.analyze(model.selectedRows) }
-                        .disabled(model.selectedIDs.isEmpty || !model.modelStatus.isReady)
+                        .disabled(model.selectedIDs.isEmpty)
                     Button("Analyze Entire Library…") { confirmLibraryRun() }
-                        .disabled(!model.modelStatus.isReady)
                 }
                 if model.progress.phase == "Analyzing" {
                     HStack(spacing: 8) {

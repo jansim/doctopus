@@ -68,7 +68,7 @@ private struct DetailInspector: View {
             } else {
                 Text(model.modelStatus.isReady
                      ? "Not analyzed yet."
-                     : "No model configured — \(model.modelStatus.label).")
+                     : "Model not ready — \(model.modelStatus.label). Analyzing checks again.")
                     .font(.callout).foregroundStyle(.tertiary)
                     .fixedSize(horizontal: false, vertical: true)
                 Button {
@@ -78,7 +78,7 @@ private struct DetailInspector: View {
                         .font(.callout)
                 }
                 .buttonStyle(.link)
-                .disabled(!model.modelStatus.isReady || analyzing)
+                .disabled(analyzing)
             }
         }
     }
@@ -491,7 +491,6 @@ private struct MultiSelectionInspector: View {
             Button("Optimize All") { model.optimize(model.selectedRows) }
             Button("Reprocess All") { model.reprocess(model.selectedRows) }
             Button("Analyze All with Model") { model.analyze(model.selectedRows) }
-                .disabled(!model.modelStatus.isReady)
             Button("Reveal in Finder") { model.reveal(model.selectedRows) }
             Spacer()
         }

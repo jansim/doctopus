@@ -229,6 +229,14 @@ actor Intelligence {
         }
     }
 
+    /// Probes the backend afresh rather than trusting a cached result, so a
+    /// server that was down earlier is picked up once it is back. Unlike
+    /// `refreshStatus`, what was learned about the server's abilities stays.
+    func recheckStatus() async -> LLMStatus {
+        guard backend == .remote else { return await status() }
+        return await remote.check(config)
+    }
+
     func refreshStatus() async -> LLMStatus {
         await remote.forget()
         return await status()
