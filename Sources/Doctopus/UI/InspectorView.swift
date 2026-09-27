@@ -60,12 +60,13 @@ private struct DetailInspector: View {
     private var summarySection: some View {
         let analyzing = model.progress.phase == "Analyzing"
         Section2("Summary") {
-            if let summary = row.summary {
-                Text(summary)
-                    .font(.callout)
-                    .textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
-            } else {
+            DraftEditor(saved: row.summary ?? "",
+                        placeholder: "A line or two on what this document is…",
+                        minHeight: 44) {
+                model.editMetadata(row.id, column: "summary",
+                                    value: $0.trimmingCharacters(in: .whitespacesAndNewlines))
+            }
+            if row.summary == nil {
                 Text(model.modelStatus.isReady
                      ? "Not analyzed yet."
                      : "Model not ready — \(model.modelStatus.label). Analyzing checks again.")
@@ -366,7 +367,10 @@ private struct DetailInspector: View {
 
     private var notesSection: some View {
         Section2("Notes") {
-            NoteEditor(saved: detail.note, document: row.id)
+            DraftEditor(saved: detail.note,
+                        placeholder: "Anything worth remembering about this document…") {
+                model.setNote($0, for: row.id)
+            }
         }
     }
 
@@ -431,12 +435,13 @@ private struct DetailInspector: View {
     }
 }
 
-/// A text box for the document's one note, saved when it loses focus or the
-/// inspector moves on to another document.
-private struct NoteEditor: View {
-    @Environment(AppModel.self) private var model
+/// A text box for a document's note or summary, saved when it loses focus
+/// or the inspector moves on to another document.
+private struct DraftEditor: View {
     let saved: String
-    let document: Int64
+    let placeholder: String
+    var minHeight: CGFloat = 80
+    let onSave: (String) -> Void
 
     @State private var draft = ""
     @FocusState private var focused: Bool
@@ -448,12 +453,12 @@ private struct NoteEditor: View {
             .focused($focused)
             .padding(.horizontal, 3)
             .padding(.vertical, 5)
-            .frame(minHeight: 80, maxHeight: 200)
+            .frame(minHeight: minHeight, maxHeight: 200)
             .fixedSize(horizontal: false, vertical: true)
             .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 6))
             .overlay(alignment: .topLeading) {
                 if draft.isEmpty {
-                    Text("Anything worth remembering about this document…")
+                    Text(placeholder)
                         .font(.callout)
                         .foregroundStyle(.tertiary)
                         .padding(.horizontal, 8)
@@ -474,7 +479,7 @@ private struct NoteEditor: View {
 
     private func save() {
         guard draft.trimmingCharacters(in: .whitespacesAndNewlines) != saved else { return }
-        model.setNote(draft, for: document)
+        onSave(draft)
     }
 }
 

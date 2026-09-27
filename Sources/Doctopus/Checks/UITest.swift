@@ -774,6 +774,14 @@ enum UITest {
                        && model.documents.first { $0.id == row.id }?.approved != false,
                    "\(model.queue.count) entries, was \(queueBefore)")
 
+        let summary = "Summarized by the checks"
+        model.editMetadata(row.id, column: "summary", value: summary)
+        let summarized = await settle {
+            recorded(summary) && model.detail?.row.summary == summary
+        }
+        Check.that("a summary typed by hand is saved and recorded in the history", summarized,
+                   model.detail?.row.summary ?? "no summary")
+
         model.removeFinderTag(finderTag, from: [row])
         if let added = model.tags.first(where: { $0.name == tag }) {
             model.removeTag(added, from: [row])
@@ -782,7 +790,12 @@ enum UITest {
             model.deleteTag(added)
         }
         model.editMetadata(row.id, column: "title", value: row.title)
-        _ = await settle { model.documents.first { $0.id == row.id }?.title == row.title }
+        model.editMetadata(row.id, column: "summary", value: row.summary)
+        _ = await settle {
+            model.documents.first { $0.id == row.id }.map {
+                $0.title == row.title && $0.summary == row.summary
+            } == true
+        }
     }
 
     /// A library whose folder is renamed while open reopens where it went,
