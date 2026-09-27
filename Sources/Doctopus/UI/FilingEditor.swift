@@ -164,6 +164,16 @@ struct FilingEditor: View {
         }
         .onAppear(perform: adoptRuleFolder)
         .onChange(of: ruleFolders.first?.path) { adoptRuleFolder() }
+        .onChange(of: row.directory) { adoptFiling() }
+        .onChange(of: existingSecondaries) { adoptFiling() }
+    }
+
+    /// Filed elsewhere while shown, e.g. dragged onto a folder in the sidebar:
+    /// that is the newer decision, so the picks start over from where it is now.
+    private func adoptFiling() {
+        primary = startingPrimary
+        secondaries = existingSecondaries
+        touched = false
     }
 
     /// Rule matches load after the detail, so their folder is taken up when it arrives.
