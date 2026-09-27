@@ -116,9 +116,13 @@ enum UITest {
         if let dir = snapshots { snapshot(host, to: dir + "/gallery.png") }
 
         let cell = CGFloat(model.settings.galleryThumbnailSize)
-        let middle = NSPoint(x: 18 + cell / 2, y: size.height - (18 + cell * 0.65))
+        let headed = !Timeline.sections(for: model).isEmpty
+        Check.that("the gallery sorted by date is headed by month or year", headed,
+                   "sorted by \(model.sort.label)")
+        let top = 18 + (headed ? GalleryHeader.height + 20 : 0)
+        let middle = NSPoint(x: 18 + cell / 2, y: size.height - (top + cell * 0.65))
         for (where_, point) in [("middle", middle),
-                                ("corner", NSPoint(x: 22, y: size.height - 24))] {
+                                ("corner", NSPoint(x: 22, y: size.height - (top + 6)))] {
             model.selectedIDs = []
             let selected = await click(window, at: point, attempts: 1, settling: 0.6) {
                 !model.selectedIDs.isEmpty

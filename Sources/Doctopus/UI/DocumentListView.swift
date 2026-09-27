@@ -356,18 +356,24 @@ private struct DocumentGalleryView: View {
     private var cell: CGFloat { CGFloat(model.settings.galleryThumbnailSize) }
 
     var body: some View {
+        let timeline = Timeline.sections(for: model)
         ScrollView {
             LazyVGrid(columns: [GridItem(.adaptive(minimum: cell, maximum: cell * 1.4), spacing: 18)],
-                      spacing: 20) {
+                      spacing: 20, pinnedViews: .sectionHeaders) {
                 if model.selection == .reviewed {
                     ForEach(ReviewedPeriod.groups(model.documents, now: .now)) { group in
                         Section {
                             cells(group.rows)
                         } header: {
-                            Text(group.period.title)
-                                .font(.headline)
-                                .foregroundStyle(.secondary)
-                                .frame(maxWidth: .infinity, alignment: .leading)
+                            GalleryHeader(title: group.period.title, count: group.rows.count)
+                        }
+                    }
+                } else if !timeline.isEmpty {
+                    ForEach(timeline) { section in
+                        Section {
+                            cells(section.rows)
+                        } header: {
+                            GalleryHeader(title: section.title, count: section.rows.count)
                         }
                     }
                 } else {
@@ -413,6 +419,39 @@ private struct DocumentGalleryView: View {
                                              selection: model.selectedIDs, anchor: selectionAnchor)
         model.selectedIDs = outcome.selection
         selectionAnchor = outcome.anchor
+    }
+}
+
+struct GalleryHeader: View {
+    /// Fixed so the UI check can locate the first thumbnails.
+    static let height: CGFloat = 32
+
+    let title: String
+    let count: Int
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline) {
+            Text(title)
+                .font(.title3.weight(.semibold))
+            Spacer()
+            Text("\(count) document\(count == 1 ? "" : "s")")
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 18)
+        .frame(maxWidth: .infinity, minHeight: Self.height, maxHeight: Self.height)
+        .background(.bar)
+        // Cover the grid's padding so thumbnails don't show at the ends.
+        .padding(.horizontal, -18)
+    }
+}
+
+extension Timeline {
+    @MainActor
+    static func sections(for model: AppModel) -> [Section] {
+        guard !model.selection.isQueueMode, model.selection != .deleted else { return [] }
+        let ranked = model.sort == .relevance && !SearchQuery(model.searchText).terms.isEmpty
+        return sections(model.documents, sort: model.sort, ranked: ranked)
     }
 }
 
