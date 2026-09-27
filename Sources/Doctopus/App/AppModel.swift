@@ -31,6 +31,8 @@ final class AppModel {
     var library: Library?
     /// While a library is on its way into this window.
     var isOpening = false
+    /// The library on its way in, so no other window tries it meanwhile.
+    var openingContainer: URL?
     /// Once the window has gone, so a library still being opened is let go.
     var isClosed = false
     /// Free to take a library.

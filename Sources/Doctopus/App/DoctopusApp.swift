@@ -114,8 +114,11 @@ private struct LibraryWindow: View {
                 workspace.openWindow = { openWindow(value: $0) }
                 await model.bootstrap()
                 if let container {
-                    // Already open elsewhere, which has been brought forward instead.
-                    if await model.openLibrary(container: container) == .elsewhere, model.library == nil {
+                    // Already open elsewhere, which has been brought forward
+                    // instead. Never the last window, though: closing that
+                    // would quit the app.
+                    if await model.openLibrary(container: container) == .elsewhere, model.library == nil,
+                       workspace.windows.contains(where: { $0 !== model }) {
                         model.window?.close()
                     }
                 } else {
