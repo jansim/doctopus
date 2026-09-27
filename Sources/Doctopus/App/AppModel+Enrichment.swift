@@ -115,6 +115,9 @@ extension AppModel {
             let mark = await eventMark()
             let result = await lib.indexer.move(ids: rows.map(\.doc), to: destination)
             let moved = result.done, failures = result.failures
+            // The indexer's refresh reloads the list, not the open document,
+            // whose filing the review shows until the selection changes.
+            if moved > 0 { reloadDetail() }
             report(failures: failures, "move to “\(destination.lastPathComponent)”")
             if moved == 0 {
                 if failures.isEmpty {
@@ -324,6 +327,7 @@ extension AppModel {
                 made += 1
             }
             refreshAll()
+            if made > 0 { reloadDetail() }
             report(failures: failures, "file in “\(folder.lastPathComponent)”")
             if made == 0 {
                 if failures.isEmpty { notify("Those documents are already in that folder.", .info) }
