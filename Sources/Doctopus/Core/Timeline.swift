@@ -1,17 +1,13 @@
 import Foundation
 
-/// The month or year headings the gallery puts over a library sorted by date,
-/// the way Photos breaks up its grid. Only the headings are decided here: the
-/// rows keep the order the store listed them in.
+/// Month or year headings for the date-sorted gallery; rows keep the store's order.
 enum Timeline {
-    /// Below this many documents a month on average, a library spanning years
-    /// is headed by year instead — a heading over every one or two documents
-    /// is more heading than gallery.
+    /// Below this monthly average, a library spanning years is headed by year.
     static let documentsPerMonth = 3
 
     struct Key: Hashable, Sendable {
         var year: Int
-        /// Nil when the section is a whole year.
+        /// Nil for a whole year.
         var month: Int?
     }
 
@@ -28,20 +24,17 @@ enum Timeline {
         }
     }
 
-    /// The sections, or none when the rows are not in the order of a date:
-    /// sorted by name or size, ranked by a search, or listed by when they were
-    /// queued or trashed.
+    /// Empty when the rows are not in date order.
     static func sections(_ rows: [DocumentRow], sort: SortField, ranked: Bool) -> [Section] {
         let date: (DocumentRow) -> Date
         let calendar: Calendar
         switch sort {
         case .docDate:
-            // The store orders by the stored day, which is a UTC midnight; the
-            // local calendar would put the first of a month in the last one.
+            // Stored days are UTC midnights; the local calendar would shift the 1st into the month before.
             date = { $0.docDate ?? $0.createdAt }
             calendar = DayDate.calendar
         case .added, .relevance:
-            // Relevance only ranks when there is text to rank by; otherwise it is newest added first.
+            // Without search text, relevance is newest added first.
             guard sort == .added || !ranked else { return [] }
             date = { $0.createdAt }
             calendar = .current
@@ -58,8 +51,7 @@ enum Timeline {
         return runs(rows, by: { Key(year: calendar.component(.year, from: date($0)), month: nil) }) ?? months
     }
 
-    /// Consecutive rows sharing a key. A key coming back after another one means
-    /// the rows were never in date order, and headings would only repeat.
+    /// Nil when a key recurs, i.e. the rows are not in date order.
     private static func runs(_ rows: [DocumentRow], by key: (DocumentRow) -> Key) -> [Section]? {
         var sections: [Section] = []
         var seen: Set<Key> = []

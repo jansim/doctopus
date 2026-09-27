@@ -422,10 +422,8 @@ private struct DocumentGalleryView: View {
     }
 }
 
-/// A gallery section's heading. It stays pinned while its section scrolls
-/// underneath, so the gallery always says which month or year is on screen.
 struct GalleryHeader: View {
-    /// Fixed, so a check can find the first row of thumbnails under it.
+    /// Fixed so the UI check can locate the first thumbnails.
     static let height: CGFloat = 32
 
     let title: String
@@ -443,13 +441,12 @@ struct GalleryHeader: View {
         .padding(.horizontal, 18)
         .frame(maxWidth: .infinity, minHeight: Self.height, maxHeight: Self.height)
         .background(.bar)
-        // Across the grid's padding too, so thumbnails scrolling under it do not show at its ends.
+        // Cover the grid's padding so thumbnails don't show at the ends.
         .padding(.horizontal, -18)
     }
 }
 
 extension Timeline {
-    /// The gallery's sections as the window is sorted and searched right now.
     @MainActor
     static func sections(for model: AppModel) -> [Section] {
         guard !model.selection.isQueueMode, model.selection != .deleted else { return [] }

@@ -1,6 +1,5 @@
 import Foundation
 
-/// The gallery heads a date-sorted library by month, or by year once months get sparse.
 extension SelfTest {
     static func timeline(rows: [DocumentRow]) {
         print("\nTIMELINE (gallery headings)")
@@ -15,7 +14,6 @@ extension SelfTest {
             return row
         }
 
-        // Newest first, as the store lists them; three a month keeps months.
         let dense = [dated(2026, 9, 20), dated(2026, 9, 10), dated(2026, 9, 1),
                      dated(2026, 8, 30), dated(2026, 8, 12), dated(2026, 8, 2),
                      dated(2025, 12, 31), dated(2025, 12, 5), dated(2025, 12, 1)]

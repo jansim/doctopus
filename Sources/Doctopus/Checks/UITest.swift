@@ -116,7 +116,6 @@ enum UITest {
         if let dir = snapshots { snapshot(host, to: dir + "/gallery.png") }
 
         let cell = CGFloat(model.settings.galleryThumbnailSize)
-        // Sorted by date, the first thumbnails sit under their month's heading.
         let headed = !Timeline.sections(for: model).isEmpty
         Check.that("the gallery sorted by date is headed by month or year", headed,
                    "sorted by \(model.sort.label)")
