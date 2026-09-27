@@ -14,6 +14,9 @@ struct SidebarView: View {
                 row(.needsReview, "Needs Review", "exclamationmark.triangle", model.needsReviewCount)
                 row(.untagged, "Untagged", "tag.slash", nil)
                 row(.reviewed, "Recently Reviewed", "checkmark.circle", nil)
+                if model.library != nil {
+                    row(.metadata, "Metadata", "list.bullet.rectangle", nil)
+                }
                 if model.stats.deleted > 0 {
                     row(.deleted, "Recently Deleted", "trash", model.stats.deleted)
                 }

@@ -80,6 +80,8 @@ extension Store {
 
         switch selection {
         case .all, .deleted, .savedView: break
+        case .metadata:
+            wheres.append("0")
         case .reviewed:
             wheres.append("d.reviewed_at >= ?")
             args.append(.double(ReviewedPeriod.cutoff(before: .now).timeIntervalSince1970))
@@ -422,8 +424,11 @@ extension Store {
         return [build("", isRoot: true)]
     }
 
+    /// The built-in columns holding names, which have values to list.
+    static let facetColumns: Set<String> = ["correspondent", "doc_type", "language"]
+
     func facets(column: String) throws -> [Facet] {
-        guard ["correspondent", "doc_type", "language"].contains(column) else { return [] }
+        guard Store.facetColumns.contains(column) else { return [] }
         if Store.entityColumns[column] != nil {
             return try entities(builtin: column)
                 .filter { $0.count > 0 }

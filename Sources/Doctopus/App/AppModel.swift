@@ -102,10 +102,19 @@ final class AppModel {
     var fields: [Field] { library?.fields ?? [] }
     var tagNames: [String] { tags.map(\.name) }
     var facets: [String: [Facet]] { library?.facets ?? [:] }
+
+    /// Values already in use, most used first; a number or a date isn't picked from a list.
+    func suggestions(for field: Field) -> [String] {
+        guard field.type == .string || field.type == .select else { return [] }
+        return (facets[field.key] ?? []).map(\.value)
+    }
+
     var queue: [ProcessingEntry] { library?.queue ?? [] }
     var stats: Store.Stats { library?.stats ?? Store.Stats() }
 
     var documents: [DocumentRow] = []
+    var metadataKind = MetadataKind.tags
+
     var selection: Selection = .all {
         didSet {
             guard selection != oldValue else { return }

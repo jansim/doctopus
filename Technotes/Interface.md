@@ -11,6 +11,23 @@ Paperless-ngx-style smart views: Tags, Correspondents, Languages, Document
 Types. Only Needs Review has a checkbox on each document; one already reviewed
 goes back for review from its context menu.
 
+### Metadata
+
+Library › Metadata lists, in place of documents, every tag or every value of
+a field — Correspondent, Document Type, Language and any text field of the
+library's own — picked at the top, each with how many documents carry it.
+The sidebar only shows the first fifty of each; this is all of them.
+
+It is where what a model came up with is tidied up. Selecting several and
+choosing Merge asks which name they end up with, one of theirs or a new one,
+and every document that had any of them gets that name; the others are gone.
+Renaming onto a name already in use does the same for two. Double-clicking
+one lists its documents.
+
+Typing into a text field — in the inspector, in review, or a rule's Set
+correspondent and Set document type — offers the values already in use, most
+used first, so a correspondent is picked rather than spelled a second way.
+
 ## Windows
 
 Each library has a window of its own, and a window shows one library. Opening

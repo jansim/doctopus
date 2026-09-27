@@ -18,6 +18,8 @@ struct RootView: View {
             Group {
                 if model.library == nil {
                     WelcomeView()
+                } else if model.selection == .metadata {
+                    MetadataView()
                 } else {
                     DocumentListView()
                 }

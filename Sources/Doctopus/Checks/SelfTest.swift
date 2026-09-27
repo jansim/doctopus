@@ -97,6 +97,8 @@ enum SelfTest {
         let fields = await fieldValues(store: store, rows: rows)
         await savedViews(store: store)
         await renameAndMerge(store: store, rows: rows, fields: fields)
+        await metadataMerge(store: store, rows: rows)
+        valueSuggestions()
         await finderTags(store: store, rows: rows)
         await valueIcons(store: store, fields: fields)
         await tagMerge(store: store, rows: rows)

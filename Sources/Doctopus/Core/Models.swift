@@ -305,8 +305,15 @@ enum Selection: Hashable, Sendable {
     case deleted
     /// The documents marked as outliers for one rule.
     case outliers(rule: Int64)
+    /// Library › Metadata; lists no documents.
+    case metadata
 
     var isQueueMode: Bool { self == .reviewed || self == .needsReview }
+}
+
+enum MetadataKind {
+    /// Not a field key, which is only ever letters, digits and underscores.
+    static let tags = "#tags"
 }
 
 enum ViewMode: String, CaseIterable, Sendable, Codable {
