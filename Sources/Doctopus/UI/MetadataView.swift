@@ -1,9 +1,8 @@
 import SwiftUI
 import AppKit
 
-/// Library › Metadata: every tag, or every value of one field, in one table.
-/// It is where what a model came up with is tidied — above all where several
-/// spellings of the same correspondent are folded into one.
+/// Every tag, or every value of one field, in one table, where several
+/// spellings of one correspondent are folded into one.
 struct MetadataView: View {
     @Environment(AppModel.self) private var model
     @State private var selected: Set<String> = []
@@ -205,8 +204,7 @@ private struct MergeRequest: Identifiable {
     var id: [String] { items.map(\.id) }
 }
 
-/// Picks the name the merged ones end up with: one of theirs, the most used
-/// to begin with, or a new one.
+/// Picks the name merged values end up with: one of theirs or a new one.
 struct MergeSheet: View {
     @Environment(\.dismiss) private var dismiss
     let noun: (one: String, many: String)

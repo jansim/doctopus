@@ -305,15 +305,12 @@ enum Selection: Hashable, Sendable {
     case deleted
     /// The documents marked as outliers for one rule.
     case outliers(rule: Int64)
-    /// Library › Metadata, which lists every tag or every value of a field
-    /// in place of documents.
+    /// Library › Metadata; lists no documents.
     case metadata
 
     var isQueueMode: Bool { self == .reviewed || self == .needsReview }
 }
 
-/// What Library › Metadata lists: every tag, or the values of the field whose
-/// key it is.
 enum MetadataKind {
     /// Not a field key, which is only ever letters, digits and underscores.
     static let tags = "#tags"

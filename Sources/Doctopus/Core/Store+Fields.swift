@@ -202,10 +202,7 @@ extension Store {
         return renamed
     }
 
-    /// Folds every one of `values` into `target`, which may be one of them or
-    /// a name nobody uses yet: renaming onto a name already in use merges, so
-    /// this is that, once per value. Returns how many documents now carry a
-    /// different value than they did.
+    /// Renames each value onto `target`, which merges them; returns how many documents changed.
     @discardableResult
     func mergeFieldValues(field: Field, _ values: [String], into target: String) throws -> Int {
         let clean = target.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -284,8 +281,7 @@ extension Store {
         return merged
     }
 
-    /// Folds every tag in `ids` into the one called `name`, which may be one
-    /// of them or a new name; returns the tag that is left.
+    /// Merges each tag into the one called `name`; returns the tag that is left.
     @discardableResult
     func mergeTags(_ ids: [Int64], into name: String) throws -> Int64? {
         guard name.trimmingCharacters(in: .whitespacesAndNewlines).nilIfBlank != nil else { return nil }

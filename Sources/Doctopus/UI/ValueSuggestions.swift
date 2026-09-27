@@ -6,10 +6,8 @@ import SwiftUI
 enum ValueSuggestions {
     static let limit = 8
 
-    /// Candidates beginning with what was typed come first, then those that
-    /// only contain it, each kept in the order given — most used first. None
-    /// while the text is still `current`, which would open the list on every
-    /// click into a filled-in field, or once it names a candidate exactly.
+    /// None while the text is still `current`, which would open the list on
+    /// every click into a filled-in field.
     static func matches(_ candidates: [String], for text: String, current: String = "") -> [String] {
         let query = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty, text != current, !candidates.contains(query) else { return [] }

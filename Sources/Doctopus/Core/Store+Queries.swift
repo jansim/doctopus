@@ -424,8 +424,7 @@ extension Store {
         return [build("", isRoot: true)]
     }
 
-    /// The built-in columns that hold a name rather than a number or a word
-    /// the pipeline picks from a fixed set, and so have values to list.
+    /// The built-in columns holding names, which have values to list.
     static let facetColumns: Set<String> = ["correspondent", "doc_type", "language"]
 
     func facets(column: String) throws -> [Facet] {
