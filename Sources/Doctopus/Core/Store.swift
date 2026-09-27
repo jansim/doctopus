@@ -412,10 +412,11 @@ actor Store {
     func storeMetadata(_ p: MetadataPatch) throws {
         let correspondentID = try entityID(named: p.correspondent, builtin: "correspondent")
         let docTypeID = try entityID(named: p.docType, builtin: "doc_type")
+        let analyzedAt = p.source.flatMap { MetadataSource($0) == .heuristics ? nil : Date() }
         try db.run("""
             INSERT INTO metadata(doc_id, title, correspondent_id, doc_type_id, language, summary,
-                                 intent, doc_date, date_source, source, amount, amount_value)
-            VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+                                 intent, doc_date, date_source, source, amount, amount_value, analyzed_at)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(doc_id) DO UPDATE SET
                 title=COALESCE(excluded.title, metadata.title),
                 correspondent_id=COALESCE(excluded.correspondent_id, metadata.correspondent_id),
@@ -427,12 +428,13 @@ actor Store {
                 date_source=COALESCE(excluded.date_source, metadata.date_source),
                 source=COALESCE(excluded.source, metadata.source),
                 amount=COALESCE(excluded.amount, metadata.amount),
-                amount_value=COALESCE(excluded.amount_value, metadata.amount_value)
+                amount_value=COALESCE(excluded.amount_value, metadata.amount_value),
+                analyzed_at=COALESCE(excluded.analyzed_at, metadata.analyzed_at)
             """, [.int(p.docID), .text(p.title), .int(correspondentID), .int(docTypeID),
                   .text(p.language), .text(p.summary), .text(p.intent),
                   .date(p.docDate.map { DayDate.startOfDay($0) }),
                   .text(p.dateSource), .text(p.source), .text(p.amount),
-                  .double(p.amount.flatMap { FieldType.number(from: $0) })])
+                  .double(p.amount.flatMap { FieldType.number(from: $0) }), .date(analyzedAt)])
         try refreshSearchIndex(p.docID)
     }
 

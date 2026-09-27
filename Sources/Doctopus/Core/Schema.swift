@@ -7,7 +7,7 @@ enum Schema {
 
     private static let steps: [@Sendable (Database) throws -> Void] = [
         v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19,
-        v20, v21, v22, v23, v24, v25, v26, v27, v28,
+        v20, v21, v22, v23, v24, v25, v26, v27, v28, v29,
     ]
     static var current: Int { steps.count }
 
@@ -35,6 +35,30 @@ enum Schema {
             [.text(table), .text(column)]) { $0.int(0) } ?? 0
         guard present == 0 else { return }
         try db.exec("ALTER TABLE \(table) ADD COLUMN \(column) \(declaration)")
+    }
+
+    /// When a model last answered for a document, so it can be searched by.
+    /// `source` cannot say: it carries no date, and a rule overwrites it.
+    /// Earlier analyses are dated by their last `analyzed` event, or — when the
+    /// model answered while the document was indexed, which logs none — by its
+    /// last import or index event, else by when it was added.
+    private static func v29(_ db: Database) throws {
+        let tables = Set(try db.map(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('metadata', 'events', 'documents')") { $0.string(0) })
+        guard tables.contains("metadata") else { return }
+        try addColumn(db, table: "metadata", column: "analyzed_at", declaration: "REAL")
+        try db.exec("CREATE INDEX IF NOT EXISTS idx_metadata_analyzed ON metadata(analyzed_at)")
+        guard tables.contains("events"), tables.contains("documents") else { return }
+        try db.exec("""
+        UPDATE metadata SET analyzed_at = (
+            SELECT MAX(at) FROM events WHERE events.doc_id = metadata.doc_id AND action = 'analyzed')
+        WHERE analyzed_at IS NULL;
+        UPDATE metadata SET analyzed_at = COALESCE(
+            (SELECT MAX(at) FROM events WHERE events.doc_id = metadata.doc_id AND action IN ('indexed', 'imported')),
+            (SELECT created_at FROM documents WHERE documents.id = metadata.doc_id))
+        WHERE analyzed_at IS NULL
+          AND (source LIKE 'llm%' OR source LIKE 'remote%' OR source LIKE 'vlm%');
+        """)
     }
 
     /// A tag's own icon, on its row like a correspondent's, so a rename, a
