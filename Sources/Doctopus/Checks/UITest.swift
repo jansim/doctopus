@@ -55,6 +55,7 @@ enum UITest {
             await uiStatePersists(model)
             await sidebarShowsBothTagSystems(model, snapshots: snapshots)
             await handEditsReachTheHistory(model)
+            await unsavedEditsAreAskedAbout(model)
             await tagCountsFollowEdits(model)
             await tagIconsReachTheSidebar(model, snapshots: snapshots)
             await metadataPaneLists(model, snapshots: snapshots)
@@ -76,7 +77,7 @@ enum UITest {
 
     private static var previousApp: NSRunningApplication?
 
-    private static func yieldFocus() {
+    static func yieldFocus() {
         guard NSApp.isActive, let previousApp, !previousApp.isTerminated else { return }
         previousApp.activate()
     }

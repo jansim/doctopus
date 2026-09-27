@@ -649,12 +649,17 @@ private struct FieldValueRow: View {
     }
 }
 
+/// A text value committed with Return. Typing that would otherwise be lost
+/// when the row goes away uncommitted is handed to the model to ask about.
 struct EditableRow: View {
+    @Environment(AppModel.self) private var model
     let label: String
     let value: String
     var suggestions: [String] = []
     let onCommit: (String?) -> Void
     @State private var draft: String
+    /// What Return last sent, until `value` catches up with it.
+    @State private var committed: String?
 
     init(_ label: String, value: String, suggestions: [String] = [],
          onCommit: @escaping (String?) -> Void) {
@@ -670,9 +675,22 @@ struct EditableRow: View {
             TextField("", text: $draft, prompt: Text("—"))
                 .textFieldStyle(.plain)
                 .valueSuggestions(suggestions, for: draft, current: value)
-                .onSubmit { if draft != value { onCommit(draft) } }
+                .onSubmit(commit)
                 .onChange(of: value) { old, new in if draft == old { draft = new } }
+                .onDisappear(perform: holdIfUnsaved)
         }
+    }
+
+    private func commit() {
+        guard draft != value else { return }
+        committed = draft
+        onCommit(draft)
+    }
+
+    private func holdIfUnsaved() {
+        guard draft != value, draft != committed else { return }
+        let typed = draft, onCommit = onCommit
+        model.holdUnsavedEdit(UnsavedEdit(label: label, value: typed) { onCommit(typed) })
     }
 }
 

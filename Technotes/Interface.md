@@ -131,6 +131,10 @@ context menu; it only files, never approves or rewrites.
 Full document metadata: extracted dates, assigned tags, the generated summary,
 optimization savings, alias mappings, raw text, all metadata.
 
+A title or field typed into is saved with Return. Selecting another document,
+or anything else that takes the field away, before then asks whether to save
+what was typed or discard it — the same goes for the fields in review.
+
 ## Keyboard
 
 Full keyboard navigation with native Quick Look — Space on any file gives an
