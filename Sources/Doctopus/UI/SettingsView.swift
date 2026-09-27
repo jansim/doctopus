@@ -450,6 +450,19 @@ struct IntelligenceSettings: View {
                 }
 
                 Section {
+                    Stepper(value: $model.settings.llmExampleCount, in: 0...5) {
+                        LabeledContent("Examples per document",
+                                       value: model.settings.llmExampleCount == 0
+                                           ? "None" : "\(model.settings.llmExampleCount)")
+                    }
+                } header: {
+                    ScopedHeader(title: "Examples from the Library", scope: .app)
+                } footer: {
+                    Text("Each document is sent with the most similar documents you have approved in review, and how they were filed — title, correspondent, type and tags — so suggestions follow the library's own naming. Documents nobody has reviewed are never used. Their text comes out of the text sent per document rather than adding to it.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+
+                Section {
                     TextEditor(text: promptTemplate)
                         .font(.system(.caption, design: .monospaced))
                         .frame(minHeight: 260)

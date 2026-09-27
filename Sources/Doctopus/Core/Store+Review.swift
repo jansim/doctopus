@@ -77,7 +77,9 @@ extension Store {
         return Array(out.prefix(limit))
     }
 
-    func similarDocuments(for docID: Int64, limit: Int = 5) throws -> [DocumentRow] {
+    /// `reviewedOnly` narrows the search to documents someone approved in review,
+    /// before the limit is applied, so a library with few of them still finds some.
+    func similarDocuments(for docID: Int64, limit: Int = 5, reviewedOnly: Bool = false) throws -> [DocumentRow] {
         let text = (try? ocrText(docID)) ?? ""
         guard !text.isEmpty else { return [] }
 
@@ -99,6 +101,7 @@ extension Store {
         let similarIDs = try db.map("""
             SELECT rowid FROM doc_fts
             WHERE doc_fts MATCH ? AND rowid <> ?
+            \(reviewedOnly ? "AND rowid IN (SELECT id FROM documents WHERE reviewed_at IS NOT NULL)" : "")
             ORDER BY bm25(doc_fts, \(Store.bm25Weights)) ASC
             LIMIT ?
             """, [.text(matchExpr), .int(docID), .int(Int64(limit))]) { $0.int(0) }

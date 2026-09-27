@@ -144,11 +144,12 @@ enum LLMPrompt {
     /// How similar documents were filed, so an answer follows the library's own
     /// naming, categories and tags. Only the fields being asked for are shown,
     /// in the shape the answer takes; a snippet of each document's text lets
-    /// the model tell whether it really is the same kind of document.
+    /// the model tell whether it really is the same kind of document. How many
+    /// is the caller's choice; together their snippets take a tenth of `limit`.
     static func examples(_ examples: [FilingExample], fields: Set<InsightField>, limit: Int) -> String {
-        let snippet = min(300, limit / 20)
+        let snippet = min(300, limit / (10 * max(examples.count, 2)))
         var shown: [String] = []
-        for example in examples.prefix(2) {
+        for example in examples {
             guard let filed = Self.filing(example, fields: fields) else { continue }
             var lines = ["Example \(shown.count + 1) — filename: \(example.filename)"]
             let text = example.excerpt.prefix(snippet)
