@@ -141,8 +141,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let workspace = Workspace.shared
             ScanCoordinator.shared.onScan = { delivery, destination in
                 guard let model = workspace.scanTarget(for: destination) else { return }
-                model.importScanned(delivery, into: destination)
+                // Counted before it is filed, so a capture that comes up short
+                // still counts towards the run it ends.
                 model.scanDelivered(delivery)
+                model.importScanned(delivery, into: destination)
             }
             ScanCoordinator.shared.onScanFailed = { workspace.scanTarget(for: nil)?.scanFailed($0) }
             ScanCoordinator.shared.onScanCancelled = { workspace.scanTarget(for: $0)?.scanCancelled() }
@@ -217,14 +219,9 @@ struct DoctopusCommands: Commands {
                 .keyboardShortcut("o", modifiers: [.command, .shift])
             Button("Import Files…") { importPanel() }
                 .keyboardShortcut("i", modifiers: [.command])
-            if let session = model.scanSession {
-                if session.isRunning {
-                    Button("Stop Continuous Scanning") { model.stopContinuousScan() }
-                        .keyboardShortcut("s", modifiers: [.command, .option])
-                } else {
-                    Button("Resume Continuous Scanning") { model.resumeContinuousScan() }
-                        .keyboardShortcut("s", modifiers: [.command, .option])
-                }
+            if model.scanSession != nil {
+                Button("Stop Continuous Scanning") { model.stopContinuousScan() }
+                    .keyboardShortcut("s", modifiers: [.command, .option])
             }
         }
 

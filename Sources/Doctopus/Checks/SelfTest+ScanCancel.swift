@@ -1,6 +1,6 @@
 import Foundation
 
-/// How a continuous run ends, as against the interruptions it waits out.
+/// How a continuous run ends: by a cancel, a Stop, or anything else that interrupts a round.
 extension SelfTest {
     static func continuousScanEnds() {
         print("\nENDING A CONTINUOUS RUN")
@@ -15,39 +15,27 @@ extension SelfTest {
         Check.that("a capture asks for the next one",
                    session.record(.delivered(documents: 1, pages: 2)) == .scanAgain, session.label)
         Check.that("a cancel mid-run ends it rather than re-arming",
-                   session.record(.cancelled) == .end)
+                   session.record(.stopped(.cancelled)) == .end)
         Check.that("…and says how far it got",
-                   session.summary(cancelled: true)?.contains("Scanned 1 document") == true,
-                   session.summary(cancelled: true) ?? "nothing")
+                   session.summary(stopped: .cancelled)?.contains("Scanned 1 document") == true,
+                   session.summary(stopped: .cancelled) ?? "nothing")
 
         let fresh = ScanSession(device: "iPhone", action: "Scan Documents", destination: nil)
         var first = fresh
         Check.that("a cancel before the first capture ends the run too",
-                   first.record(.cancelled) == .end)
+                   first.record(.stopped(.cancelled)) == .end)
         Check.that("…and is still said, since nobody here clicked Stop",
-                   first.summary(cancelled: true) != nil)
+                   first.summary(stopped: .cancelled) != nil)
         Check.that("stopping a run that scanned nothing says nothing",
-                   fresh.summary(cancelled: false) == nil)
+                   fresh.summary(stopped: nil) == nil)
 
-        let pauses: [ScanSession.Pause] = [.lostFocus, .timedOut, .failed, .incomplete, .deviceGone]
-        for pause in pauses {
-            var paused = fresh
-            let waits = paused.record(.interrupted(pause)) == .wait && !paused.isRunning
-            Check.that("\(pause) pauses the run rather than ending it", waits, paused.label)
-            Check.that("…and a cancel while paused ends it",
-                       paused.record(.cancelled) == .end)
+        let stops: [ScanSession.Stop] = [.lostFocus, .timedOut, .failed, .incomplete, .deviceGone]
+        for stop in stops {
+            var stopped = fresh
+            Check.that("\(stop) ends the run rather than pausing it",
+                       stopped.record(.stopped(stop)) == .end, stopped.label)
+            Check.that("…and says so", stopped.summary(stopped: stop)?.hasPrefix("Scanning stopped") == true,
+                       stopped.summary(stopped: stop) ?? "nothing")
         }
-
-        var late = fresh
-        _ = late.record(.interrupted(.timedOut))
-        Check.that("a run that timed out resumes by itself when the capture turns up",
-                   late.record(.delivered(documents: 1, pages: 1)) == .scanAgain && late.isRunning,
-                   late.label)
-        var away = fresh
-        _ = away.record(.interrupted(.lostFocus))
-        Check.that("a run that lost focus files a late capture but does not fire the next one",
-                   away.record(.delivered(documents: 1, pages: 1)) == .wait
-                       && !away.isRunning && away.count == 1,
-                   away.label)
     }
 }

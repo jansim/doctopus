@@ -72,32 +72,13 @@ extension SelfTest {
     static func continuousScanning() {
         print("\nCONTINUOUS SCANNING")
         var session = ScanSession(device: "iPhone", action: "Scan Documents", destination: nil)
-        Check.that("a run starts with nothing scanned, and running",
-                   session.count == 0 && session.isRunning, session.label)
+        Check.that("a run starts with nothing scanned",
+                   session.count == 0, session.label)
         session.received(1, pages: 1)
         session.received(1, pages: 3)
         Check.that("each capture counts the documents it carried",
                    session.count == 2, session.label)
         Check.that("…and the pages inside them, which is what a short scan shows up in",
                    session.pages == 4 && session.label.contains("4 pages"), session.label)
-        session.suspend(.lostFocus)
-        Check.that("losing focus pauses the run and keeps the count",
-                   !session.isRunning && session.count == 2, session.label)
-        session.received(1, pages: 1)
-        Check.that("a capture that lands after focus went is still filed, and the run stays paused",
-                   session.count == 3 && !session.isRunning)
-        session.resume()
-        Check.that("resuming carries on from the count it had",
-                   session.isRunning && session.count == 3)
-        session.suspend(.timedOut)
-        session.received(1, pages: 1)
-        Check.that("a capture that arrives late un-pauses a run that had given up on it",
-                   session.isRunning && session.count == 4, session.label)
-        session.suspend(.deviceGone)
-        Check.that("a device that left says so rather than just “paused”",
-                   session.paused?.summary == "Device gone", session.label)
-        session.suspend(.incomplete)
-        Check.that("a run that lost part of a capture stops and says so rather than scanning on",
-                   !session.isRunning && session.paused?.summary == "Incomplete", session.label)
     }
 }

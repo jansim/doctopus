@@ -53,19 +53,16 @@ which is what the router wants — a multi-page document is the device scanner's
 own job and still arrives as a single PDF. The toolbar shows how many have come
 in and stops the run with one click.
 
-A run pauses rather than fails when it cannot go on — Doctopus stopped being
-the frontmost app (a capture is handed to the key window, so there would be
-nowhere to put one), nothing came back, a capture could not be read, or the
-device left the room — and keeps its count and its destination, so Resume
-(⌥⌘S) picks it up exactly where it was. A capture already in flight when the
-run stops is still filed.
-
-A cancel is different: a capture called off on the device, or in the system's
-own panel, comes back as a reply with nothing in it, and that ends the run the
-way the toolbar's stop button does — nothing re-arms, the toolbar clears, and
-the next run starts from nothing. A reply offering only what cannot be read is
-a failure instead, and pauses. A cancel the device never reports back looks
-like any other silence, and pauses once the round times out.
+A run never pauses. Whatever stops a round stops the run — Doctopus stopped
+being the frontmost app (a capture is handed to the key window, so there would
+be nowhere to put one), nothing came back, a capture could not be read, the
+device left the room, or the capture was cancelled on the device or in the
+system's own panel, which comes back as a reply with nothing in it. Nothing
+re-arms, the toolbar clears and says why the run ended and how far it got, and
+the next run starts from nothing; starting another is one click away. A
+capture already in flight when the run stops is still filed. A cancel the
+device never reports back looks like any other silence, and ends the run once
+the round times out.
 
 **What a capture is taken as.** A device offers the same capture in several
 forms and lists them in its own order, so the form is chosen by this app's
@@ -81,8 +78,7 @@ it goes when the pasteboard does.
 pasteboard it came on is discarded moments later, and nothing asks the device
 again — so every capture a delivery offered is accounted for against the
 documents that reach the library. A shortfall is an alert on a one-off scan,
-and pauses a continuous run with `Incomplete` in the toolbar rather than
-carrying on into a gap. Each delivery also leaves a record of what was offered,
+and ends a continuous run rather than carrying on into a gap. Each delivery also leaves a record of what was offered,
 what was taken and how many pages it held:
 
 ```bash
