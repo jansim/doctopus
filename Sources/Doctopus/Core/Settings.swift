@@ -59,6 +59,10 @@ struct LibrarySettings: StoredSettings, Sendable, Equatable {
     var namingEnforcement: Naming.Enforcement = .manual
     var filenameUnderscoresForSpaces = false
     var filenameASCIIOnly = false
+    /// A scan arrives as “Scan <time>”, a name nobody chose, so naming it by
+    /// the template takes nothing from anyone — unlike the enforcement levels,
+    /// which reach files people named.
+    var nameScans = true
     var derivedTemplate: String = "{correspondent}/{year}"
     var autoRouteImports = true
     var deriveWhenNoRule = true

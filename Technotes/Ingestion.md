@@ -224,6 +224,18 @@ Flexible string interpolation templates — `{date}_{correspondent}_{title}.{ext
 for instance: OCR text date, then embedded PDF metadata, then EXIF for images,
 then the file creation date.
 
+### Scans
+
+A scan arrives called `Scan` and the time it came in — a name Doctopus made up,
+not one anybody chose — so it takes the library's template on the way in,
+whichever folder it lands in and whatever the setting below says. Settings ›
+General › *Name new scans by the template* turns this off. A rule's rename
+still comes first when Doctopus files the scan itself; into a chosen folder a
+rule that would rename it is left to point that out, as its folder is. The name
+is recorded as the template's, so at the two highest levels below it follows
+later edits to the document's fields. An import keeps its name: that one was
+somebody's.
+
 ### Holding names to the template
 
 The library's template is the default for Rename…, and Settings › General says

@@ -33,6 +33,9 @@ out what each gets. Concretely:
   it is set to rename automatically — and never one whose name was suppressed.
   Choosing the setting renames nothing; see
   [Holding names to the template](Ingestion.md#holding-names-to-the-template).
+- A scan is named by the template as it arrives, unless that is switched off.
+  Its name was Doctopus's own (`Scan` and the time), so no name anybody chose
+  is lost; see [Scans](Ingestion.md#scans).
 - Move to Trash uses the Trash, never a hard delete, and keeps the index entry
   if trashing fails.
 - Every file change made from the window — a move, a rename, filing, an alias,
