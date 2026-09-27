@@ -71,6 +71,19 @@ final class Workspace {
         windows.first { $0.library?.owns(path: path) == true }
     }
 
+    /// What two URLs for one container share. One Finder hands over for a
+    /// package need not end in a slash, where one from a listing of its
+    /// folder does, and `URL` equality tells the two apart.
+    static func key(_ container: URL) -> String {
+        Store.canonical(container.standardizedFileURL.path)
+    }
+
+    /// The window a library is on its way into, which holds its lock already.
+    func window(opening container: URL) -> AppModel? {
+        let key = Self.key(container)
+        return windows.first { $0.openingContainer.map(Self.key) == key }
+    }
+
     static func existingContainer(in folder: URL) -> URL? {
         (try? FileManager.default.contentsOfDirectory(
             at: folder, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles]))?
@@ -94,12 +107,19 @@ final class Workspace {
 
     /// Brings forward the window already showing the library, or else opens it
     /// in `requester` while that window is still empty, or in a window of its own.
+    ///
+    /// A library already on its way into a window is left to that one: a
+    /// second window would be refused its lock, and close again.
     func open(_ container: URL, from requester: AppModel? = nil) {
         let container = container.standardizedFileURL
-        if let showing = windows.first(where: { $0.library?.container.standardizedFileURL == container }) {
+        let key = Self.key(container)
+        if let showing = windows.first(where: { $0.library.map { lib in Self.key(lib.container) } == key })
+            ?? window(opening: container) {
             showing.bringToFront()
             return
         }
+        // Reopened from last time, as a Finder open at launch often asks for.
+        if isReopening(container) { return }
         if let empty = [requester, current].compactMap({ $0 }).first(where: { $0.isEmpty })
             ?? windows.first(where: { $0.isEmpty }) {
             empty.bringToFront()
@@ -110,14 +130,14 @@ final class Workspace {
     }
 
     func isReopening(_ container: URL) -> Bool {
-        let container = container.standardizedFileURL
-        return reopening.contains { $0.container == container }
+        let key = Self.key(container)
+        return reopening.contains { Self.key($0.container) == key }
     }
 
     /// Called once the reopened library is in its window, or has failed to open.
     func doneReopening(_ container: URL) {
-        let container = container.standardizedFileURL
-        reopening.removeAll { $0.container == container }
+        let key = Self.key(container)
+        reopening.removeAll { Self.key($0.container) == key }
     }
 
     /// Launch opens a single empty window. It takes the first library that was
@@ -158,7 +178,7 @@ final class Workspace {
         guard !terminating else { return }
         let shown = windows.compactMap { $0.library }
         let waiting = reopening.filter { entry in
-            !shown.contains { $0.container.standardizedFileURL == entry.container }
+            !shown.contains { Self.key($0.container) == Self.key(entry.container) }
         }
         Preferences.libraryBookmarks = shown.compactMap { $0.bookmark } + waiting.map(\.bookmark)
     }

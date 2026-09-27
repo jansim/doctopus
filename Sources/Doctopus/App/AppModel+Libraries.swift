@@ -22,12 +22,16 @@ extension AppModel {
         let bookmark = rootBookmark ?? (try? root.bookmarkData(
             includingResourceValuesForKeys: nil, relativeTo: nil))
 
-        isOpening = true
-        defer { isOpening = false }
         // Before the lock is tried: this window's own lock would refuse it.
-        if let other = workspace.window(holdingLockIn: container) {
+        if let other = workspace.window(holdingLockIn: container) ?? workspace.window(opening: container) {
             other.bringToFront()
             return .elsewhere
+        }
+        isOpening = true
+        openingContainer = container
+        defer {
+            isOpening = false
+            openingContainer = nil
         }
         let store: Store
         do {
