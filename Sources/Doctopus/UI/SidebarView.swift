@@ -273,7 +273,7 @@ struct FolderRow: View {
 
     var body: some View {
         Label {
-            HStack(spacing: 4) {
+            HStack(spacing: 2) {
                 if !node.children.isEmpty {
                     Button {
                         if isExpanded {
@@ -285,12 +285,15 @@ struct FolderRow: View {
                         Image(systemName: "chevron.right")
                             .font(.system(size: 9, weight: .bold))
                             .rotationEffect(.degrees(isExpanded ? 90 : 0))
-                            .frame(width: 10)
+                            // A plain button only hit-tests its opaque pixels;
+                            // give the tiny glyph a generous square target.
+                            .frame(width: 16, height: 16)
+                            .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                     .foregroundStyle(.secondary)
                 } else {
-                    Spacer().frame(width: 10)
+                    Spacer().frame(width: 16)
                 }
                 Text(node.name)
                     .lineLimit(1)
