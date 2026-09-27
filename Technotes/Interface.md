@@ -135,8 +135,9 @@ context menu; it only files, never approves or rewrites.
 
 ## Inspector
 
-Full document metadata: extracted dates, assigned tags, the generated summary,
-optimization savings, alias mappings, raw text, all metadata.
+Full document metadata: extracted dates, assigned tags, the generated summary
+(editable, like the title and the note), optimization savings, alias mappings,
+raw text, all metadata.
 
 A title or field typed into is saved with Return. Selecting another document,
 or anything else that takes the field away, before then asks whether to save
