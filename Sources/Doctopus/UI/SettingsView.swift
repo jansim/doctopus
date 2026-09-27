@@ -64,6 +64,10 @@ private struct GeneralSettings: View {
                     Text(model.settings.namingEnforcement.explanation)
                         .font(.caption).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
+                    Toggle("Name new scans by the template", isOn: $model.settings.nameScans)
+                    Text("A scan arrives called “Scan” and the time, so it takes the template’s name as it comes in, whichever folder it lands in. Files you import keep their names.")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                     Toggle("Replace spaces with underscores in filenames",
                            isOn: $model.settings.filenameUnderscoresForSpaces)
                     Toggle("Replace special characters with ASCII in filenames",

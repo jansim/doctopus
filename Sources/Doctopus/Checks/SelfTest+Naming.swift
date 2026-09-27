@@ -146,5 +146,41 @@ extension SelfTest {
         if let arrived { arrivedAutoNamed = (try? await store.namingState(arrived.doc))?.autoNamed == true }
         Check.that("a new arrival is named by the template when renaming automatically",
                    arrived != nil && arrivedAutoNamed, arrived?.filename ?? "not imported")
+
+        func scan(named: Bool, template: String) async -> DocumentRow? {
+            var fresh = bytes
+            fresh.append(Data("\n% scan-\(UUID().uuidString)\n".utf8))
+            let tmp = fm.temporaryDirectory.appendingPathComponent("doctopus-scan-\(UUID().uuidString)")
+            try? fm.createDirectory(at: tmp, withIntermediateDirectories: true)
+            defer { try? fm.removeItem(at: tmp) }
+            let capture = tmp.appendingPathComponent("Scan \(UUID().uuidString.prefix(8)).pdf")
+            guard (try? fresh.write(to: capture)) != nil else { return nil }
+            var settings = AppSettings()
+            settings.llmBackend = .off
+            settings.namingTemplate = template
+            settings.nameScans = named
+            let scanner = Indexer(store: store, intelligence: Intelligence(), settings: settings,
+                                  onProgress: { _ in }, onDataChanged: {})
+            // A chosen folder, and names only when asked: nothing else here would rename it.
+            await scanner.importFiles([capture], into: store.root.appendingPathComponent("Scanned Here"),
+                                      movingSource: true)
+            return ((try? await store.listDocuments(selection: .all, query: SearchQuery(""),
+                                                    sort: .added, ascending: false)) ?? [])
+                .first { $0.filename.hasPrefix(String(template.prefix(while: { $0 != "{" })))
+                    || $0.filename == capture.lastPathComponent }
+        }
+
+        let scanned = await scan(named: true, template: "doctopus-scanned-{original}")
+        var scannedAutoNamed = false
+        if let scanned { scannedAutoNamed = (try? await store.namingState(scanned.doc))?.autoNamed == true }
+        Check.that("a scan into a chosen folder is named by the template, even when names are only changed when asked",
+                   scanned?.filename.hasPrefix("doctopus-scanned-Scan ") == true
+                       && scanned?.url.deletingLastPathComponent().lastPathComponent == "Scanned Here"
+                       && scannedAutoNamed,
+                   scanned?.filename ?? "not scanned")
+
+        let unnamed = await scan(named: false, template: "doctopus-unnamed-{original}")
+        Check.that("a scan keeps the name it arrived with when scans are not to be named",
+                   unnamed.map { $0.filename.hasPrefix("Scan ") } == true, unnamed?.filename ?? "not scanned")
     }
 }

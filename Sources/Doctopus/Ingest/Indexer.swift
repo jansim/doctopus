@@ -215,7 +215,7 @@ actor Indexer {
     /// `found`: new to the index, but already in the library.
     @discardableResult
     func process(documents: [(Int64, String)], phase: String, isImport: Bool,
-                 route: Bool = false, found: Set<Int64> = []) async -> Int {
+                 route: Bool = false, scanned: Bool = false, found: Set<Int64> = []) async -> Int {
         guard !documents.isEmpty else { return 0 }
         let total = documents.count
         var done = 0
@@ -229,6 +229,7 @@ actor Indexer {
             while inFlight < width, let next = iterator.next() {
                 group.addTask { [weak self] in
                     await self?.pipeline(id: next.0, path: next.1, isImport: isImport, route: route,
+                                         scanned: scanned,
                                          isNew: found.contains(next.0))
                 }
                 inFlight += 1
@@ -241,6 +242,7 @@ actor Indexer {
                 if let next = iterator.next() {
                     group.addTask { [weak self] in
                         await self?.pipeline(id: next.0, path: next.1, isImport: isImport, route: route,
+                                         scanned: scanned,
                                          isNew: found.contains(next.0))
                     }
                 }
@@ -255,7 +257,7 @@ actor Indexer {
     /// optimized, and only an import nobody gave a destination is moved.
     @discardableResult
     private func pipeline(id: Int64, path: String, isImport: Bool, route: Bool,
-                          isNew: Bool) async -> String? {
+                          scanned: Bool, isNew: Bool) async -> String? {
         var url = URL(fileURLWithPath: path)
         let name = url.lastPathComponent
         guard FileManager.default.fileExists(atPath: url.path) else {
@@ -366,7 +368,7 @@ actor Indexer {
         if isImport || isNew {
             await self.route(id: id, url: &url, text: extracted.text, findings: findings, insight: insight,
                              moving: isImport && route && settings.autoRouteImports,
-                             chosen: isImport && !route,
+                             chosen: isImport && !route, scanned: isImport && scanned,
                              action: isImport ? .imported : .indexed)
         }
 
@@ -474,10 +476,12 @@ actor Indexer {
         }
     }
 
-    /// Renames and moves only when `moving`.
+    /// Renames and moves only when `moving`, except that a `scanned` file —
+    /// named by Doctopus, not by anyone — takes the template's name wherever
+    /// it lands.
     private func route(id: Int64, url: inout URL, text: String,
                        findings: DocumentAnalyzer.Findings, insight: DocumentInsight?,
-                       moving: Bool, chosen: Bool, action: EventAction) async {
+                       moving: Bool, chosen: Bool, scanned: Bool, action: EventAction) async {
         let decision = await router(for: id).evaluate(
             text: text, filename: url.lastPathComponent, findings: findings, insight: insight,
             currentDirectory: url.deletingLastPathComponent(), tags: await tagNames(of: id))
@@ -490,6 +494,12 @@ actor Indexer {
         }
 
         guard moving else {
+            // Into a chosen folder a rule's name is only a suggestion, like its
+            // folder, and a scan it would rename is left for it to point out.
+            if scanned, settings.nameScans, decision.rename == nil {
+                await nameOnArrival(id: id, url: &url, template: nil, rule: nil,
+                                    decision: decision, findings: findings, insight: insight, action: action)
+            }
             let detail = decision.destination.map {
                 "Suggested “\($0.lastPathComponent)”, left where it is — \(decision.explanation)"
             } ?? decision.explanation
@@ -501,32 +511,13 @@ actor Indexer {
 
         // A rule's name comes first; failing one, a file Doctopus brought in
         // and is filing itself is named by the library's template when names
-        // are enforced automatically.
-        let byTemplate = decision.rename == nil && settings.namingEnforcement == .automatic
-        if let template = decision.rename ?? (byTemplate ? settings.namingTemplate.nilIfBlank : nil) {
-            let rule = byTemplate ? nil : decision.rule
-            let name = Naming.render(template, Naming.Context(
-                date: findings.date,
-                correspondent: decision.setCorrespondent ?? insight?.correspondent ?? findings.correspondent,
-                title: insight?.title ?? findings.title,
-                docType: decision.setDocType ?? insight?.docType ?? findings.docType,
-                language: insight?.language, counter: nil,
-                originalStem: url.deletingPathExtension().lastPathComponent, ext: url.pathExtension,
-                options: settings.namingOptions))
-            var named = name == url.lastPathComponent
-            if !named {
-                do {
-                    url = try await relocate(id, from: url, into: url.deletingLastPathComponent(), named: name,
-                                             action: .renamed, detail: name, rule: rule)
-                    named = true
-                } catch {
-                    try? await store.logProcessing(docID: id, action: action,
-                                                   detail: "Could not rename to “\(name)”: \(error.localizedDescription)",
-                                                   rule: rule,
-                                                   from: url.path, to: url.path, approved: false)
-                }
-            }
-            if byTemplate, named { try? await store.recordAutoName(name, for: id) }
+        // are enforced automatically, or when it is a scan.
+        let byTemplate = decision.rename == nil
+            && (settings.namingEnforcement == .automatic || (scanned && settings.nameScans))
+        if decision.rename != nil || byTemplate {
+            await nameOnArrival(id: id, url: &url, template: decision.rename,
+                                rule: byTemplate ? nil : decision.rule,
+                                decision: decision, findings: findings, insight: insight, action: action)
         }
 
         guard let destination = decision.destination else {
@@ -549,6 +540,38 @@ actor Indexer {
                                            rule: decision.rule,
                                            from: from, to: from, approved: false)
         }
+    }
+
+    /// Renames a file just brought in by `template`, or by the library's own
+    /// when nil — and only then records the name as the template's, so later
+    /// edits keep it in step.
+    private func nameOnArrival(id: Int64, url: inout URL, template: String?, rule: String?,
+                               decision: Router.Decision, findings: DocumentAnalyzer.Findings,
+                               insight: DocumentInsight?, action: EventAction) async {
+        let byTemplate = template == nil
+        guard let template = template ?? settings.namingTemplate.nilIfBlank else { return }
+        let name = Naming.render(template, Naming.Context(
+            date: findings.date,
+            correspondent: decision.setCorrespondent ?? insight?.correspondent ?? findings.correspondent,
+            title: insight?.title ?? findings.title,
+            docType: decision.setDocType ?? insight?.docType ?? findings.docType,
+            language: insight?.language, counter: nil,
+            originalStem: url.deletingPathExtension().lastPathComponent, ext: url.pathExtension,
+            options: settings.namingOptions))
+        var named = name == url.lastPathComponent
+        if !named {
+            do {
+                url = try await relocate(id, from: url, into: url.deletingLastPathComponent(), named: name,
+                                         action: .renamed, detail: name, rule: rule)
+                named = true
+            } catch {
+                try? await store.logProcessing(docID: id, action: action,
+                                               detail: "Could not rename to “\(name)”: \(error.localizedDescription)",
+                                               rule: rule,
+                                               from: url.path, to: url.path, approved: false)
+            }
+        }
+        if byTemplate, named { try? await store.recordAutoName(name, for: id) }
     }
 
     /// Forgets the placement aliases that are no longer on disk. Only the
@@ -802,7 +825,8 @@ actor Indexer {
             }
         }
         await process(documents: inPlace, phase: "Indexing", isImport: false, found: fresh)
-        await process(documents: imported, phase: "Importing", isImport: true, route: route)
+        await process(documents: imported, phase: "Importing", isImport: true, route: route,
+                      scanned: movingSource)
         if route {
             for (id, path) in imported {
                 if let now = try? await store.documentPath(id), now != path { summary.routed += 1 }
