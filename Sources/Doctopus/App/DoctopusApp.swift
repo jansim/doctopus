@@ -265,7 +265,7 @@ struct DoctopusCommands: Commands {
                 .disabled(model.selectedIDs.isEmpty)
             Button("Analyze with Model") { model.analyze(model.selectedRows) }
                 .keyboardShortcut("l", modifiers: [.command, .shift])
-                .disabled(model.selectedIDs.isEmpty || !model.modelStatus.isReady)
+                .disabled(model.selectedIDs.isEmpty)
             Button("Optimize") { model.optimize(model.selectedRows) }
                 .disabled(model.selectedIDs.isEmpty)
             Button("Revert to Original") { model.revertOptimization(model.selectedRows) }

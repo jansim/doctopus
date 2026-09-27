@@ -646,8 +646,13 @@ actor Indexer {
         guard !settings.predictedFields.isEmpty else {
             return AnalyzeSummary(blocked: "Every field is switched off under Suggestions in Settings › Intelligence.")
         }
-        let status = await intelligence.status()
-        guard status.isReady else { return AnalyzeSummary(blocked: status.label) }
+        let status = await intelligence.recheckStatus()
+        guard status.isReady else {
+            let hint = settings.llmBackend == .remote
+                ? "Make sure the server is running and reachable and its details in Settings › Intelligence are right, then try again."
+                : "Check the model in Settings › Intelligence, then try again."
+            return AnalyzeSummary(blocked: "\(status.label). \(hint)")
+        }
         guard !ids.isEmpty else { return AnalyzeSummary() }
 
         cancelled = false

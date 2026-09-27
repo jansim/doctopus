@@ -565,7 +565,6 @@ private struct DocumentMenu: View {
             Button(rows.count == 1 ? "Analyze with Model" : "Analyze \(rows.count) with Model") {
                 model.analyze(rows)
             }
-            .disabled(!model.modelStatus.isReady)
             Button("Optimize") { model.optimize(rows) }
             if rows.contains(where: { $0.originalSize != nil }) {
                 Button("Revert to Original") { model.revertOptimization(rows) }
