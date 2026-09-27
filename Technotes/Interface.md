@@ -71,6 +71,13 @@ Finder's red count of how many documents are going along.
 A high-density list/table with SQLite-backed deep full-text search, token
 filters and sort options.
 
+The gallery, sorted by document date or by when documents were added, is headed
+the way Photos heads its grid: by month, or by year once a library spans years
+and its months average fewer than three documents. Each heading counts its
+documents and stays pinned while its section scrolls under it, so the gallery
+always says where in time it is. Sorted any other way, or ranked by a search,
+it has no headings.
+
 ### Review and assign
 
 In Needs Review and Recently Reviewed the centre pane splits, and the selected

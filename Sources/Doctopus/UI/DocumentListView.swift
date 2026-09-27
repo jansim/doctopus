@@ -356,18 +356,24 @@ private struct DocumentGalleryView: View {
     private var cell: CGFloat { CGFloat(model.settings.galleryThumbnailSize) }
 
     var body: some View {
+        let timeline = Timeline.sections(for: model)
         ScrollView {
             LazyVGrid(columns: [GridItem(.adaptive(minimum: cell, maximum: cell * 1.4), spacing: 18)],
-                      spacing: 20) {
+                      spacing: 20, pinnedViews: .sectionHeaders) {
                 if model.selection == .reviewed {
                     ForEach(ReviewedPeriod.groups(model.documents, now: .now)) { group in
                         Section {
                             cells(group.rows)
                         } header: {
-                            Text(group.period.title)
-                                .font(.headline)
-                                .foregroundStyle(.secondary)
-                                .frame(maxWidth: .infinity, alignment: .leading)
+                            GalleryHeader(title: group.period.title, count: group.rows.count)
+                        }
+                    }
+                } else if !timeline.isEmpty {
+                    ForEach(timeline) { section in
+                        Section {
+                            cells(section.rows)
+                        } header: {
+                            GalleryHeader(title: section.title, count: section.rows.count)
                         }
                     }
                 } else {
@@ -413,6 +419,42 @@ private struct DocumentGalleryView: View {
                                              selection: model.selectedIDs, anchor: selectionAnchor)
         model.selectedIDs = outcome.selection
         selectionAnchor = outcome.anchor
+    }
+}
+
+/// A gallery section's heading. It stays pinned while its section scrolls
+/// underneath, so the gallery always says which month or year is on screen.
+struct GalleryHeader: View {
+    /// Fixed, so a check can find the first row of thumbnails under it.
+    static let height: CGFloat = 32
+
+    let title: String
+    let count: Int
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline) {
+            Text(title)
+                .font(.title3.weight(.semibold))
+            Spacer()
+            Text("\(count) document\(count == 1 ? "" : "s")")
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 18)
+        .frame(maxWidth: .infinity, minHeight: Self.height, maxHeight: Self.height)
+        .background(.bar)
+        // Across the grid's padding too, so thumbnails scrolling under it do not show at its ends.
+        .padding(.horizontal, -18)
+    }
+}
+
+extension Timeline {
+    /// The gallery's sections as the window is sorted and searched right now.
+    @MainActor
+    static func sections(for model: AppModel) -> [Section] {
+        guard !model.selection.isQueueMode, model.selection != .deleted else { return [] }
+        let ranked = model.sort == .relevance && !SearchQuery(model.searchText).terms.isEmpty
+        return sections(model.documents, sort: model.sort, ranked: ranked)
     }
 }
 
