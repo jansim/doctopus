@@ -280,6 +280,36 @@ extension AppModel {
         }
     }
 
+    func mergeFieldValues(_ field: Field, _ values: [String], into name: String) {
+        guard let lib = library, let target = name.nilIfBlank else { return }
+        Task {
+            var n = 0
+            do { n = try await lib.store.mergeFieldValues(field: field, values, into: target) }
+            catch { report(error, "merge into “\(target)”") }
+            if case .field(let key, let value) = selection, key == field.key, values.contains(value) {
+                selection = .field(field.key, target)
+            }
+            refreshAll()
+            reloadDetail()
+            notify("Merged \(values.count) into “\(target)” on \(n) document\(n == 1 ? "" : "s").")
+        }
+    }
+
+    func mergeTags(_ tags: [Tag], into name: String) {
+        guard let lib = library, let target = name.nilIfBlank else { return }
+        Task {
+            let survivor: Int64?
+            do { survivor = try await lib.store.mergeTags(tags.map(\.tagID), into: target) }
+            catch { report(error, "merge into “\(target)”"); refreshAll(); return }
+            if case .tag(let id) = selection, tags.contains(where: { $0.tagID == id }), let survivor {
+                selection = .tag(survivor)
+            }
+            refreshAll()
+            reloadDetail()
+            notify("Merged \(tags.count) tags into “\(target)”.")
+        }
+    }
+
     func setEntityMatch(_ field: Field, value: String, pattern: String) {
         guard let lib = library else { return }
         Task {

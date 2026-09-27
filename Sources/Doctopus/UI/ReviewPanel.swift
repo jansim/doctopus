@@ -162,7 +162,8 @@ private struct GeneratedInfoEditor: View {
                             model.editMetadata(row.id, column: "title", value: $0)
                         }
                         ForEach(model.fields) { field in
-                            EditableRow(field.name, value: row.values[field.key] ?? "") {
+                            EditableRow(field.name, value: row.values[field.key] ?? "",
+                                        suggestions: model.suggestions(for: field)) {
                                 model.setFieldValue(row.id, field: field, value: $0)
                             }
                         }

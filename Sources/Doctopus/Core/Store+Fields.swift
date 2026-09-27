@@ -202,6 +202,25 @@ extension Store {
         return renamed
     }
 
+    /// Folds every one of `values` into `target`, which may be one of them or
+    /// a name nobody uses yet: renaming onto a name already in use merges, so
+    /// this is that, once per value. Returns how many documents now carry a
+    /// different value than they did.
+    @discardableResult
+    func mergeFieldValues(field: Field, _ values: [String], into target: String) throws -> Int {
+        let clean = target.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clean.isEmpty else { return 0 }
+        let before = try facets(field: field).reduce(into: [String: Int]()) {
+            $0[$1.value, default: 0] += $1.count
+        }
+        var moved = 0
+        for value in values where value != clean {
+            try renameFieldValue(field: field, from: value, to: clean)
+            moved += before[value] ?? 0
+        }
+        return moved
+    }
+
     func deleteFieldValue(field: Field, value: String) throws {
         try db.run("DELETE FROM value_icons WHERE field_id=? AND value=?", [.int(field.fieldID), .text(value)])
         if let column = field.builtinColumn {
@@ -263,6 +282,19 @@ extension Store {
         try reconcileImpliedTags(affected)
         try refreshSearchIndex(affected)
         return merged
+    }
+
+    /// Folds every tag in `ids` into the one called `name`, which may be one
+    /// of them or a new name; returns the tag that is left.
+    @discardableResult
+    func mergeTags(_ ids: [Int64], into name: String) throws -> Int64? {
+        guard name.trimmingCharacters(in: .whitespacesAndNewlines).nilIfBlank != nil else { return nil }
+        var survivor: Int64?
+        for id in ids {
+            let kept = try renameTag(id, to: name)
+            if survivor == nil { survivor = kept }
+        }
+        return survivor
     }
 
     func setTagColor(_ id: Int64, _ color: Int64) throws {

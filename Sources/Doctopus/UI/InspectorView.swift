@@ -643,7 +643,7 @@ private struct FieldValueRow: View {
                 }
             }
         default:
-            EditableRow(field.name, value: value) {
+            EditableRow(field.name, value: value, suggestions: model.suggestions(for: field)) {
                 model.setFieldValue(document, field: field, value: $0)
             }
         }
@@ -653,12 +653,15 @@ private struct FieldValueRow: View {
 struct EditableRow: View {
     let label: String
     let value: String
+    var suggestions: [String] = []
     let onCommit: (String?) -> Void
     @State private var draft: String
 
-    init(_ label: String, value: String, onCommit: @escaping (String?) -> Void) {
+    init(_ label: String, value: String, suggestions: [String] = [],
+         onCommit: @escaping (String?) -> Void) {
         self.label = label
         self.value = value
+        self.suggestions = suggestions
         self.onCommit = onCommit
         self._draft = State(initialValue: value)
     }
@@ -667,6 +670,7 @@ struct EditableRow: View {
         InfoRow(label, alignment: .center) {
             TextField("", text: $draft, prompt: Text("—"))
                 .textFieldStyle(.plain)
+                .valueSuggestions(suggestions, for: draft, current: value)
                 .onSubmit { if draft != value { onCommit(draft) } }
                 .onChange(of: value) { old, new in if draft == old { draft = new } }
         }

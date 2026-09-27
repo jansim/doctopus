@@ -39,7 +39,7 @@ extension UITest {
         Check.that("Recently Reviewed's carry none", checkboxes["Recently Reviewed"] == 0, said)
     }
 
-    private static func tables(in view: NSView) -> [NSTableView] {
+    static func tables(in view: NSView) -> [NSTableView] {
         ((view as? NSTableView).map { [$0] } ?? []) + view.subviews.flatMap { tables(in: $0) }
     }
 

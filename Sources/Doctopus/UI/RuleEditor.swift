@@ -299,6 +299,14 @@ private struct ActionRow: View {
     let library: Library
     let remove: () -> Void
 
+    private var knownValues: [String] {
+        switch action.kind {
+        case .setCorrespondent: return (library.facets["correspondent"] ?? []).map(\.value)
+        case .setDocType: return (library.facets["doc_type"] ?? []).map(\.value)
+        default: return []
+        }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
@@ -306,6 +314,7 @@ private struct ActionRow: View {
                     .frame(width: 130, alignment: .leading)
                 TextField("", text: $action.value, prompt: Text(action.kind.placeholder))
                     .font(templateKind != nil ? .system(.body, design: .monospaced) : .body)
+                    .valueSuggestions(knownValues, for: action.value)
                     .onChange(of: action.value) { _, value in
                         guard templateKind == .filename, value.contains("/") else { return }
                         action.value = value.filter { $0 != "/" }

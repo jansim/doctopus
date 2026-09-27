@@ -100,10 +100,21 @@ final class AppModel {
     var fields: [Field] { library?.fields ?? [] }
     var tagNames: [String] { tags.map(\.name) }
     var facets: [String: [Facet]] { library?.facets ?? [:] }
+
+    /// What a field's editor offers as it is typed into: the values already
+    /// in use, most used first. A number or a date is not picked from a list.
+    func suggestions(for field: Field) -> [String] {
+        guard field.type == .string || field.type == .select else { return [] }
+        return (facets[field.key] ?? []).map(\.value)
+    }
+
     var queue: [ProcessingEntry] { library?.queue ?? [] }
     var stats: Store.Stats { library?.stats ?? Store.Stats() }
 
     var documents: [DocumentRow] = []
+    /// What Library › Metadata lists: `MetadataKind.tags`, or a field's key.
+    var metadataKind = MetadataKind.tags
+
     var selection: Selection = .all {
         didSet {
             guard selection != oldValue else { return }
