@@ -214,6 +214,10 @@ final class AppModel {
 
     var detail: DocumentDetail?
     var sheet: DocumentSheet?
+    /// Values typed into the inspector but never committed with Return, held
+    /// from the moment their field went away until the user saves or discards
+    /// them. Driven by `AppModel+Edits`.
+    var unsavedEdits: [UnsavedEdit] = []
 
     var progress = IndexProgress()
     var modelStatus: LLMStatus = .unsupported("Checking…")

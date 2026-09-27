@@ -72,6 +72,17 @@ struct RootView: View {
         } message: {
             Text(model.errorMessage ?? "")
         }
+        // The fields these came from are gone, so there is nothing to go back
+        // to: the choice is only whether to keep what was typed.
+        .alert(model.unsavedEditsQuestion, isPresented: Binding(
+            get: { !model.unsavedEdits.isEmpty },
+            set: { _ in })
+        ) {
+            Button("Save") { model.saveUnsavedEdits() }
+            Button("Discard", role: .destructive) { model.discardUnsavedEdits() }
+        } message: {
+            Text(model.unsavedEditsExplanation)
+        }
     }
 
     @ToolbarContentBuilder
