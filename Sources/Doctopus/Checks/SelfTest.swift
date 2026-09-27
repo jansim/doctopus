@@ -155,6 +155,7 @@ enum SelfTest {
             await passwordProtectedPDFs(store: store, scanned: scanned.url)
         }
         await filenameEnforcement(store: store)
+        await analyzedFilter(store: store)
 
         Check.finish("pipeline self-test")
     }

@@ -197,7 +197,7 @@ private struct SearchSuggestions: View {
 
     var body: some View {
         if model.searchText.isEmpty {
-            ForEach(["is:review", "is:untagged", "is:duplicate", "is:stale-analysis", "ext:pdf",
+            ForEach(["is:review", "is:untagged", "is:duplicate", "is:stale-analysis", "is:unanalyzed", "ext:pdf",
                      "date:\"this month\"", "date:\(thisYear)"], id: \.self) { token in
                 Text(token).searchCompletion(token)
             }
@@ -228,7 +228,7 @@ private struct SearchSuggestions: View {
         case "tag": candidates = model.tagNames
         case "is": candidates = SearchQuery.flagPredicates.map { $0.names[0] }
         case "ext": candidates = ["pdf", "png", "jpg", "jpeg"]
-        case "date", "created", "added": candidates = ["today", "yesterday", "this week", "last week", "this month", "last month", "this year", "last year", "this quarter", "\(thisYear)", "\(thisYear - 1)"]
+        case "date", "created", "added", "analyzed": candidates = ["today", "yesterday", "this week", "last week", "this month", "last month", "this year", "last year", "this quarter", "\(thisYear)", "\(thisYear - 1)"]
         default:
             let key = SearchQuery.aliases[prefix] ?? prefix
             candidates = (model.facets[key] ?? []).map(\.value)

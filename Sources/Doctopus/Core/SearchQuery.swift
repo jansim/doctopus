@@ -49,6 +49,8 @@ struct SearchQuery: Sendable, Equatable {
             """),
         (["stale-analysis", "stale"],
          "m.source = 'heuristic' OR m.source IS NULL OR m.source NOT LIKE '%:v\(MetadataSource.promptVersion)'"),
+        (["analyzed"], "m.analyzed_at IS NOT NULL"),
+        (["unanalyzed", "not-analyzed"], "m.analyzed_at IS NULL"),
         (["missing"], "d.missing=1"),
         (["trashed", "deleted"], "d.deleted_at IS NOT NULL"),
     ]
@@ -58,7 +60,7 @@ struct SearchQuery: Sendable, Equatable {
     }
 
     static let reserved: Set<String> = [
-        "tag", "finder", "in", "ext", "is", "date", "created", "added", "before", "after", "docdate"
+        "tag", "finder", "in", "ext", "is", "date", "created", "added", "before", "after", "docdate", "analyzed"
     ]
 
     var isEmpty: Bool {
@@ -107,6 +109,10 @@ struct SearchQuery: Sendable, Equatable {
             case "created", "added":
                 if let range = SearchDateParser.parse(value) {
                     dateFilters.append(DateFilter(column: "d.created_at", start: range.start, end: range.end, negated: isNegated))
+                }
+            case "analyzed":
+                if let range = SearchDateParser.parse(value) {
+                    dateFilters.append(DateFilter(column: "m.analyzed_at", start: range.start, end: range.end, negated: isNegated))
                 }
             case "before":
                 if let range = SearchDateParser.parse(value), let cutoff = range.start ?? range.end {

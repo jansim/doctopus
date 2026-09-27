@@ -37,7 +37,7 @@ extension Store {
         try db.transaction {
             try db.run("""
                 UPDATE metadata SET title=NULL, correspondent_id=NULL, doc_type_id=NULL, language=NULL,
-                                    summary=NULL, intent=NULL, amount=NULL, source=NULL,
+                                    summary=NULL, intent=NULL, amount=NULL, source=NULL, analyzed_at=NULL,
                                     doc_date = CASE WHEN date_source='manual' THEN doc_date END,
                                     date_source = CASE WHEN date_source='manual' THEN 'manual' END
                 WHERE doc_id=?
