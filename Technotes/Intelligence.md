@@ -53,8 +53,10 @@ correspondent, summary and tags, in the shape the answer takes and limited to
 the fields being asked for, beside a short excerpt of their text. That is what
 makes a new electricity bill come back as “Stromrechnung” from “Stadtwerke
 München” with the tags the last one got, rather than a fresh spelling of each.
-The model is told to follow their naming but take every fact from the document
-in front of it.
+The prompt template's `{{#examples}}` section tells the model to follow their
+naming but take every fact from the document in front of it; it is switched by
+the setting rather than by whether a given document found any, so the
+instructions stay the same from one document to the next.
 
 Only documents someone has approved in review are eligible — an example the
 model copies from should not be a guess it made last time, and one sent back

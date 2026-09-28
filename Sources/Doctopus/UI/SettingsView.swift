@@ -477,7 +477,7 @@ struct IntelligenceSettings: View {
                 } header: {
                     ScopedHeader(title: "Prompt", scope: .app)
                 } footer: {
-                    Text(verbatim: "Text between {{#summary}} and {{/summary}} is only sent when Summary is checked above — likewise correspondent, documentType, language, intent, title and tags. {{#pageImage}}…{{/pageImage}} is only sent with a page image, {{^pageImage}}…{{/pageImage}} only without one. Keep asking for a JSON object with those keys; the document itself follows in a separate message.")
+                    Text(verbatim: "Text between {{#summary}} and {{/summary}} is only sent when Summary is checked above — likewise correspondent, documentType, language, intent, title and tags. {{#examples}}…{{/examples}} is only sent while examples are on, {{#pageImage}}…{{/pageImage}} only with a page image, {{^pageImage}}…{{/pageImage}} only without one. Keep asking for a JSON object with those keys; the document itself follows in a separate message.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
 
