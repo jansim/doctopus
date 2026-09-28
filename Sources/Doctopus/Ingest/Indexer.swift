@@ -335,7 +335,7 @@ actor Indexer {
         var insight: DocumentInsight?
         if settings.llmBackend != .off, !extracted.text.isEmpty || settings.sendsPageImage {
             let topTags = (try? await store.tags())?.prefix(10).map(\.name) ?? []
-            let examples = (try? await store.filingExamples(for: id)) ?? []
+            let examples = (try? await store.filingExamples(for: id, limit: settings.llmExampleCount)) ?? []
             insight = await intelligence.enrich(text: extracted.text, filename: name, url: url,
                                                 pageCount: extracted.pageCount, candidateTags: topTags,
                                                 examples: examples)
@@ -721,7 +721,7 @@ actor Indexer {
         let text = (try? await store.ocrText(id)) ?? ""
         guard text.count >= LLMPrompt.minimumCharacters || settings.sendsPageImage else { return .skipped }
         let pages = (try? await store.documentPageCount(id)) ?? nil
-        let examples = (try? await store.filingExamples(for: id)) ?? []
+        let examples = (try? await store.filingExamples(for: id, limit: settings.llmExampleCount)) ?? []
         guard let insight = await intelligence.enrich(text: text, filename: name, url: url,
                                                       pageCount: pages, examples: examples)
         else { return .failed }

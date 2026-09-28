@@ -450,6 +450,19 @@ struct IntelligenceSettings: View {
                 }
 
                 Section {
+                    Stepper(value: $model.settings.llmExampleCount, in: 0...5) {
+                        LabeledContent("Examples per document",
+                                       value: model.settings.llmExampleCount == 0
+                                           ? "None" : "\(model.settings.llmExampleCount)")
+                    }
+                } header: {
+                    ScopedHeader(title: "Examples from the Library", scope: .app)
+                } footer: {
+                    Text("Each document is sent with the most similar documents you have approved in review, and how they were filed — title, correspondent, type and tags — so suggestions follow the library's own naming. Documents nobody has reviewed are never used. Their text comes out of the text sent per document rather than adding to it.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+
+                Section {
                     TextEditor(text: promptTemplate)
                         .font(.system(.caption, design: .monospaced))
                         .frame(minHeight: 260)
@@ -464,7 +477,7 @@ struct IntelligenceSettings: View {
                 } header: {
                     ScopedHeader(title: "Prompt", scope: .app)
                 } footer: {
-                    Text(verbatim: "Text between {{#summary}} and {{/summary}} is only sent when Summary is checked above — likewise correspondent, documentType, language, intent, title and tags. {{#pageImage}}…{{/pageImage}} is only sent with a page image, {{^pageImage}}…{{/pageImage}} only without one. Keep asking for a JSON object with those keys; the document itself follows in a separate message.")
+                    Text(verbatim: "Text between {{#summary}} and {{/summary}} is only sent when Summary is checked above — likewise correspondent, documentType, language, intent, title and tags. {{#examples}}…{{/examples}} is only sent while examples are on, {{#pageImage}}…{{/pageImage}} only with a page image, {{^pageImage}}…{{/pageImage}} only without one. Keep asking for a JSON object with those keys; the document itself follows in a separate message.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
 

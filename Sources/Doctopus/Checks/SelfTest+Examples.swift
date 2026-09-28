@@ -6,23 +6,27 @@ import Foundation
 extension SelfTest {
     static func filingExamples(store: Store, rows: [DocumentRow]) async {
         print("\nFILING EXAMPLES")
+        await onlyReviewedExamples(store: store, rows: rows)
+
         var withExamples = 0
         var overLimit: [String] = []
         var ownExample: [String] = []
         var notSimilar: [String] = []
         var nothingFiled: [String] = []
+        var unreviewed: [String] = []
         for row in rows {
             let examples = (try? await store.filingExamples(for: row.doc)) ?? []
-            let similar = Set(((try? await store.similarDocuments(for: row.doc, limit: 6)) ?? []).map(\.doc))
+            let similar = Set(((try? await store.similarDocuments(for: row.doc, limit: 6, reviewedOnly: true)) ?? []).map(\.doc))
             if !examples.isEmpty { withExamples += 1 }
             if examples.count > 2 { overLimit.append(row.filename) }
             if examples.contains(where: { $0.docID == row.doc }) { ownExample.append(row.filename) }
             if !examples.allSatisfy({ similar.contains($0.docID) }) { notSimilar.append(row.filename) }
             if !examples.allSatisfy(\.hasFiling) { nothingFiled.append(row.filename) }
+            if !examples.allSatisfy(\.reviewed) { unreviewed.append(row.filename) }
         }
         Check.that("similar documents are found to show as examples", withExamples > 0,
                    "\(withExamples)/\(rows.count)")
-        Check.that("no more than two examples are shown", overLimit.isEmpty,
+        Check.that("no more than the asked-for number of examples is shown", overLimit.isEmpty,
                    overLimit.joined(separator: ", "))
         Check.that("a document is never its own example", ownExample.isEmpty,
                    ownExample.joined(separator: ", "))
@@ -30,22 +34,15 @@ extension SelfTest {
                    notSimilar.joined(separator: ", "))
         Check.that("an example always has something filed to show", nothingFiled.isEmpty,
                    nothingFiled.joined(separator: ", "))
+        Check.that("only documents someone reviewed are shown as examples", unreviewed.isEmpty,
+                   unreviewed.joined(separator: ", "))
+        var none: [FilingExample] = []
+        for row in rows { none += (try? await store.filingExamples(for: row.doc, limit: 0)) ?? [] }
+        Check.that("asking for no examples finds none", none.isEmpty)
 
-        func example(_ id: Int64, reviewed: Bool = false, approved: Bool = true,
-                     filed: Bool = true) -> FilingExample {
-            FilingExample(docID: id, filename: "\(id).pdf", excerpt: "",
-                          docType: filed ? "Invoice" : nil, reviewed: reviewed, approved: approved)
+        func example(_ id: Int64) -> FilingExample {
+            FilingExample(docID: id, filename: "\(id).pdf", excerpt: "", docType: "Invoice", reviewed: true)
         }
-        let ranked = FilingExample.preferred(
-            [example(1), example(2, filed: false), example(3, reviewed: true),
-             example(4, approved: false), example(5, reviewed: true)], limit: 2)
-        Check.that("a reviewed filing is preferred over a closer unreviewed one",
-                   ranked.map(\.docID) == [3, 5], "\(ranked.map(\.docID))")
-        Check.that("otherwise the more similar document comes first, and one awaiting review last",
-                   FilingExample.preferred([example(1), example(2)], limit: 2).map(\.docID) == [1, 2]
-                       && FilingExample.preferred([example(4, approved: false), example(1)], limit: 2)
-                           .map(\.docID) == [1, 4])
-        await reviewedExampleWins(store: store, rows: rows)
 
         let text = String(repeating: "Abrechnungszeitraum Verbrauch Arbeitspreis Grundpreis ", count: 400)
         let stromrechnung = FilingExample(
@@ -65,9 +62,8 @@ extension SelfTest {
         Check.that("the prompt shows each example's filing",
                    ["Stromrechnung", "Gasrechnung", "Stadtwerke München", "\"Invoice\"",
                     "\"utilities\"", "strom-2025.pdf", "Jahresabrechnung Strom"].allSatisfy { prompt.contains($0) })
-        Check.that("the prompt shows no more than two examples",
-                   prompt.contains("Example 2") && !prompt.contains("Example 3")
-                       && !prompt.contains("Wasserrechnung"))
+        Check.that("the prompt shows every example it is given",
+                   prompt.contains("Example 3") && prompt.contains("Wasserrechnung"))
         let exampleAt = prompt.range(of: "Gasrechnung")?.lowerBound
         let documentAt = prompt.range(of: "Document content")?.lowerBound
         Check.that("the examples come before the document they are examples for",
@@ -99,23 +95,28 @@ extension SelfTest {
         }
     }
 
-    /// Marking a less similar candidate as reviewed brings it into the examples.
-    private static func reviewedExampleWins(store: Store, rows: [DocumentRow]) async {
-        let queued = Set((try? await store.reviewDocumentIDs()) ?? [])
+    /// A similar document nobody has reviewed is never an example; approving
+    /// it in review makes it one.
+    private static func onlyReviewedExamples(store: Store, rows: [DocumentRow]) async {
         for row in rows {
-            let candidates = (try? await store.filingExamples(for: row.doc, limit: 6)) ?? []
-            guard candidates.filter(\.reviewed).count < 2,
-                  let target = candidates.dropFirst(2).last(where: {
-                      $0.approved && !$0.reviewed && !queued.contains($0.docID)
+            let shown = Set(((try? await store.filingExamples(for: row.doc, limit: 6)) ?? []).map(\.docID))
+            let reviewed = Set(((try? await store.similarDocuments(for: row.doc, limit: 50, reviewedOnly: true)) ?? []).map(\.doc))
+            let similar = (try? await store.similarDocuments(for: row.doc, limit: 6)) ?? []
+            guard shown.count < 6,
+                  let target = similar.first(where: {
+                      !reviewed.contains($0.doc) && !shown.contains($0.doc)
+                          && [$0.title, $0.correspondent, $0.docType].contains { $0?.nilIfBlank != nil }
                   })
             else { continue }
-            try? await store.setDocumentApproved(target.docID, true)
-            let examples = (try? await store.filingExamples(for: row.doc)) ?? []
-            Check.that("a document someone reviewed is taken as an example over a closer one",
-                       examples.contains { $0.docID == target.docID },
+            Check.that("a similar document nobody reviewed is not an example", !shown.contains(target.doc),
+                       "\(target.filename) for \(row.filename)")
+            try? await store.setDocumentApproved(target.doc, true)
+            let examples = (try? await store.filingExamples(for: row.doc, limit: 6)) ?? []
+            Check.that("once reviewed, a similar document is taken as an example",
+                       examples.contains { $0.docID == target.doc },
                        "\(target.filename) for \(row.filename)")
             return
         }
-        Check.that("the fixtures have a less similar document to review", false)
+        Check.that("the fixtures have a similar document nobody has reviewed", false)
     }
 }

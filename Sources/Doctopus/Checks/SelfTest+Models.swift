@@ -117,6 +117,10 @@ extension SelfTest {
         Check.that("the system message tells a vision model to read the page too",
                    LLMPrompt.Question().instructions(withPageImage: true).contains("page image")
                        && !LLMPrompt.Question().instructions().contains("page image"))
+        Check.that("the system message says how to use the examples only while they are on",
+                   LLMPrompt.Question().instructions().contains("follow their naming")
+                       && !LLMPrompt.Question(examples: false).instructions().contains("follow their naming")
+                       && !LLMPrompt.Question(examples: false).instructions().contains("\n\n\n"))
         Check.that("the system message asks for the document's own language",
                    LLMPrompt.Question().instructions().contains("language the document"))
 

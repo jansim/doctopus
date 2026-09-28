@@ -35,6 +35,8 @@ struct AppWideSettings: StoredSettings, Sendable, Equatable {
     var remoteTimeout: Double = 120
     var remoteParallelRequests = 2
     var llmExcerptLimit = 6000
+    /// Reviewed similar documents shown with each question; 0 sends none.
+    var llmExampleCount = 2
     var remoteVision = false
     var remoteVisionImageSize = 1024
     /// Stored as switched-off raw values: new fields start on, and a stale name cannot fail the decode.
