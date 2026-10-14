@@ -25,7 +25,7 @@ enum ReviewedPeriod: Int, CaseIterable, Identifiable, Sendable {
 
     /// The oldest approval Recently Reviewed still lists.
     static func cutoff(before now: Date) -> Date {
-        allCases.last!.start(before: now)
+        lastMonth.start(before: now)
     }
 
     static func of(_ reviewed: Date, now: Date) -> ReviewedPeriod? {

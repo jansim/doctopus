@@ -89,11 +89,12 @@ extension Store {
             let rel = relPath(path)
             if !rel.isEmpty {
                 wheres.append("""
-                    (d.directory = ? OR d.directory LIKE ?
-                     OR EXISTS (SELECT 1 FROM aliases a WHERE a.doc_id = d.id AND a.path LIKE ?))
+                    (d.directory = ? OR d.directory LIKE ? ESCAPE '\\'
+                     OR EXISTS (SELECT 1 FROM aliases a WHERE a.doc_id = d.id AND a.path LIKE ? ESCAPE '\\'))
                     """)
-                args.append(.text(rel)); args.append(.text(rel + "/%"))
-                args.append(.text(rel + "/%"))
+                let below = Store.likeLiteral(rel) + "/%"
+                args.append(.text(rel)); args.append(.text(below))
+                args.append(.text(below))
             }
         case .tag(let tag):
             wheres.append("d.id IN (SELECT doc_id FROM document_tags WHERE tag_id=?)")
@@ -146,8 +147,14 @@ extension Store {
         }
         for v in query.exts           { wheres.append("d.ext = ?");              args.append(.text(v)) }
         for v in query.negatedExts    { wheres.append("d.ext <> ?");             args.append(.text(v)) }
-        for v in query.folders        { wheres.append("d.directory LIKE ?");     args.append(.text("%\(v)%")) }
-        for v in query.negatedFolders { wheres.append("d.directory NOT LIKE ?"); args.append(.text("%\(v)%")) }
+        for v in query.folders {
+            guard let match = Store.folderNameMatch(v) else { continue }
+            wheres.append(match.clause); args.append(contentsOf: match.args)
+        }
+        for v in query.negatedFolders {
+            guard let match = Store.folderNameMatch(v) else { continue }
+            wheres.append("NOT \(match.clause)"); args.append(contentsOf: match.args)
+        }
         for f in query.flags {
             if let p = SearchQuery.flagPredicate(f) { wheres.append("(\(p))") }
         }
@@ -302,7 +309,7 @@ extension Store {
         if let column = field.builtinColumn {
             guard Store.fieldColumns.contains(column) else { return }
             if let idColumn = Store.entityColumns[column] {
-                let comparison = exact ? "e.name = ?" : "e.name LIKE ?"
+                let comparison = exact ? "e.name = ?" : "e.name LIKE ? ESCAPE '\\'"
                 let subquery = """
                     (SELECT e.id FROM entities e
                                       JOIN fields f ON f.id = e.field_id
@@ -317,7 +324,7 @@ extension Store {
                     wheres.append("m.\(idColumn) IN \(subquery)")
                 }
                 args.append(.text(column))
-                args.append(.text(exact ? value : "%\(value)%"))
+                args.append(.text(exact ? value : Store.likeContaining(value)))
                 return
             }
             if exact {
@@ -329,19 +336,45 @@ extension Store {
                 args.append(.text(value))
             } else {
                 if negated {
-                    wheres.append("(m.\(column) IS NULL OR m.\(column) NOT LIKE ?)")
+                    wheres.append("(m.\(column) IS NULL OR m.\(column) NOT LIKE ? ESCAPE '\\')")
                 } else {
-                    wheres.append("m.\(column) LIKE ?")
+                    wheres.append("m.\(column) LIKE ? ESCAPE '\\'")
                 }
-                args.append(.text("%\(value)%"))
+                args.append(.text(Store.likeContaining(value)))
             }
         } else {
-            let comparison = exact ? "v.value = ?" : "v.value LIKE ?"
+            let comparison = exact ? "v.value = ?" : "v.value LIKE ? ESCAPE '\\'"
             let inOrNotIn = negated ? "NOT IN" : "IN"
             wheres.append("d.id \(inOrNotIn) (SELECT v.doc_id FROM field_values v WHERE v.field_id=? AND \(comparison))")
             args.append(.int(field.fieldID))
-            args.append(.text(exact ? value : "%\(value)%"))
+            args.append(.text(exact ? value : Store.likeContaining(value)))
         }
+    }
+
+    /// `LIKE` reads `%` and `_` as wildcards, and both are ordinary characters
+    /// in a folder name or a typed value: `Tax_2026` would also match
+    /// `Tax-2026`. Every pattern built from one goes through here and is
+    /// matched with `ESCAPE '\'`.
+    static func likeLiteral(_ text: String) -> String {
+        text.replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "%", with: "\\%")
+            .replacingOccurrences(of: "_", with: "\\_")
+    }
+
+    static func likeContaining(_ text: String) -> String { "%" + likeLiteral(text) + "%" }
+
+    /// `in:` names a folder rather than a stretch of a path: `in:Tax` finds
+    /// `Tax/` and `Finances/Tax/2026/`, but not `Syntax/` or `Taxes/`.
+    static func folderNameMatch(_ name: String) -> (clause: String, args: [Database.Value])? {
+        let trimmed = name.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard !trimmed.isEmpty else { return nil }
+        let literal = likeLiteral(trimmed)
+        let clause = """
+            (d.directory LIKE ? ESCAPE '\\' OR d.directory LIKE ? ESCAPE '\\'
+             OR d.directory LIKE ? ESCAPE '\\' OR d.directory LIKE ? ESCAPE '\\')
+            """
+        return (clause, [.text(literal), .text(literal + "/%"),
+                         .text("%/" + literal), .text("%/" + literal + "/%")])
     }
 
     func detail(_ id: Int64) throws -> DocumentDetail? {

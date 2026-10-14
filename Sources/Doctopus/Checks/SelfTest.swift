@@ -113,6 +113,7 @@ enum SelfTest {
         await importAFolder(store: store, indexer: indexer, root: root, rows: rows)
         await fileSafety(store: store, indexer: indexer, settings: settings)
         await halfTypedSearches(store: store)
+        await folderMatching(store: store)
         metadataSource()
         scanCaptures()
         continuousScanning()

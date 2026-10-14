@@ -26,6 +26,45 @@ extension SelfTest {
         }
     }
 
+    /// `_` and `%` in a folder name are characters, not wildcards, and `in:`
+    /// names a whole folder. Index rows only: nothing here needs the files.
+    static func folderMatching(store: Store) async {
+        print("\nFOLDER MATCHING")
+        let tag = UUID().uuidString.prefix(6).lowercased()
+        let root = store.root.path
+        let paths = ["Pct_\(tag)/a.pdf", "Pct_\(tag)/Sub/b.pdf", "Pct-\(tag)/c.pdf", "XPct_\(tag)/d.pdf"]
+        var made: [String: Int64] = [:]
+        for rel in paths {
+            let facts = Store.FileFacts(path: root + "/" + rel, size: 1, mtime: .now, created: .now)
+            made[rel] = try? await store.upsertDocument(facts, origin: .inLibrary).id
+        }
+        let ids = made
+        func found(_ selection: Selection, _ query: String) async -> Set<String> {
+            let hits = (try? await store.listDocuments(selection: selection, query: SearchQuery(query),
+                                                       sort: .added, ascending: false)) ?? []
+            let hitIDs = Set(hits.map(\.doc))
+            return Set(ids.filter { hitIDs.contains($0.value) }.map(\.key))
+        }
+
+        let folder = await found(.folder(root + "/Pct_\(tag)"), "")
+        Check.that("a folder with _ in its name lists only its own documents",
+                   folder == ["Pct_\(tag)/a.pdf", "Pct_\(tag)/Sub/b.pdf"], folder.sorted().joined(separator: ", "))
+        let named = await found(.all, "in:Pct_\(tag)")
+        Check.that("in: matches a whole folder name, and what is below it",
+                   named == ["Pct_\(tag)/a.pdf", "Pct_\(tag)/Sub/b.pdf"], named.sorted().joined(separator: ", "))
+        let nested = await found(.all, "in:Sub")
+        Check.that("in: matches a folder at any depth", nested.contains("Pct_\(tag)/Sub/b.pdf"),
+                   nested.sorted().joined(separator: ", "))
+        let fragment = await found(.all, "in:ct_\(tag)")
+        Check.that("in: does not match part of a folder name", fragment.isEmpty,
+                   fragment.sorted().joined(separator: ", "))
+        let negated = await found(.all, "-in:Pct_\(tag)")
+        Check.that("-in: leaves out only that folder",
+                   negated == ["Pct-\(tag)/c.pdf", "XPct_\(tag)/d.pdf"], negated.sorted().joined(separator: ", "))
+
+        for id in ids.values { try? await store.deleteDocument(id) }
+    }
+
     static func halfTypedSearches(store: Store) async {
         print("\nHALF-TYPED SEARCHES")
         // FTS5 rejects a dangling operator outright, and the throw would blank
