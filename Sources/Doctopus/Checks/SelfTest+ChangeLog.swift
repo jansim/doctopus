@@ -90,9 +90,9 @@ extension SelfTest {
             let move = await history().first
             Check.that("a move can be reverted", move?.action == .moved && move?.revert == .file)
             if let move { try? await indexer.revert(move.id) }
+            let recorded = try? await store.documentPath(doc)
             Check.that("reverting it puts the file back",
-                       FileManager.default.fileExists(atPath: original.path)
-                           && (try? await store.documentPath(doc)) == original.path)
+                       FileManager.default.fileExists(atPath: original.path) && recorded == original.path)
             Check.that("…and keeps the move in the history, marked",
                        await history().first { $0.id == move?.id }?.reverted == true)
         }
@@ -103,8 +103,9 @@ extension SelfTest {
         try? await store.change(doc: doc, "Title → kept") { store in
             try store.overwriteMetadataField(doc, column: "title", value: "kept")
         }
+        let after = (try? await store.eventCount()) ?? 0
         Check.that("the log keeps only as many changes as it is set to",
-                   kept == min(5, total) && ((try? await store.eventCount()) ?? 0) == min(5, total + 1),
+                   kept == min(5, total) && after == min(5, total + 1),
                    "\(kept) of \(total) kept")
         try? await store.setHistoryLimit(0)
         try? await store.overwriteMetadataField(doc, column: "title", value: before)
