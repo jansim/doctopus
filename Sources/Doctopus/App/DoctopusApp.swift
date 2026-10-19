@@ -150,6 +150,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             ScanCoordinator.shared.onScanCancelled = { workspace.scanTarget(for: $0)?.scanCancelled() }
             SpacePreview.install { workspace.current?.quickLook() }
             OptionReveal.install { held in workspace.current?.revealingFolders = held }
+            ToolbarSearch.install()
             // Only in a library's own window: Settings and sheets keep their ⌘A.
             SelectAllDocuments.install { key in
                 guard let model = workspace.current, let key, key === model.window else { return false }
