@@ -43,7 +43,7 @@ extension UITest {
         let headed = !Timeline.sections(for: model).isEmpty
         Check.that("the gallery sorted by date is headed by month or year", headed,
                    "sorted by \(model.sort.label)")
-        let top = 18 + (headed ? GalleryHeader.height + 20 : 0)
+        let top = headed ? GalleryHeader.height + 20 : 18
         let middle = NSPoint(x: 18 + cell / 2, y: size.height - (top + cell * 0.65))
         for (where_, point) in [("middle", middle),
                                 ("corner", NSPoint(x: 22, y: size.height - (top + 6)))] {

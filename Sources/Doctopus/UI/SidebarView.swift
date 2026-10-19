@@ -198,9 +198,6 @@ private struct TagRow: View {
     var body: some View {
         Label {
             HStack {
-                if tag.depth > 0 {
-                    Spacer().frame(width: CGFloat(tag.depth) * 11)
-                }
                 Text(tag.name)
                 Spacer()
                 CountBadge(tag.count)
@@ -210,6 +207,8 @@ private struct TagRow: View {
                 .foregroundStyle(TagColor.color(tag.color))
         }
         .dropHighlight(targeted)
+        // Indents the icon along with the name, the way folders are.
+        .padding(.leading, CGFloat(tag.depth) * 11)
         .tag(Selection.tag(tag.id))
         .contextMenu { menu }
         .dropDestination(for: DocumentDragItem.self) { items, _ in
