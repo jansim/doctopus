@@ -6,7 +6,7 @@ import AppKit
 extension UITest {
     /// Asks `ToolbarSearch` rather than posting a keystroke: a local monitor
     /// only sees events the run loop takes off the queue itself.
-    static func commandFFocusesSearch(_ model: AppModel) async {
+    static func searchFieldTakesAndGivesUpFocus(_ model: AppModel) async {
         Check.that("⌘F is taken for the search field",
                    ToolbarSearch.focuses(characters: "f", modifiers: .command))
         Check.that("and ⌘⇧F, ⌥F and a plain F are left alone",
@@ -26,6 +26,17 @@ extension UITest {
         let focused = await settle({ ToolbarSearch.field(in: window)?.currentEditor() != nil }, timeout: 3)
         Check.that("⌘F puts the cursor in it", focused,
                    String(describing: window.firstResponder))
+        guard focused, let field = ToolbarSearch.field(in: window) else { return }
+
+        let onField = field.convert(NSPoint(x: field.bounds.midX, y: field.bounds.midY), to: nil)
+        if field.window === window {
+            ToolbarSearch.clicked(window, at: onField)
+            Check.that("a click on the search field leaves the cursor there", field.currentEditor() != nil)
+        }
+        let layout = window.contentLayoutRect
+        ToolbarSearch.clicked(window, at: NSPoint(x: layout.midX, y: layout.midY))
+        Check.that("a click on a result takes the cursor out of the search field",
+                   field.currentEditor() == nil, String(describing: window.firstResponder))
         window.makeFirstResponder(nil)
     }
 
