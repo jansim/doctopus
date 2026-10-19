@@ -3,9 +3,9 @@ import AppKit
 
 /// A date control that only reports a day once it is finished with. Typing a
 /// date piece by piece would otherwise save, re-file and possibly rename the
-/// document after every digit, so keyboard edits stay a draft until Return or
-/// the field losing focus. A click in the calendar or on the stepper picks a
-/// whole day and goes through at once.
+/// document after every digit, so keyboard edits stay a draft until Return,
+/// which also leaves the field, or the field losing focus. A click in the
+/// calendar or on the stepper picks a whole day and goes through at once.
 struct DayField: NSViewRepresentable {
     let date: Date
     let onCommit: (Date) -> Void
@@ -76,7 +76,9 @@ struct DayField: NSViewRepresentable {
 
         override func keyDown(with event: NSEvent) {
             switch event.keyCode {
-            case 36, 76: commit()                    // Return, Enter
+            case 36, 76:                             // Return, Enter
+                commit()
+                window?.makeFirstResponder(nil)
             case 53:                                 // Escape
                 if let committed { dateValue = committed }
             default:
