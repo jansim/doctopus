@@ -32,10 +32,13 @@ extension SelfTest {
         Check.that("a date set by hand survives the document being read again",
                    reread?.row.docDate == handSet && reread?.dateSource == "manual",
                    "\(reread?.row.docDate.map(DayDate.text) ?? "no date") (\(reread?.dateSource ?? "—"))")
+        Check.that("…while the dates the read found are offered beside it",
+                   reread?.dateCandidates.contains { $0.date != handSet } == true,
+                   "\(reread?.dateCandidates.count ?? 0) offered")
 
         try? await store.overwriteMetadataField(approved.doc, column: "title", value: "Settled in review")
         try? await store.setDocumentApproved(approved.doc, true)
-        Check.that("approving forgets the other dates the extraction offered",
+        Check.that("approving settles the dates that were offered",
                    ((try? await store.dateCandidates(for: approved.doc)) ?? []).isEmpty)
         try? await store.logProcessing(docID: approved.doc, action: .routed, detail: "Rule update",
                                        rule: "Settled check", from: nil, to: nil, approved: false)
@@ -45,8 +48,8 @@ extension SelfTest {
                    settled?.row.title == "Settled in review"
                        && settled?.row.docDate == approved.docDate,
                    "\(settled?.row.title ?? "no title"), \(settled?.row.docDate.map(DayDate.text) ?? "no date")")
-        Check.that("…nor are the dates it offered brought back",
-                   ((try? await store.dateCandidates(for: approved.doc)) ?? []).isEmpty)
+        Check.that("…though what the read found is offered again, for the review to pick from",
+                   settled?.dateCandidates.isEmpty == false, "\(settled?.dateCandidates.count ?? 0) offered")
 
         try? await store.discardGeneratedInfo(approved.doc)
         await indexer.reprocess(ids: [approved.doc])

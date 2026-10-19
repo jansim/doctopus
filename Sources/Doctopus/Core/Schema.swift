@@ -69,8 +69,8 @@ enum Schema {
 
     /// When what a document's metadata row holds was last approved in review,
     /// from when on reading the file again only fills in what is blank, and
-    /// the other dates it offered are forgotten. Documents approved before are
-    /// taken as approved when they were reviewed.
+    /// the dates offered alongside it are settled with it. Documents approved
+    /// before are taken as approved when they were reviewed.
     private static func v31(_ db: Database) throws {
         let tables = Set(try db.map(
             "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('metadata', 'documents', 'date_candidates')") { $0.string(0) })

@@ -59,10 +59,9 @@ extension Indexer {
         var findings = DocumentAnalyzer.analyze(url: url, text: extracted.text,
                                                 fallbackDate: created, knownCorrespondents: known,
                                                 options: await analyzerOptions())
-        // An approved document's date is its own; there is nothing to offer instead.
-        if (try? await store.metadataApproved(id)) != true {
-            try? await store.setDateCandidates(findings.dates, for: id)
-        }
+        // Offered even where the date was chosen already: the review shows them
+        // as alternatives, and only someone picking one changes the date.
+        try? await store.setDateCandidates(findings.dates, for: id)
 
         if let fingerprint = try? await store.classifierTrainingFingerprint() {
             if await classifier.needsTraining(fingerprint: fingerprint),

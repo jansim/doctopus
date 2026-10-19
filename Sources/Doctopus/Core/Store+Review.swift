@@ -38,8 +38,8 @@ extension Store {
     }
 
     /// What was approved is the document's own from then on: reading the file
-    /// again only fills in what is blank, and the other dates the extraction
-    /// offered are forgotten, so there is nothing left to go back to.
+    /// again only fills in what is blank, and the dates offered alongside it
+    /// are settled with it. A later read may offer others, but never picks one.
     private func settleMetadata(where condition: String, _ args: [Database.Value] = [], at when: Date) throws {
         try db.run("UPDATE metadata SET approved_at=? WHERE \(condition)",
                    [.double(when.timeIntervalSince1970)] + args)
