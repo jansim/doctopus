@@ -133,8 +133,13 @@ extension AppModel {
 
     func setRuleSuppressed(_ suppressed: Bool, rule ruleID: Int64, name: String,
                            doc: Int64, in lib: Library) async {
-        do { try await lib.store.setRuleSuppressed(suppressed, rule: ruleID, doc: doc) }
-        catch { report(error, suppressed ? "mark it as an outlier for “\(name)”" : "take it off the outliers of “\(name)”"); return }
+        let detail = suppressed ? "Marked as an outlier for rule “\(name)”"
+                                : "No longer an outlier for rule “\(name)”"
+        do {
+            try await lib.store.change(doc: doc, detail) { store in
+                try store.setRuleSuppressed(suppressed, rule: ruleID, doc: doc)
+            }
+        } catch { report(error, suppressed ? "mark it as an outlier for “\(name)”" : "take it off the outliers of “\(name)”"); return }
         lib.outlierRevision += 1
         // Update now rather than after the debounced pass.
         if var matches = lib.ruleMatches[doc],
@@ -144,9 +149,6 @@ extension AppModel {
             lib.ruleMatches[doc] = matches.isEmpty ? nil : matches
             ruleMatchedDocsChanged()
         }
-        try? await lib.store.logEdit(docID: doc, detail: suppressed
-                                     ? "Marked as an outlier for rule “\(name)”"
-                                     : "No longer an outlier for rule “\(name)”")
         refreshRuleMatches()
         if selection == .outliers(rule: ruleID) {
             reloadDocuments(resetPaging: false)

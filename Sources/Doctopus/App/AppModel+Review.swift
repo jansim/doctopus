@@ -67,8 +67,11 @@ extension AppModel {
     func approveAll() {
         guard let lib = library else { return }
         Task {
-            do { try await lib.store.approveAllPending() }
-            catch { report(error, "approve everything in \(lib.displayName)") }
+            do {
+                try await lib.store.change(doc: nil, "Approved everything waiting for review") { store in
+                    try store.approveAllPending()
+                }
+            } catch { report(error, "approve everything in \(lib.displayName)") }
             refreshAll()
             reloadDetail()
         }
@@ -78,8 +81,11 @@ extension AppModel {
         guard let lib = library else { return }
         Task {
             for row in rows {
-                do { try await lib.store.setDocumentApproved(row.doc, approved) }
-                catch { report(error, "\(approved ? "approve" : "unapprove") “\(row.displayTitle)”") }
+                do {
+                    try await lib.store.change(doc: row.doc, approved ? "Approved" : "Sent back for review") { store in
+                        try store.setDocumentApproved(row.doc, approved)
+                    }
+                } catch { report(error, "\(approved ? "approve" : "unapprove") “\(row.displayTitle)”") }
             }
             refreshAll()
             reloadDetail()
@@ -92,8 +98,11 @@ extension AppModel {
         guard let lib = library else { return }
         Task {
             for row in rows where row.approved && !lib.ruleMatchedDocs.contains(row.doc) {
-                do { try await lib.store.setDocumentApproved(row.doc, false) }
-                catch { report(error, "mark “\(row.displayTitle)” as needing review") }
+                do {
+                    try await lib.store.change(doc: row.doc, "Sent back for review") { store in
+                        try store.setDocumentApproved(row.doc, false)
+                    }
+                } catch { report(error, "mark “\(row.displayTitle)” as needing review") }
             }
             selection = .needsReview
             selectedIDs = Set(rows.map(\.doc))
@@ -106,8 +115,11 @@ extension AppModel {
         Task {
             var failures: [String] = []
             for row in rows {
-                do { try await lib.store.discardGeneratedInfo(row.doc) }
-                catch { failures.append("“\(row.filename)”: \(error.localizedDescription)"); continue }
+                do {
+                    try await lib.store.change(doc: row.doc, "Discarded what was generated") { store in
+                        try store.discardGeneratedInfo(row.doc)
+                    }
+                } catch { failures.append("“\(row.filename)”: \(error.localizedDescription)"); continue }
             }
             refreshAll()
             reloadDetail()
@@ -239,8 +251,11 @@ extension AppModel {
         var kept: String?
         var approved = approve
         if approve {
-            do { try await lib.store.setDocumentApproved(row.doc, true) }
-            catch { approved = false; notAdded.append("approving it: \(error.localizedDescription)") }
+            do {
+                try await lib.store.change(doc: row.doc, "Approved") { store in
+                    try store.setDocumentApproved(row.doc, true)
+                }
+            } catch { approved = false; notAdded.append("approving it: \(error.localizedDescription)") }
             if let version { kept = await keep(version, of: row, in: lib).note }
         }
         if moved || !added.isEmpty || !notes.isEmpty { offerUndo("File", of: [row], since: mark) }
@@ -281,8 +296,11 @@ extension AppModel {
                         notMoved += result.failures
                     }
                 }
-                do { try await lib.store.setDocumentApproved(row.doc, true) }
-                catch { failures.append("“\(row.filename)”: \(error.localizedDescription)"); continue }
+                do {
+                    try await lib.store.change(doc: row.doc, "Approved") { store in
+                        try store.setDocumentApproved(row.doc, true)
+                    }
+                } catch { failures.append("“\(row.filename)”: \(error.localizedDescription)"); continue }
                 if let version = treatment.version { _ = await keep(version, of: row, in: lib) }
             }
             refreshAll()

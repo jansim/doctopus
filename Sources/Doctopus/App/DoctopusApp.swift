@@ -230,6 +230,8 @@ struct DoctopusCommands: Commands {
             Button("Rescan Library") { model.reindex() }
                 .keyboardShortcut("r", modifiers: [.command])
             Button("Verify Library…") { model.verifyLibrary() }
+            Button("Change History…") { model.sheet = .changeHistory }
+                .disabled(model.library == nil)
             Menu("Restore Index") {
                 let backups = model.library?.store.backups() ?? []
                 ForEach(backups) { backup in

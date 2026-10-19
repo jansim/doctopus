@@ -7,6 +7,12 @@ final class Database {
     enum Error: Swift.Error, CustomStringConvertible {
         case open(String)
         case sql(String, String)
+
+        var isForeignKeyFailure: Bool {
+            if case .sql(_, let m) = self { return m.contains("FOREIGN KEY constraint failed") }
+            return false
+        }
+
         var description: String {
             switch self {
             case .open(let m): return "sqlite open failed: \(m)"
@@ -108,7 +114,10 @@ final class Database {
         return out
     }
 
+    /// Inside another transaction it is a savepoint, so a recorded change can
+    /// wrap store methods that keep transactions of their own.
     func transaction<T>(_ body: () throws -> T) throws -> T {
+        guard sqlite3_get_autocommit(handle) != 0 else { return try savepoint(body) }
         try exec("BEGIN IMMEDIATE")
         do {
             let result = try body()
@@ -116,6 +125,21 @@ final class Database {
             return result
         } catch {
             try? exec("ROLLBACK")
+            throw error
+        }
+    }
+
+    /// Undoes only what `body` wrote when it throws, leaving the transaction
+    /// around it to go on.
+    func savepoint<T>(_ body: () throws -> T) throws -> T {
+        try exec("SAVEPOINT nested")
+        do {
+            let result = try body()
+            try exec("RELEASE nested")
+            return result
+        } catch {
+            try? exec("ROLLBACK TO nested")
+            try? exec("RELEASE nested")
             throw error
         }
     }

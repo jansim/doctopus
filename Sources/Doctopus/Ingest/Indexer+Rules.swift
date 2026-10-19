@@ -18,24 +18,26 @@ extension Indexer {
                             deriveWhenNoRule: false)
         for doc in (try? await store.ruleTargets(for: rule, onlyTo: docID)) ?? [] where rule.matches(doc.subject) {
             result.matched += 1
-            if !rule.tagNames.isEmpty {
-                for tag in rule.tagNames {
-                    if let tagID = try? await store.tagID(named: tag) {
-                        try? await store.assign(tag: tagID, to: doc.id, auto: true)
-                    }
-                }
-                result.tagged += 1
-            }
             var url = URL(fileURLWithPath: doc.path)
             var patch = Store.MetadataPatch(docID: doc.id)
             patch.correspondent = rule.setCorrespondent
             patch.docType = rule.setDocType
-            if patch.correspondent != nil || patch.docType != nil {
-                do {
-                    try await store.storeMetadata(patch)
-                    result.metadataUpdated += 1
-                } catch { result.failures.append("“\(url.lastPathComponent)”: \(error.localizedDescription)") }
-            }
+            let tagNames = rule.tagNames
+            let setsMetadata = patch.correspondent != nil || patch.docType != nil
+            // What the rule writes to the index is one change; a move or rename
+            // it makes is logged as its own, as every move is.
+            do {
+                try await store.change(doc: doc.id, "Applied rule “\(rule.name)”") { [patch] store in
+                    for tag in tagNames {
+                        if let tagID = try? store.tagID(named: tag) {
+                            try? store.assign(tag: tagID, to: patch.docID, auto: true)
+                        }
+                    }
+                    if setsMetadata { try store.storeMetadata(patch) }
+                }
+                if !tagNames.isEmpty { result.tagged += 1 }
+                if setsMetadata { result.metadataUpdated += 1 }
+            } catch { result.failures.append("“\(url.lastPathComponent)”: \(error.localizedDescription)") }
 
             let correspondent = rule.setCorrespondent ?? doc.subject.correspondent
             let docType = rule.setDocType ?? doc.subject.docType

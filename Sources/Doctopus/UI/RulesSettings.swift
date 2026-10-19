@@ -152,8 +152,10 @@ struct RulesSettings: View {
         guard let store = model.library?.store else { return }
         Task {
             var id = rule.id
-            do { id = try await store.upsertRule(rule) }
-            catch { model.report(error, "save the rule “\(rule.name)”") }
+            let detail = rule.id == 0 ? "Added the rule “\(rule.name)”" : "Changed the rule “\(rule.name)”"
+            do {
+                id = try await store.change(doc: nil, detail) { store in try store.upsertRule(rule) }
+            } catch { model.report(error, "save the rule “\(rule.name)”") }
             await load()
             selected = id
             rulesChanged()
@@ -180,8 +182,11 @@ struct RulesSettings: View {
     private func remove(_ id: Rule.ID) {
         guard let store = model.library?.store else { return }
         Task {
+            let name = rules.first { $0.id == id }?.name ?? ""
             do {
-                try await store.deleteRule(id)
+                try await store.change(doc: nil, "Deleted the rule “\(name)”") { store in
+                    try store.deleteRule(id)
+                }
                 if selected == id { selected = nil }
             } catch { model.report(error, "delete the rule") }
             await load()
@@ -196,8 +201,13 @@ struct RulesSettings: View {
         guard rules.indices.contains(target) else { return }
         var ordered = rules.map(\.id)
         ordered.swapAt(index, target)
+        let order = ordered
         Task {
-            do { try await store.reorderRules(ordered) } catch { model.report(error, "reorder the rules") }
+            do {
+                try await store.change(doc: nil, "Reordered the rules") { store in
+                    try store.reorderRules(order)
+                }
+            } catch { model.report(error, "reorder the rules") }
             await load()
             selected = id
             rulesChanged()

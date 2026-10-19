@@ -143,6 +143,19 @@ A title or field typed into is saved with Return. Selecting another document,
 or anything else that takes the field away, before then asks whether to save
 what was typed or discard it — the same goes for the fields in review.
 
+### History
+
+The inspector's History lists what happened to the document, newest first,
+and View › Change History lists every change to the library, including those
+to the library as a whole — a tag renamed, a rule edited. Each action is one
+entry, however close together, and any entry with a revert button can be
+taken back on its own: a hand edit, a review decision, what a model or a rule
+wrote, a move, a rename, an alias, an optimization. A revert is itself an
+entry, which can be reverted in turn. What brought a document into the library
+cannot be reverted, since that would delete it, and neither can a Finder tag,
+which lives on the file. How many changes are kept is a library setting;
+by default, all of them.
+
 ## Keyboard
 
 Full keyboard navigation with native Quick Look — Space on any file gives an

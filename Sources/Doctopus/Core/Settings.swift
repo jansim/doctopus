@@ -76,6 +76,8 @@ struct LibrarySettings: StoredSettings, Sendable, Equatable {
     var scanDestination = "Inbox"
     var dateOrder: DateOrder = .automatic
     var ignoredDates = ""
+    /// How many changes the history keeps; 0 keeps every one.
+    var historyLimit = 0
 
     var namingOptions: Naming.Options {
         Naming.Options(underscoresForSpaces: filenameUnderscoresForSpaces, asciiOnly: filenameASCIIOnly)

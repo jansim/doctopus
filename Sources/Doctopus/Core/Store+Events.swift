@@ -4,13 +4,23 @@ extension Store {
 
     static let queueLength = 500
 
+    /// A step of the pipeline, logged whether or not it wrote anything, and
+    /// queued for review.
     func logProcessing(docID: Int64, action: EventAction, detail: String?,
                        rule: String?, from: String?, to: String?, approved: Bool) throws {
-        let eventID = try db.run("""
-            INSERT INTO events(doc_id, at, action, detail, rule, from_path, to_path)
-            VALUES(?,?,?,?,?,?,?)
-            """, [.int(docID), .double(Date().timeIntervalSince1970), .text(action.rawValue), .text(detail),
-                  .text(rule), .text(from), .text(to)])
+        try record(action, doc: docID, detail, rule: rule, from: from, to: to,
+                   queued: approved, always: true) {}
+    }
+
+    /// A step of the pipeline together with everything it writes, as one
+    /// change that can be reverted.
+    @discardableResult
+    func logProcessing<T: Sendable>(docID: Int64, action: EventAction, detail: String?, approved: Bool,
+                                    _ body: @Sendable (isolated Store) throws -> T) throws -> T {
+        try record(action, doc: docID, detail, queued: approved, always: true) { try body(self) }
+    }
+
+    func queue(_ eventID: Int64, docID: Int64, approved: Bool) throws {
         try db.run("INSERT INTO processing(event_id, doc_id, status) VALUES(?,?,?)",
                    [.int(eventID), .int(docID), .bool(approved)])
         if !approved {
@@ -25,38 +35,10 @@ extension Store {
             """, [.int(Store.queueLength - 1)])
     }
 
-    /// Hand edits closer together than this are grouped into one history entry.
-    static let editGroupingWindow: TimeInterval = 5 * 60
-
+    /// A hand edit that wrote nothing `record` keeps — a Finder tag lives on
+    /// the file — so it is on record, but cannot be reverted from the log.
     func logEdit(docID: Int64, detail: String, at now: Date = Date()) throws {
-        if let last = try db.first("""
-            SELECT id, at, action, detail FROM events
-            WHERE doc_id=? ORDER BY at DESC, id DESC LIMIT 1
-            """, [.int(docID)], { (id: $0.int(0), at: $0.double(1),
-                                   action: $0.string(2), detail: $0.stringOrNil(3)) }),
-           last.action == EventAction.edited.rawValue,
-           now.timeIntervalSince1970 - last.at < Store.editGroupingWindow {
-            try db.run("UPDATE events SET at=?, detail=? WHERE id=?",
-                       [.double(now.timeIntervalSince1970),
-                        .text(Self.mergedEditDetail(last.detail, detail)), .int(last.id)])
-            return
-        }
-        try db.run("INSERT INTO events(doc_id, at, action, detail) VALUES(?,?,?,?)",
-                   [.int(docID), .double(now.timeIntervalSince1970),
-                    .text(EventAction.edited.rawValue), .text(detail)])
-    }
-
-    static func mergedEditDetail(_ existing: String?, _ addition: String) -> String {
-        func subject(_ line: String) -> String {
-            if let arrow = line.range(of: " → ") { return String(line[..<arrow.lowerBound]) }
-            if line.hasSuffix(" cleared") { return String(line.dropLast(" cleared".count)) }
-            return line
-        }
-        let key = subject(addition)
-        var lines = (existing ?? "").split(separator: "\n").map(String.init)
-        lines.removeAll { subject($0) == key }
-        lines.append(addition)
-        return lines.joined(separator: "\n")
+        try insertEvent(doc: docID, action: .edited, detail: detail, at: now)
     }
 
     func processingQueue(limit: Int = 200) throws -> [ProcessingEntry] {
@@ -73,19 +55,6 @@ extension Store {
                             detail: $0.stringOrNil(4), rule: $0.stringOrNil(5),
                             fromPath: $0.stringOrNil(6), toPath: $0.stringOrNil(7),
                             approved: $0.bool(8), filename: $0.string(9), missing: $0.bool(10))
-        }
-    }
-
-    func history(for docID: Int64, limit: Int = 200) throws -> [HistoryEvent] {
-        try db.map("""
-            SELECT id, at, action, detail, rule, from_path, to_path
-            FROM events WHERE doc_id=? ORDER BY at DESC, id DESC LIMIT ?
-            """, [.int(docID), .int(limit)]) {
-            HistoryEvent(id: $0.int(0), at: Date(timeIntervalSince1970: $0.double(1)),
-                         action: EventAction(stored: $0.string(2)), detail: $0.stringOrNil(3),
-                         rule: $0.stringOrNil(4),
-                         fromPath: $0.stringOrNil(5).map { absPath($0) },
-                         toPath: $0.stringOrNil(6).map { absPath($0) })
         }
     }
 
@@ -106,10 +75,20 @@ extension Store {
         let actions = EventAction.undoable.map { "'\($0.rawValue)'" }.joined(separator: ", ")
         return try db.first("""
             SELECT id, doc_id, action, from_path, to_path FROM events
-            WHERE doc_id=? AND id>? AND action IN (\(actions))
+            WHERE doc_id=? AND id>? AND action IN (\(actions)) AND reverted_at IS NULL
               AND from_path IS NOT NULL AND to_path IS NOT NULL
             ORDER BY id DESC LIMIT 1
             """, [.int(docID), .int(mark)]) {
+            UndoableEvent(id: $0.int(0), docID: $0.int(1), action: EventAction(stored: $0.string(2)),
+                          from: absPath($0.string(3)), to: absPath($0.string(4)))
+        }
+    }
+
+    func undoableEvent(_ id: Int64) throws -> UndoableEvent? {
+        try db.first("""
+            SELECT id, doc_id, action, from_path, to_path FROM events
+            WHERE id=? AND doc_id IS NOT NULL AND from_path IS NOT NULL AND to_path IS NOT NULL
+            """, [.int(id)]) {
             UndoableEvent(id: $0.int(0), docID: $0.int(1), action: EventAction(stored: $0.string(2)),
                           from: absPath($0.string(3)), to: absPath($0.string(4)))
         }
