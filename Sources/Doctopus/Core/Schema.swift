@@ -7,7 +7,7 @@ enum Schema {
 
     private static let steps: [@Sendable (Database) throws -> Void] = [
         v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19,
-        v20, v21, v22, v23, v24, v25, v26, v27, v28, v29,
+        v20, v21, v22, v23, v24, v25, v26, v27, v28, v29, v30,
     ]
     static var current: Int { steps.count }
 
@@ -35,6 +35,28 @@ enum Schema {
             [.text(table), .text(column)]) { $0.int(0) } ?? 0
         guard present == 0 else { return }
         try db.exec("ALTER TABLE \(table) ADD COLUMN \(column) \(declaration)")
+    }
+
+    /// When what a document's metadata row holds was last approved in review,
+    /// from when on reading the file again only fills in what is blank, and
+    /// the other dates it offered are forgotten. Documents approved before are
+    /// taken as approved when they were reviewed.
+    private static func v30(_ db: Database) throws {
+        let tables = Set(try db.map(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('metadata', 'documents', 'date_candidates')") { $0.string(0) })
+        guard tables.contains("metadata") else { return }
+        try addColumn(db, table: "metadata", column: "approved_at", declaration: "REAL")
+        guard tables.contains("documents") else { return }
+        try db.exec("""
+        UPDATE metadata SET approved_at = (
+            SELECT reviewed_at FROM documents WHERE documents.id = metadata.doc_id)
+        WHERE approved_at IS NULL;
+        """)
+        guard tables.contains("date_candidates") else { return }
+        try db.exec("""
+        DELETE FROM date_candidates
+        WHERE doc_id IN (SELECT doc_id FROM metadata WHERE approved_at IS NOT NULL);
+        """)
     }
 
     /// When a model last answered for a document, so it can be searched by.

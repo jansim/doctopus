@@ -59,7 +59,10 @@ extension Indexer {
         var findings = DocumentAnalyzer.analyze(url: url, text: extracted.text,
                                                 fallbackDate: created, knownCorrespondents: known,
                                                 options: await analyzerOptions())
-        try? await store.setDateCandidates(findings.dates, for: id)
+        // An approved document's date is its own; there is nothing to offer instead.
+        if (try? await store.metadataApproved(id)) != true {
+            try? await store.setDateCandidates(findings.dates, for: id)
+        }
 
         if let fingerprint = try? await store.classifierTrainingFingerprint() {
             if await classifier.needsTraining(fingerprint: fingerprint),
@@ -105,7 +108,8 @@ extension Indexer {
                 docDate: findings.date,
                 dateSource: findings.dateSource,
                 source: insight?.source ?? "heuristic",
-                amount: findings.amount))
+                amount: findings.amount,
+                extracted: true))
         } catch { problems.append("what was read off it could not be saved (\(error.localizedDescription))") }
 
         for tag in (insight?.tags ?? []).prefix(4) {

@@ -84,7 +84,12 @@ extension SelfTest {
                    stored.allSatisfy { $0 == DayDate.startOfDay($0) },
                    "\(stored.count) dates")
 
-        if let subject = rows.first {
+        // An approved document's other dates are forgotten, so the subject is one nobody approved.
+        var unapproved: DocumentRow?
+        for row in rows where (try? await store.metadataApproved(row.doc)) == false {
+            unapproved = row; break
+        }
+        if let subject = unapproved {
             let kept = (try? await store.dateCandidates(for: subject.doc)) ?? []
             print("  \(subject.filename.padded(38)) \(kept.count) candidate(s) kept")
             Check.that("the dates a document offered are kept for the review",

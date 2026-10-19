@@ -176,6 +176,12 @@ suggested folders follow — a misread year fixed in review moves the suggested
 `Finances/Invoices/{year}` with it. A folder chosen when the document came in
 stays first. Neither moves a file; filing is still the review's decision.
 
+What a review approved belongs to the document. When it comes back to review
+— a rule changed, or its file was optimized or changed and is read again — the
+extraction only fills in what is blank, and the other dates it found are not
+offered again. A date set by hand is never replaced by one read off the file.
+Discarding what was generated is how a document is read afresh.
+
 ## OCR
 
 PDFs are read through their embedded text layer first, which is nearly free;
