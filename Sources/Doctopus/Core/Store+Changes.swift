@@ -353,15 +353,29 @@ extension Store {
                   let current = try documentPath(docID) else { return false }
             return Store.canonical(current) != Store.canonical(to)
         case .rows:
-            let rows = try db.map("SELECT tbl, op, old, new FROM event_rows WHERE event_id=?",
+            let rows = try db.map("SELECT tbl, op, old, new FROM event_rows WHERE event_id=? ORDER BY seq DESC",
                                   [.int(eventID)]) {
                 CapturedRow(table: $0.string(0), op: $0.string(1), old: $0.stringOrNil(2), new: $0.stringOrNil(3))
             }
+            // Only how the change left each row counts: a folded edit also
+            // passed through the typo it then fixed.
+            var seen: Set<String> = []
             for row in rows {
+                guard let identity = try identity(of: row), seen.insert(identity).inserted else { continue }
                 if try differsNow(row) { return true }
             }
             return false
         }
+    }
+
+    /// The table and primary key a captured row is about.
+    private func identity(of row: CapturedRow) throws -> String? {
+        guard let json = row.new ?? row.old else { return nil }
+        let keys = try db.map("SELECT name FROM pragma_table_info(?) WHERE pk > 0 ORDER BY pk",
+                              [.text(row.table)]) { $0.string(0) }
+        guard !keys.isEmpty else { return nil }
+        let values = keys.map { "json_extract(?1, '$.\"\($0)\"')" }.joined(separator: ", ")
+        return try db.first("SELECT json_array(\(values))", [.text(json)]) { row.table + $0.string(0) }
     }
 
     /// Columns whose values differ between two captured rows, or that only one has.
