@@ -39,6 +39,20 @@ extension SelfTest {
         Check.that("but a sparse one within a year still by month",
                    Timeline.sections(oneYear, sort: .docDate, ranked: false).count == 2)
 
+        Check.that("grouping by month keeps a sparse library in months",
+                   Timeline.sections(sparse, sort: .docDate, ranked: false, grouping: .month).count == 4)
+        let denseYears = Timeline.sections(dense, sort: .docDate, ranked: false, grouping: .year)
+        Check.that("grouping by year heads a well-filled library by year",
+                   denseYears.map(\.title) == ["2026", "2025"],
+                   denseYears.map(\.title).joined(separator: ", "))
+        Check.that("and keeps the rows in the store's order",
+                   denseYears.flatMap(\.rows).map(\.doc) == dense.map(\.doc))
+        Check.that("no headings when grouping is off",
+                   Timeline.sections(dense, sort: .docDate, ranked: false, grouping: .off).isEmpty)
+        Check.that("nor when grouping by year over rows out of date order",
+                   Timeline.sections([dated(2026, 9, 1), dated(2025, 1, 1), dated(2026, 9, 2)],
+                                     sort: .docDate, ranked: false, grouping: .year).isEmpty)
+
         Check.that("no headings when sorted by name",
                    Timeline.sections(dense, sort: .name, ranked: false).isEmpty)
         Check.that("nor when ranked by a search",
