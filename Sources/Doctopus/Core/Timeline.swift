@@ -5,6 +5,20 @@ enum Timeline {
     /// Below this monthly average, a library spanning years is headed by year.
     static let documentsPerMonth = 3
 
+    /// How the headings are cut; automatic picks month or year by how full the library is.
+    enum Grouping: String, Codable, CaseIterable, Sendable {
+        case automatic, year, month, off
+
+        var label: String {
+            switch self {
+            case .automatic: return "Automatic"
+            case .year: return "Year"
+            case .month: return "Month"
+            case .off: return "None"
+            }
+        }
+    }
+
     struct Key: Hashable, Sendable {
         var year: Int
         /// Nil for a whole year.
@@ -25,7 +39,9 @@ enum Timeline {
     }
 
     /// Empty when the rows are not in date order.
-    static func sections(_ rows: [DocumentRow], sort: SortField, ranked: Bool) -> [Section] {
+    static func sections(_ rows: [DocumentRow], sort: SortField, ranked: Bool,
+                         grouping: Grouping = .automatic) -> [Section] {
+        guard grouping != .off else { return [] }
         let date: (DocumentRow) -> Date
         let calendar: Calendar
         switch sort {
@@ -41,14 +57,19 @@ enum Timeline {
         default:
             return []
         }
+        func byYear() -> [Section]? {
+            runs(rows, by: { Key(year: calendar.component(.year, from: date($0)), month: nil) })
+        }
+        if grouping == .year { return byYear() ?? [] }
         guard let months = runs(rows, by: { row in
             let c = calendar.dateComponents([.year, .month], from: date(row))
             return Key(year: c.year ?? 0, month: c.month)
         }) else { return [] }
+        if grouping == .month { return months }
 
         let years = Set(months.map(\.key.year))
         guard years.count > 1, rows.count < months.count * documentsPerMonth else { return months }
-        return runs(rows, by: { Key(year: calendar.component(.year, from: date($0)), month: nil) }) ?? months
+        return byYear() ?? months
     }
 
     /// Nil when a key recurs, i.e. the rows are not in date order.

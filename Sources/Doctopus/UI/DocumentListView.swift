@@ -455,7 +455,8 @@ extension Timeline {
     static func sections(for model: AppModel) -> [Section] {
         guard !model.selection.isQueueMode, model.selection != .deleted else { return [] }
         let ranked = model.sort == .relevance && !SearchQuery(model.searchText).terms.isEmpty
-        return sections(model.documents, sort: model.sort, ranked: ranked)
+        return sections(model.documents, sort: model.sort, ranked: ranked,
+                        grouping: model.settings.galleryGrouping)
     }
 }
 

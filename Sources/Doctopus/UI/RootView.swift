@@ -192,6 +192,11 @@ private struct SortMenu: View {
             .pickerStyle(.inline)
             if model.viewMode == .gallery {
                 Divider()
+                Picker("Group by", selection: $model.settings.galleryGrouping) {
+                    ForEach(Timeline.Grouping.allCases, id: \.self) { Text($0.label).tag($0) }
+                }
+                .pickerStyle(.inline)
+                Divider()
                 Slider(value: $model.settings.galleryThumbnailSize, in: 90...260) {
                     Text("Thumbnail Size")
                 }

@@ -46,6 +46,7 @@ struct AppWideSettings: StoredSettings, Sendable, Equatable {
     var ocrConcurrency = 0        // 0 = auto
     var viewMode: ViewMode = .list
     var galleryThumbnailSize: Double = 150
+    var galleryGrouping: Timeline.Grouping = .automatic
     var jpegQuality: Double = 0.6
     var targetDPI: Double = 150
 
