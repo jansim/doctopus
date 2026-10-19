@@ -177,9 +177,8 @@ extension AppModel {
             errorMessage = "“\(primary.lastPathComponent)” is outside \(lib.displayName). A document can only be filed within its own library."
             return false
         }
-        let outside = secondaries.filter { !lib.owns(path: $0) }
-        guard outside.isEmpty else {
-            errorMessage = "“\((outside.first! as NSString).lastPathComponent)” is outside \(lib.displayName). A document can only be filed within its own library."
+        if let outside = secondaries.first(where: { !lib.owns(path: $0) }) {
+            errorMessage = "“\((outside as NSString).lastPathComponent)” is outside \(lib.displayName). A document can only be filed within its own library."
             return false
         }
         return true

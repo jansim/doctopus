@@ -376,9 +376,10 @@ struct FilingEditor: View {
         for match in ruleMatches {
             let decision = ruleDecision(for: match)
             let others = decision.toApply.filter { $0.kind != .moveFile }
-            if !others.isEmpty {
-                steps.append(others.count == 1 ? others.first!.label.lowercasedFirst
-                             : "apply \(others.count) changes from “\(match.ruleName)”")
+            if let only = others.first, others.count == 1 {
+                steps.append(only.label.lowercasedFirst)
+            } else if !others.isEmpty {
+                steps.append("apply \(others.count) changes from “\(match.ruleName)”")
             }
             if decision.isPartial { steps.append("leave the rest of “\(match.ruleName)” out") }
         }
