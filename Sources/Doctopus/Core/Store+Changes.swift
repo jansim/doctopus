@@ -116,6 +116,10 @@ extension Store {
         try db.run("DELETE FROM captured_rows WHERE op='update' AND old IS new")
         let captured = try db.first("SELECT COUNT(*) FROM captured_rows") { $0.int(0) } ?? 0
         guard captured > 0 || r.always else { return }
+        if captured > 0, let previous = try foldableEdit(r) {
+            try fold(into: previous, detail: r.detail)
+            return
+        }
         let eventID = try insertEvent(doc: r.docID, action: r.action, detail: r.detail, rule: r.rule,
                                       from: r.from, to: r.to, reverts: r.reverts)
         if captured > 0 {
@@ -128,6 +132,59 @@ extension Store {
         if let approved = r.queued, let docID = r.docID {
             try queue(eventID, docID: docID, approved: approved)
         }
+    }
+
+    // MARK: Folding
+
+    /// A field typed into again sooner than this after the last time joins
+    /// that change, so fixing a typo is not a change of its own.
+    static let editFoldingWindow: TimeInterval = 5 * 60
+
+    /// The hand edit a new one folds into: the last thing logged for the
+    /// document, an edit of the same field, still in effect, with rows to
+    /// revert, and recent enough. Reverting the two together goes back to
+    /// before the first.
+    private func foldableEdit(_ r: Recording, at now: Date = Date())
+        throws -> (id: Int64, detail: String?)? {
+        guard r.action == .edited, let docID = r.docID,
+              let subject = r.detail.flatMap(Self.editSubject) else { return nil }
+        guard let last = try db.first("""
+            SELECT id, at, action, detail, reverted_at IS NULL,
+                   EXISTS (SELECT 1 FROM event_rows r WHERE r.event_id = events.id)
+            FROM events WHERE doc_id=? ORDER BY id DESC LIMIT 1
+            """, [.int(docID)], {
+                (id: $0.int(0), at: $0.double(1), action: $0.string(2), detail: $0.stringOrNil(3),
+                 inEffect: $0.bool(4), hasRows: $0.bool(5))
+            }) else { return nil }
+        let age = now.timeIntervalSince1970 - last.at
+        guard last.action == EventAction.edited.rawValue, last.inEffect, last.hasRows,
+              age >= 0, age < Self.editFoldingWindow,
+              last.detail.flatMap(Self.editSubject) == subject else { return nil }
+        return (last.id, last.detail)
+    }
+
+    private func fold(into previous: (id: Int64, detail: String?), detail: String?) throws {
+        let offset = try db.first("SELECT COALESCE(MAX(seq), 0) FROM event_rows WHERE event_id=?",
+                                  [.int(previous.id)]) { $0.int(0) } ?? 0
+        try db.run("""
+            INSERT INTO event_rows(event_id, seq, tbl, op, old, new)
+            SELECT ?, seq + ?, tbl, op, old, new FROM captured_rows ORDER BY seq
+            """, [.int(previous.id), .int(offset)])
+        try db.run("DELETE FROM captured_rows")
+        // A note added and then edited is, taken together, still a note added.
+        let merged = previous.detail == "Note added" && detail == "Note edited" ? previous.detail : detail
+        try db.run("UPDATE events SET at=?, detail=? WHERE id=?",
+                   [.double(Date().timeIntervalSince1970), .text(merged), .int(previous.id)])
+    }
+
+    /// What a hand edit's line is about — "Title" for "Title → Invoice" or
+    /// "Title cleared" — or nil for an edit that is never folded, such as a tag.
+    nonisolated static func editSubject(_ detail: String) -> String? {
+        let line = detail.split(separator: "\n").first.map(String.init) ?? detail
+        if let arrow = line.range(of: " → ") { return String(line[..<arrow.lowerBound]) }
+        if line.hasSuffix(" cleared") { return String(line.dropLast(" cleared".count)) }
+        if line.hasPrefix("Note ") { return "Note" }
+        return nil
     }
 
     @discardableResult
@@ -283,6 +340,68 @@ extension Store {
         var new: String?
     }
 
+    /// Whether anything a change wrote has been changed again since, so that
+    /// reverting it would take back what came after it too.
+    func changedSince(_ eventID: Int64) throws -> Bool {
+        guard let event = try self.event(eventID), let kind = event.revert else { return false }
+        switch kind {
+        case .optimization:
+            return false
+        case .file:
+            guard ![.aliased, .unfiled].contains(event.action),
+                  let docID = event.docID, let to = event.toPath,
+                  let current = try documentPath(docID) else { return false }
+            return Store.canonical(current) != Store.canonical(to)
+        case .rows:
+            let rows = try db.map("SELECT tbl, op, old, new FROM event_rows WHERE event_id=?",
+                                  [.int(eventID)]) {
+                CapturedRow(table: $0.string(0), op: $0.string(1), old: $0.stringOrNil(2), new: $0.stringOrNil(3))
+            }
+            for row in rows {
+                if try differsNow(row) { return true }
+            }
+            return false
+        }
+    }
+
+    /// Columns whose values differ between two captured rows, or that only one has.
+    private func differingColumns(_ a: String, _ b: String) throws -> [String] {
+        try db.map("""
+            SELECT o.key FROM json_each(?1) o LEFT JOIN json_each(?2) n ON n.key = o.key
+            WHERE n.key IS NULL OR o.type IS NOT n.type OR o.atom IS NOT n.atom
+            """, [.text(a), .text(b)]) { $0.string(0) }
+    }
+
+    /// Whether the row is no longer as this change left it: gone, back, or
+    /// holding something else in a column the change wrote.
+    private func differsNow(_ row: CapturedRow) throws -> Bool {
+        let columns = try db.map("SELECT name, pk FROM pragma_table_info(?)", [.text(row.table)]) {
+            (name: $0.string(0), pk: $0.int(1))
+        }
+        let keys = columns.filter { $0.pk > 0 }.sorted { $0.pk < $1.pk }.map(\.name)
+        guard !keys.isEmpty, let identity = row.new ?? row.old else { return false }
+        let skipped = row.table == "documents" ? Self.fileColumns : []
+        let names = columns.map(\.name).filter { !skipped.contains($0) }
+        let object = "json_object(" + names.map { "'\($0)', \"\($0)\"" }.joined(separator: ", ") + ")"
+        let matching = keys.map { "\"\($0)\" IS json_extract(?1, '$.\"\($0)\"')" }.joined(separator: " AND ")
+        let current = try db.first("SELECT \(object) FROM \"\(row.table)\" WHERE \(matching)",
+                                   [.text(identity)]) { $0.string(0) }
+
+        switch (row.op, row.old, row.new) {
+        case ("delete", _, _):
+            return current != nil
+        case ("insert", _, let new?):
+            guard let current else { return true }
+            return try !differingColumns(current, new).filter { names.contains($0) }.isEmpty
+        case ("update", let old?, let new?):
+            guard let current else { return true }
+            let written = Set(try differingColumns(old, new))
+            return try differingColumns(current, new).contains { written.contains($0) && names.contains($0) }
+        default:
+            return false
+        }
+    }
+
     /// False when the row was skipped, as one whose document or parent is gone.
     private func putBack(_ row: CapturedRow) throws -> Bool {
         let columns = try db.map("SELECT name, pk FROM pragma_table_info(?)", [.text(row.table)]) {
@@ -302,10 +421,7 @@ extension Store {
             return true
 
         case ("update", let old?, let new?):
-            let changed = try db.map("""
-                SELECT o.key FROM json_each(?1) o LEFT JOIN json_each(?2) n ON n.key = o.key
-                WHERE n.key IS NULL OR o.type IS NOT n.type OR o.atom IS NOT n.atom
-                """, [.text(old), .text(new)]) { $0.string(0) }
+            let changed = try differingColumns(old, new)
             let skipped = row.table == "documents" ? Self.fileColumns : []
             let restored = changed.filter { present.contains($0) && !skipped.contains($0) }
             guard !restored.isEmpty else { return false }

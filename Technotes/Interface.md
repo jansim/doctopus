@@ -148,10 +148,15 @@ what was typed or discard it — the same goes for the fields in review.
 The inspector's History lists what happened to the document, newest first,
 and View › Change History lists every change to the library, including those
 to the library as a whole — a tag renamed, a rule edited. Each action is one
-entry, however close together, and any entry with a revert button can be
-taken back on its own: a hand edit, a review decision, what a model or a rule
+entry, except that typing into the same field of the same document again
+within five minutes, with nothing else logged for it in between, joins the
+entry before — a typo fixed is not a change of its own, and reverting the
+entry goes back to before both. Any entry with a revert button can be taken
+back on its own: a hand edit, a review decision, what a model or a rule
 wrote, a move, a rename, an alias, an optimization. A revert is itself an
-entry, which can be reverted in turn. What brought a document into the library
+entry, which can be reverted in turn. Reverting a change whose result has been
+changed again since — the same title edited later — asks first, since it puts
+back how things were before it and so takes the later change back too. What brought a document into the library
 cannot be reverted, since that would delete it, and neither can a Finder tag,
 which lives on the file. How many changes are kept is a library setting;
 by default, all of them.

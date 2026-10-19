@@ -55,6 +55,44 @@ extension SelfTest {
             }
         }
 
+        // A typo fixed straight after is not a change of its own.
+        let titled = await title()
+        func setTitle(_ value: String) async {
+            try? await store.change(doc: doc, "Title → \(value)") { store in
+                try store.overwriteMetadataField(doc, column: "title", value: value)
+            }
+        }
+        await setTitle("Invoice Mrach")
+        let typo = await history()
+        await setTitle("Invoice March")
+        let fixed = await history()
+        Check.that("fixing a typo straight after folds into the edit it fixes",
+                   fixed.count == typo.count && fixed.first?.id == typo.first?.id
+                       && fixed.first?.detail == "Title → Invoice March",
+                   fixed.first?.detail ?? "nothing logged")
+        try? await store.change(doc: doc, "Summary → Checked") { store in
+            try store.overwriteMetadataField(doc, column: "summary", value: "Checked")
+        }
+        await setTitle("Invoice April")
+        let later = await history()
+        Check.that("an edit of the same field after something else is a change of its own",
+                   later.count == fixed.count + 2, "\(later.count) events, was \(fixed.count)")
+
+        if let folded = fixed.first, let latest = later.first, later.count > 1 {
+            let overwritten = (try? await store.changedSince(folded.id)) ?? false
+            let untouched = (try? await store.changedSince(latest.id)) ?? true
+            Check.that("a change whose field was edited again since is said to be changed since",
+                       overwritten && !untouched)
+            try? await indexer.revert(latest.id)
+            try? await indexer.revert(later[1].id)
+            let settled = (try? await store.changedSince(folded.id)) ?? true
+            Check.that("…and is not once the later edit is reverted", !settled)
+            try? await indexer.revert(folded.id)
+            let restored = await title()
+            Check.that("reverting the folded edit goes back to before the typo",
+                       restored == titled, restored ?? "no title")
+        }
+
         // A change to the library as a whole, cascading into documents.
         let tagName = "changelogcheck"
         let tagID = (try? await store.change(doc: nil, "Created tag “\(tagName)”") { store in

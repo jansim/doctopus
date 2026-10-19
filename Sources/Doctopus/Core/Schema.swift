@@ -45,13 +45,23 @@ enum Schema {
     /// relax a NOT NULL in place, so `events` is rebuilt, and `processing`,
     /// which refers to it, with it.
     private static func v30(_ db: Database) throws {
+        let tables = Set(try db.map(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('events', 'processing', 'documents')") { $0.string(0) })
         let rebuilt = try db.first(
             "SELECT COUNT(*) FROM pragma_table_info('events') WHERE name='reverted_at'") { $0.int(0) } ?? 0
-        if rebuilt == 0 {
+        if tables.contains("events"), rebuilt == 0 {
+            let queued = tables.contains("processing")
+            let kept = tables.contains("documents") ? "WHERE doc_id IN (SELECT id FROM documents)" : ""
+            let wanted = ["id", "doc_id", "at", "action", "detail", "rule", "from_path", "to_path"]
+            let present = Set(try db.map("SELECT name FROM pragma_table_info('events')") { $0.string(0) })
+            let copied = wanted.filter(present.contains).joined(separator: ", ")
+            if queued {
+                try db.exec("""
+                CREATE TEMP TABLE processing_v30 AS SELECT id, event_id, doc_id, status FROM processing;
+                DROP TABLE processing;
+                """)
+            }
             try db.exec("""
-            CREATE TEMP TABLE processing_v30 AS SELECT id, event_id, doc_id, status FROM processing;
-            DROP TABLE processing;
-
             CREATE TABLE events_v30 (
                 id          INTEGER PRIMARY KEY,
                 doc_id      INTEGER REFERENCES documents(id) ON DELETE CASCADE,
@@ -64,27 +74,28 @@ enum Schema {
                 reverted_at REAL,
                 reverts     INTEGER  -- the event this one reverted
             );
-            INSERT INTO events_v30(id, doc_id, at, action, detail, rule, from_path, to_path)
-            SELECT id, doc_id, at, action, detail, rule, from_path, to_path FROM events
-            WHERE doc_id IN (SELECT id FROM documents);
+            INSERT INTO events_v30(\(copied)) SELECT \(copied) FROM events \(kept);
             DROP TABLE events;
             ALTER TABLE events_v30 RENAME TO events;
             CREATE INDEX IF NOT EXISTS idx_events_doc ON events(doc_id);
             CREATE INDEX IF NOT EXISTS idx_events_at  ON events(at DESC);
-
-            CREATE TABLE processing (
-                id       INTEGER PRIMARY KEY,
-                event_id INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
-                doc_id   INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
-                status   INTEGER NOT NULL DEFAULT 0 -- 0 needs review, 1 approved
-            );
-            INSERT INTO processing(id, event_id, doc_id, status)
-            SELECT id, event_id, doc_id, status FROM processing_v30
-            WHERE event_id IN (SELECT id FROM events) AND doc_id IN (SELECT id FROM documents);
-            DROP TABLE processing_v30;
-            CREATE INDEX IF NOT EXISTS idx_processing_doc   ON processing(doc_id);
-            CREATE INDEX IF NOT EXISTS idx_processing_event ON processing(event_id);
             """)
+            if queued {
+                try db.exec("""
+                CREATE TABLE processing (
+                    id       INTEGER PRIMARY KEY,
+                    event_id INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+                    doc_id   INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+                    status   INTEGER NOT NULL DEFAULT 0 -- 0 needs review, 1 approved
+                );
+                INSERT INTO processing(id, event_id, doc_id, status)
+                SELECT id, event_id, doc_id, status FROM processing_v30
+                WHERE event_id IN (SELECT id FROM events) \(tables.contains("documents") ? "AND doc_id IN (SELECT id FROM documents)" : "");
+                DROP TABLE processing_v30;
+                CREATE INDEX IF NOT EXISTS idx_processing_doc   ON processing(doc_id);
+                CREATE INDEX IF NOT EXISTS idx_processing_event ON processing(event_id);
+                """)
+            }
         }
         try db.exec("""
         CREATE TABLE IF NOT EXISTS event_rows (

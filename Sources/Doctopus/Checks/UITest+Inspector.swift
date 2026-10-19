@@ -74,6 +74,10 @@ extension UITest {
         Check.that("a summary typed by hand is saved and recorded in the history", summarized,
                    model.detail?.row.summary ?? "no summary")
         if let edit = model.detail?.history.first(where: { $0.detail?.contains(summary) == true }) {
+            final class Asked { var count = 0 }
+            let asked = Asked()
+            AppModel.confirmRevert = { _ in asked.count += 1; return true }
+            defer { AppModel.confirmRevert = AppModel.defaultConfirmRevert }
             await model.revert(edit)
             let reverted = await settle {
                 model.detail?.row.summary == row.summary
@@ -81,6 +85,7 @@ extension UITest {
             }
             Check.that("reverting it from the history puts the summary back", reverted,
                        model.detail?.row.summary ?? "no summary")
+            Check.that("…without asking, since nothing changed it since", asked.count == 0)
         }
 
         model.removeFinderTag(finderTag, from: [row])
