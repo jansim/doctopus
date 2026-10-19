@@ -46,7 +46,9 @@ enum Schema {
             "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('metadata', 'documents', 'date_candidates')") { $0.string(0) })
         guard tables.contains("metadata") else { return }
         try addColumn(db, table: "metadata", column: "approved_at", declaration: "REAL")
-        guard tables.contains("documents") else { return }
+        let reviewed = try db.first(
+            "SELECT COUNT(*) FROM pragma_table_info('documents') WHERE name='reviewed_at'") { $0.int(0) } ?? 0
+        guard tables.contains("documents"), reviewed > 0 else { return }
         try db.exec("""
         UPDATE metadata SET approved_at = (
             SELECT reviewed_at FROM documents WHERE documents.id = metadata.doc_id)
