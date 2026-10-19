@@ -16,6 +16,12 @@ extension UITest {
         guard let field = await poll(timeout: 5, { dayField(in: view) }, until: { $0 != nil }) else {
             Check.that("the date field is on screen", false); return
         }
+        Check.that("the field shows the day it was handed", DayDate.startOfDay(field.dateValue) == start,
+                   DayDate.text(field.dateValue))
+        window.makeFirstResponder(field)
+        window.makeFirstResponder(nil)
+        Check.that("focusing it and leaving without an edit saves nothing", commits.isEmpty,
+                   commits.map(DayDate.text).joined(separator: ", "))
         window.makeFirstResponder(field)
         press(.up, in: field)
         press(.up, in: field)
@@ -36,6 +42,22 @@ extension UITest {
                    commits.map(DayDate.text).joined(separator: ", "))
         window.makeFirstResponder(nil)
         Check.that("and leaving it again saves nothing more", commits.count == 2)
+    }
+
+    /// Opening a document and moving on, which takes its date field off
+    /// screen, is not an edit.
+    static func dateUntouchedSavesNothing() async {
+        var commits: [Date] = []
+        let start = DayDate.startOfDay(Date(timeIntervalSince1970: 1_709_510_400))
+        let (window, view) = host(DayField(date: start) { commits.append($0) },
+                                  size: NSSize(width: 200, height: 40))
+        defer { window.orderOut(nil); yieldFocus() }
+        guard let field = await poll(timeout: 5, { dayField(in: view) }, until: { $0 != nil }) else {
+            Check.that("the date field is on screen", false); return
+        }
+        field.removeFromSuperview()
+        Check.that("a date field going away untouched saves nothing", commits.isEmpty,
+                   commits.map(DayDate.text).joined(separator: ", "))
     }
 
     private enum Key {

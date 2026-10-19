@@ -7,7 +7,7 @@ enum Schema {
 
     private static let steps: [@Sendable (Database) throws -> Void] = [
         v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19,
-        v20, v21, v22, v23, v24, v25, v26, v27, v28, v29, v30,
+        v20, v21, v22, v23, v24, v25, v26, v27, v28, v29, v30, v31,
     ]
     static var current: Int { steps.count }
 
@@ -37,18 +37,47 @@ enum Schema {
         try db.exec("ALTER TABLE \(table) ADD COLUMN \(column) \(declaration)")
     }
 
+    /// A date field briefly saved its picker's starting day, 1 January 2001,
+    /// as a hand-set date on every document it was shown for. Such a date goes
+    /// back to the one the document's text gave, or to none, which the next
+    /// read fills in; the history says so.
+    private static func v30(_ db: Database) throws {
+        guard try hasColumn(db, table: "metadata", column: "date_source") else { return }
+        let broken = "date_source='manual' AND doc_date=978307200"
+        if try hasColumn(db, table: "events", column: "detail") {
+            try db.exec("""
+            INSERT INTO events(doc_id, at, action, detail)
+            SELECT doc_id, CAST(strftime('%s', 'now') AS REAL), 'edited',
+                   'Date → put back, after 1 Jan 2001 was saved by mistake'
+            FROM metadata WHERE \(broken);
+            """)
+        }
+        let candidates = try db.first(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='date_candidates'") { $0.int(0) } ?? 0
+        let best = { (column: String) in
+            candidates > 0
+                ? "(SELECT c.\(column) FROM date_candidates c WHERE c.doc_id = metadata.doc_id ORDER BY c.rank LIMIT 1)"
+                : "NULL"
+        }
+        try db.exec("UPDATE metadata SET doc_date = \(best("date")), date_source = \(best("source")) WHERE \(broken)")
+    }
+
+    private static func hasColumn(_ db: Database, table: String, column: String) throws -> Bool {
+        try db.first("SELECT COUNT(*) FROM pragma_table_info(?) WHERE name=?",
+                     [.text(table), .text(column)]) { $0.int(0) } ?? 0 > 0
+    }
+
     /// When what a document's metadata row holds was last approved in review,
     /// from when on reading the file again only fills in what is blank, and
     /// the other dates it offered are forgotten. Documents approved before are
     /// taken as approved when they were reviewed.
-    private static func v30(_ db: Database) throws {
+    private static func v31(_ db: Database) throws {
         let tables = Set(try db.map(
             "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('metadata', 'documents', 'date_candidates')") { $0.string(0) })
         guard tables.contains("metadata") else { return }
         try addColumn(db, table: "metadata", column: "approved_at", declaration: "REAL")
-        let reviewed = try db.first(
-            "SELECT COUNT(*) FROM pragma_table_info('documents') WHERE name='reviewed_at'") { $0.int(0) } ?? 0
-        guard tables.contains("documents"), reviewed > 0 else { return }
+        guard tables.contains("documents"), try hasColumn(db, table: "documents", column: "reviewed_at")
+        else { return }
         try db.exec("""
         UPDATE metadata SET approved_at = (
             SELECT reviewed_at FROM documents WHERE documents.id = metadata.doc_id)
