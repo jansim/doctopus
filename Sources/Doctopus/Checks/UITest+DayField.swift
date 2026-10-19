@@ -2,8 +2,9 @@ import SwiftUI
 import AppKit
 
 extension UITest {
-    /// Stepping a date with the keyboard is a draft until Return or the field
-    /// losing focus, so a half-typed day never reaches the document.
+    /// Stepping a date with the keyboard is a draft until Return, which also
+    /// leaves the field, or the field losing focus, so a half-typed day never
+    /// reaches the document.
     static func dateCommitsWhenDone() async {
         var commits: [Date] = []
         let start = DayDate.startOfDay(Date(timeIntervalSince1970: 1_709_510_400))
@@ -33,7 +34,9 @@ extension UITest {
         Check.that("Return saves the day once",
                    commits == [DayDate.startOfDay(field.dateValue)],
                    commits.map(DayDate.text).joined(separator: ", "))
+        Check.that("and leaves the field", window.firstResponder !== field)
 
+        window.makeFirstResponder(field)
         press(.up, in: field)
         let stepped = DayDate.startOfDay(field.dateValue)
         window.makeFirstResponder(nil)
