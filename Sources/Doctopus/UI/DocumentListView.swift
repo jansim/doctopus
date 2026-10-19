@@ -357,6 +357,7 @@ private struct DocumentGalleryView: View {
 
     var body: some View {
         let timeline = Timeline.sections(for: model)
+        let headed = model.selection == .reviewed || !timeline.isEmpty
         ScrollView {
             LazyVGrid(columns: [GridItem(.adaptive(minimum: cell, maximum: cell * 1.4), spacing: 18)],
                       spacing: 20, pinnedViews: .sectionHeaders) {
@@ -380,7 +381,10 @@ private struct DocumentGalleryView: View {
                     cells(model.documents)
                 }
             }
-            .padding(18)
+            .padding(.horizontal, 18)
+            .padding(.bottom, 18)
+            // The first header starts flush with the top, not floating below a gap.
+            .padding(.top, headed ? 0 : 18)
         }
         .background {
             Color.clear
