@@ -454,14 +454,16 @@ extension View {
     }
 
     /// Marks a folder ⌥ is pointing out. Quieter than a drop target's, which
-    /// has to win when both apply.
+    /// has to win when both apply. Drawn wider than the row's label, since a
+    /// stroke hugging the icon and name crowds them.
     func revealHighlight(_ active: Bool) -> some View {
         background {
-            RoundedRectangle(cornerRadius: 5)
+            RoundedRectangle(cornerRadius: 6)
                 .strokeBorder(Color.accentColor.opacity(active ? 0.8 : 0), lineWidth: 1.5)
-                .background(RoundedRectangle(cornerRadius: 5)
+                .background(RoundedRectangle(cornerRadius: 6)
                     .fill(Color.accentColor.opacity(active ? 0.12 : 0)))
-                .padding(.horizontal, -4)
+                .padding(.horizontal, -7)
+                .padding(.vertical, -2)
         }
     }
 }
