@@ -290,6 +290,15 @@ private struct TagSettings: View {
                         Text("\(tag.count)")
                             .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                         Button {
+                            model.setTagHighlighted(tag, !tag.highlighted)
+                        } label: {
+                            Image(systemName: tag.highlighted ? "star.fill" : "star")
+                                .foregroundStyle(tag.highlighted ? Color.yellow : Color.secondary)
+                        }
+                        .buttonStyle(.borderless)
+                        .help(tag.highlighted ? "Shown on thumbnails — click to hide"
+                                              : "Show on the thumbnails of its documents")
+                        Button {
                             guard let new = TextPrompt.ask(title: "Rename Tag",
                                                            message: "Renaming to an existing tag merges them.",
                                                            initial: tag.name) else { return }
@@ -309,7 +318,7 @@ private struct TagSettings: View {
             } header: {
                 ScopedHeader(title: "Tags", scope: .library)
             } footer: {
-                Text("Renaming a tag to one that already exists merges the two. Tags can be nested by right-clicking them in the sidebar.")
+                Text("Renaming a tag to one that already exists merges the two. Tags can be nested by right-clicking them in the sidebar. A starred tag is highlighted: it shows on the thumbnails of its documents.")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }

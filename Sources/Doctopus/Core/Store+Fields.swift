@@ -268,6 +268,10 @@ extension Store {
             try db.run("""
                 UPDATE tags SET icon=(SELECT icon FROM tags WHERE id=?) WHERE id=? AND icon IS NULL
                 """, [.int(id), .int(target)])
+            // Either one being highlighted keeps the survivor highlighted.
+            try db.run("""
+                UPDATE tags SET highlighted=1 WHERE id=? AND (SELECT highlighted FROM tags WHERE id=?)=1
+                """, [.int(target), .int(id)])
             try db.run("DELETE FROM tags WHERE id=?", [.int(id)])
             return target
         }
@@ -301,6 +305,10 @@ extension Store {
     func setTagIcon(_ id: Int64, _ icon: String?) throws {
         let clean = icon?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfBlank
         try db.run("UPDATE tags SET icon=? WHERE id=?", [.text(clean), .int(id)])
+    }
+
+    func setTagHighlighted(_ id: Int64, _ highlighted: Bool) throws {
+        try db.run("UPDATE tags SET highlighted=? WHERE id=?", [.bool(highlighted), .int(id)])
     }
 
     func setValueIcon(field: Field, value: String, icon: String?) throws {

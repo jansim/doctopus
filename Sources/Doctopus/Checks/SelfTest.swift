@@ -131,6 +131,7 @@ enum SelfTest {
         await nestedTags(store: store, rows: rows)
         await tagCounts(store: store)
         await tagIcons(store: store)
+        await tagHighlights(store: store)
         await dates(store: store, rows: rows)
         await settledMetadata(store: store, indexer: indexer, rows: rows)
         await revertibleOptimisation(store: store, indexer: indexer, rows: rows)

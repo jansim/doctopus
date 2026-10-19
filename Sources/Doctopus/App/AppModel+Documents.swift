@@ -165,6 +165,15 @@ extension AppModel {
         }
     }
 
+    func setTagHighlighted(_ tag: Tag, _ highlighted: Bool) {
+        guard let lib = library else { return }
+        Task {
+            do { try await lib.store.setTagHighlighted(tag.tagID, highlighted) }
+            catch { report(error, "highlight “\(tag.name)”") }
+            refreshAll()
+        }
+    }
+
     func deleteTag(_ tag: Tag) {
         guard let lib = library else { return }
         Task {

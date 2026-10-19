@@ -517,14 +517,20 @@ private struct GalleryCell: View {
                     }
                 }
                 .overlay(alignment: .topLeading) {
-                    if let queue = row.queue, model.selection == .needsReview {
-                        Toggle("", isOn: Binding(
-                            get: { queue.approved },
-                            set: { model.setApproved([row], $0) }))
-                            .toggleStyle(.checkbox)
-                            .labelsHidden()
-                            .padding(7)
-                            .help(queue.approved ? "Approved" : "Needs review")
+                    VStack(alignment: .leading, spacing: 0) {
+                        if let queue = row.queue, model.selection == .needsReview {
+                            Toggle("", isOn: Binding(
+                                get: { queue.approved },
+                                set: { model.setApproved([row], $0) }))
+                                .toggleStyle(.checkbox)
+                                .labelsHidden()
+                                .padding(7)
+                                .help(queue.approved ? "Approved" : "Needs review")
+                        }
+                        // Clear of the status dot in the opposite corner.
+                        HighlightedTagChips(tags: row.tags)
+                            .frame(maxWidth: width - 24, alignment: .leading)
+                            .padding(.leading, 9).padding(.top, 9)
                     }
                 }
 
