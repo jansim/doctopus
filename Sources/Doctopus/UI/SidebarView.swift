@@ -236,6 +236,8 @@ private struct TagRow: View {
             TagColorItems(tag: tag)
         }
         Button("Change Icon…", action: changeIcon)
+        Toggle("Show on Thumbnails", isOn: Binding(get: { tag.highlighted },
+                                                   set: { model.setTagHighlighted(tag, $0) }))
         Menu("Move Under") {
             Button("Nothing — Top Level") { model.setTagParent(tag, to: nil) }
                 .disabled(tag.parentID == nil)

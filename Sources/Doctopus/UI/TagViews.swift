@@ -52,6 +52,29 @@ struct TagChips: View {
     }
 }
 
+/// The highlighted tags of a document, small enough to sit on its thumbnail.
+struct HighlightedTagChips: View {
+    let tags: [Tag]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            ForEach(Tag.highlighted(in: tags)) { tag in
+                let color = TagColor.color(tag.color)
+                HStack(spacing: 3) {
+                    Image(systemName: tag.icon ?? Tag.defaultIcon)
+                        .font(.system(size: 8, weight: .semibold))
+                    Text(tag.name).font(.caption2.weight(.medium)).lineLimit(1)
+                }
+                .foregroundStyle(.white)
+                .padding(.horizontal, 5).padding(.vertical, 1)
+                .background(color.opacity(0.9), in: Capsule())
+                .shadow(color: .black.opacity(0.2), radius: 1, y: 0.5)
+                .help(tag.path(in: tags))
+            }
+        }
+    }
+}
+
 struct FinderTagChips: View {
     let names: [String]
 

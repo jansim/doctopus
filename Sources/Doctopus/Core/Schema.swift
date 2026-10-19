@@ -7,7 +7,7 @@ enum Schema {
 
     private static let steps: [@Sendable (Database) throws -> Void] = [
         v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19,
-        v20, v21, v22, v23, v24, v25, v26, v27, v28, v29, v30, v31,
+        v20, v21, v22, v23, v24, v25, v26, v27, v28, v29, v30, v31, v32,
     ]
     static var current: Int { steps.count }
 
@@ -112,6 +112,15 @@ enum Schema {
         WHERE analyzed_at IS NULL
           AND (source LIKE 'llm%' OR source LIKE 'remote%' OR source LIKE 'vlm%');
         """)
+    }
+
+    /// Whether a tag shows on the thumbnails of the documents it is on, kept on
+    /// its row with its colour and icon. Existing tags start off not shown.
+    private static func v32(_ db: Database) throws {
+        let present = try db.first(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='tags'") { $0.int(0) } ?? 0
+        guard present > 0 else { return }
+        try addColumn(db, table: "tags", column: "highlighted", declaration: "INTEGER NOT NULL DEFAULT 0")
     }
 
     /// A tag's own icon, on its row like a correspondent's, so a rename, a

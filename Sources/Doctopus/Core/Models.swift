@@ -198,6 +198,8 @@ struct Tag: Identifiable, Hashable, Sendable {
     var color: Int64
     /// An SF Symbol; nil draws `Tag.defaultIcon`.
     var icon: String?
+    /// Shown as a chip on the thumbnails of the documents it is on.
+    var highlighted: Bool = false
     var count: Int = 0
     var parentID: Int64?
     var depth: Int = 0
@@ -221,6 +223,12 @@ struct Tag: Identifiable, Hashable, Sendable {
 
     static func visible(in tags: [Tag]) -> [(tag: Tag, path: String)] {
         tags.filter { !$0.implied }.map { ($0, $0.path(in: tags)) }
+    }
+
+    /// The highlighted tags a thumbnail shows. A highlighted tag carried only
+    /// by implication shows too, since the document is under it all the same.
+    static func highlighted(in tags: [Tag]) -> [Tag] {
+        tags.filter(\.highlighted)
     }
 }
 
