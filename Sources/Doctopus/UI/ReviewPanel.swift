@@ -168,13 +168,10 @@ private struct GeneratedInfoEditor: View {
                             }
                         }
                         InfoRow("Date", alignment: .center) {
-                            DatePicker("", selection: Binding(
-                                get: { row.docDate ?? row.createdAt },
-                                set: { model.setDocumentDate(row.id, $0) }),
-                                displayedComponents: .date)
-                            .labelsHidden()
-                            .datePickerStyle(.compact)
-                            .dayResolution()
+                            DayField(date: row.docDate ?? row.createdAt) {
+                                model.setDocumentDate(row.id, $0)
+                            }
+                            .id(row.id)
                         }
                     }
                     if detail.dateCandidates.count > 1 { dateChoices }

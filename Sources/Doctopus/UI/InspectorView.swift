@@ -124,13 +124,10 @@ private struct DetailInspector: View {
                 }
                 InfoRow("Date", alignment: .center) {
                     HStack(spacing: 5) {
-                        DatePicker("", selection: Binding(
-                            get: { row.docDate ?? row.createdAt },
-                            set: { model.setDocumentDate(row.id, $0) }),
-                            displayedComponents: .date)
-                        .labelsHidden()
-                        .datePickerStyle(.compact)
-                        .dayResolution()
+                        DayField(date: row.docDate ?? row.createdAt) {
+                            model.setDocumentDate(row.id, $0)
+                        }
+                        .id(row.id)
                         if let source = detail.dateSource {
                             Text(dateSourceLabel(source))
                                 .font(.caption2)
@@ -597,14 +594,11 @@ private struct FieldValueRow: View {
         case .date:
             InfoRow(field.name, alignment: .center) {
                 HStack(spacing: 5) {
-                    DatePicker("", selection: Binding(
-                        get: { FieldType.day(from: value) ?? Date() },
-                        set: { model.setFieldValue(document, field: field,
-                                                   value: FieldType.dayFormatter.string(from: $0)) }),
-                        displayedComponents: .date)
-                        .labelsHidden()
-                        .datePickerStyle(.compact)
-                        .dayResolution()
+                    DayField(date: FieldType.day(from: value) ?? Date()) {
+                        model.setFieldValue(document, field: field,
+                                            value: FieldType.dayFormatter.string(from: $0))
+                    }
+                    .id(document)
                     if !value.isEmpty {
                         Button {
                             model.setFieldValue(document, field: field, value: nil)
@@ -696,16 +690,6 @@ struct EditableRow: View {
         guard draft != value, draft != committed else { return }
         let typed = draft, onCommit = onCommit
         model.holdUnsavedEdit(UnsavedEdit(label: label, value: typed) { onCommit(typed) })
-    }
-}
-
-extension View {
-    /// Puts a date control on the same clock the days are stored on. Without
-    /// it, picking 4 March east of Greenwich hands back an instant that is
-    /// still 3 March in UTC, and the day is saved one off.
-    func dayResolution() -> some View {
-        environment(\.timeZone, TimeZone(secondsFromGMT: 0) ?? .gmt)
-            .environment(\.calendar, DayDate.calendar)
     }
 }
 

@@ -53,6 +53,7 @@ enum UITest {
             await sidebarShowsBothTagSystems(model, snapshots: snapshots)
             await handEditsReachTheHistory(model)
             await unsavedEditsAreAskedAbout(model)
+            await dateCommitsWhenDone()
             await tagCountsFollowEdits(model)
             await tagIconsReachTheSidebar(model, snapshots: snapshots)
             await metadataPaneLists(model, snapshots: snapshots)
