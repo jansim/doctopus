@@ -27,7 +27,9 @@ struct DayField: NSViewRepresentable {
         /// the same value does not throw away a draft or flash an old day
         /// while a commit is still on its way.
         private var shown: Date?
-        private var committed = Date()
+        /// Nil until the model has handed in a day: the picker's own starting
+        /// value, 1 January 2001, must never be taken for an edit.
+        private var committed: Date?
         /// Set while a keystroke is being handled, so the change it makes
         /// stays a draft.
         private var typing = false
@@ -59,12 +61,13 @@ struct DayField: NSViewRepresentable {
             committed = day
         }
 
-        private var isDirty: Bool { DayDate.startOfDay(dateValue) != committed }
+        private var isDirty: Bool { committed.map { DayDate.startOfDay(dateValue) != $0 } ?? false }
 
         private func commit() {
             guard isDirty else { return }
-            committed = DayDate.startOfDay(dateValue)
-            onCommit?(committed)
+            let day = DayDate.startOfDay(dateValue)
+            committed = day
+            onCommit?(day)
         }
 
         @objc private func changed() {
@@ -75,7 +78,7 @@ struct DayField: NSViewRepresentable {
             switch event.keyCode {
             case 36, 76: commit()                    // Return, Enter
             case 53:                                 // Escape
-                dateValue = committed
+                if let committed { dateValue = committed }
             default:
                 typing = true
                 defer { typing = false }

@@ -10,6 +10,7 @@ extension Store {
         try db.transaction {
             if approved {
                 try db.run("UPDATE processing SET status=1 WHERE doc_id=?", [.int(docID)])
+                try settleMetadata(where: "doc_id=?", [.int(docID)], at: when)
             } else {
                 try db.run("""
                     UPDATE processing SET status=0
@@ -22,13 +23,33 @@ extension Store {
     }
 
     func approveAllPending() throws {
+        let now = Date()
         try db.transaction {
+            try settleMetadata(where: """
+                doc_id IN (SELECT id FROM documents WHERE approved=0)
+                OR doc_id IN (SELECT doc_id FROM processing WHERE status=0)
+                """, at: now)
             try db.run("""
                 UPDATE documents SET approved=1, reviewed_at=?
                 WHERE approved=0 OR id IN (SELECT doc_id FROM processing WHERE status=0)
-                """, [.double(Date().timeIntervalSince1970)])
+                """, [.double(now.timeIntervalSince1970)])
             try db.run("UPDATE processing SET status=1 WHERE status=0")
         }
+    }
+
+    /// What was approved is the document's own from then on: reading the file
+    /// again only fills in what is blank, and the dates offered alongside it
+    /// are settled with it. A later read may offer others, but never picks one.
+    private func settleMetadata(where condition: String, _ args: [Database.Value] = [], at when: Date) throws {
+        try db.run("UPDATE metadata SET approved_at=? WHERE \(condition)",
+                   [.double(when.timeIntervalSince1970)] + args)
+        try db.run("DELETE FROM date_candidates WHERE \(condition)", args)
+    }
+
+    func metadataApproved(_ docID: Int64) throws -> Bool {
+        try db.first("SELECT approved_at IS NOT NULL FROM metadata WHERE doc_id=?", [.int(docID)]) {
+            $0.bool(0)
+        } ?? false
     }
 
     /// Throws away what the pipeline guessed; hand edits and extracted text stay.

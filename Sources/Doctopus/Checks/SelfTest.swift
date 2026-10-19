@@ -132,6 +132,7 @@ enum SelfTest {
         await tagCounts(store: store)
         await tagIcons(store: store)
         await dates(store: store, rows: rows)
+        await settledMetadata(store: store, indexer: indexer, rows: rows)
         await revertibleOptimisation(store: store, indexer: indexer, rows: rows)
         await typedFields(store: store, rows: rows)
         await notes(store: store, rows: rows)

@@ -59,6 +59,8 @@ extension Indexer {
         var findings = DocumentAnalyzer.analyze(url: url, text: extracted.text,
                                                 fallbackDate: created, knownCorrespondents: known,
                                                 options: await analyzerOptions())
+        // Offered even where the date was chosen already: the review shows them
+        // as alternatives, and only someone picking one changes the date.
         try? await store.setDateCandidates(findings.dates, for: id)
 
         if let fingerprint = try? await store.classifierTrainingFingerprint() {
@@ -105,7 +107,8 @@ extension Indexer {
                 docDate: findings.date,
                 dateSource: findings.dateSource,
                 source: insight?.source ?? "heuristic",
-                amount: findings.amount))
+                amount: findings.amount,
+                extracted: true))
         } catch { problems.append("what was read off it could not be saved (\(error.localizedDescription))") }
 
         for tag in (insight?.tags ?? []).prefix(4) {
