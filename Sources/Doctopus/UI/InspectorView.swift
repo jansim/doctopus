@@ -374,25 +374,8 @@ private struct DetailInspector: View {
     private var historySection: some View {
         Section2("History") {
             ForEach(detail.history.prefix(showAllHistory ? detail.history.count : 6)) { event in
-                HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Image(systemName: event.action.icon)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .frame(width: 14)
-                    VStack(alignment: .leading, spacing: 1) {
-                        HStack(spacing: 5) {
-                            Text(event.action.label).font(.caption).fontWeight(.medium)
-                            Text(event.at.formatted(date: .abbreviated, time: .shortened))
-                                .font(.caption2).foregroundStyle(.tertiary)
-                        }
-                        if let move = event.move(relativeTo: model.library?.root.path ?? "") {
-                            Text(move).font(.caption2).foregroundStyle(.secondary)
-                        } else if let note = event.detail?.nilIfBlank {
-                            Text(note).font(.caption2).foregroundStyle(.secondary)
-                                .lineLimit(event.action == .edited ? 8 : 2)
-                        }
-                    }
-                    Spacer(minLength: 0)
+                HistoryEventRow(event: event, root: model.library?.root.path ?? "") {
+                    await model.revert(event)
                 }
             }
             if detail.history.count > 6 {

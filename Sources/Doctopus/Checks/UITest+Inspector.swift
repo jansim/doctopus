@@ -51,10 +51,15 @@ extension UITest {
         let retitled = await settle { recorded(title) }
         Check.that("a title typed by hand is recorded in the history", retitled)
 
-        Check.that("hand edits made together are grouped into one history entry",
-                   (model.detail?.history.count ?? 0) <= before + 1
+        Check.that("each hand edit is its own history entry",
+                   (model.detail?.history.count ?? 0) >= before + 3
                        && recorded(tag) && recorded(finderTag) && recorded(title),
                    "\(model.detail?.history.count ?? 0) events, was \(before)")
+        let titled = model.detail?.history.first { $0.detail?.contains(title) == true }
+        Check.that("a hand edit can be reverted from the history",
+                   titled?.revert == .rows && model.detail?.history.contains {
+                       $0.detail?.contains(finderTag) == true && $0.revert == nil
+                   } == true)
 
         Check.that("a hand edit does not queue the document for review",
                    model.queue.count <= queueBefore
@@ -68,6 +73,20 @@ extension UITest {
         }
         Check.that("a summary typed by hand is saved and recorded in the history", summarized,
                    model.detail?.row.summary ?? "no summary")
+        if let edit = model.detail?.history.first(where: { $0.detail?.contains(summary) == true }) {
+            final class Asked { var count = 0 }
+            let asked = Asked()
+            AppModel.confirmRevert = { _ in asked.count += 1; return true }
+            defer { AppModel.confirmRevert = AppModel.defaultConfirmRevert }
+            await model.revert(edit)
+            let reverted = await settle {
+                model.detail?.row.summary == row.summary
+                    && model.detail?.history.contains { $0.id == edit.id && $0.reverted } == true
+            }
+            Check.that("reverting it from the history puts the summary back", reverted,
+                       model.detail?.row.summary ?? "no summary")
+            Check.that("…without asking, since nothing changed it since", asked.count == 0)
+        }
 
         model.removeFinderTag(finderTag, from: [row])
         if let added = model.tags.first(where: { $0.name == tag }) {
@@ -83,5 +102,18 @@ extension UITest {
                 $0.title == row.title && $0.summary == row.summary
             } == true
         }
+    }
+
+    static func changeHistoryDraws(_ model: AppModel, snapshots: String?) async {
+        let (window, host) = host(ChangeHistorySheet().environment(model),
+                                  size: NSSize(width: 560, height: 520))
+        defer { window.orderOut(nil) }
+        try? await Task.sleep(for: .seconds(1))
+        if let dir = snapshots { snapshot(host, to: dir + "/change-history.png") }
+        let logged = await model.changeLog(limit: 50)
+        Check.that("the change history lists the library's changes",
+                   logged.contains { $0.action == .edited } && logged.contains { $0.docID == nil },
+                   "\(logged.count) changes")
+        Check.that("the change history draws them", inkedRows(host) > 40, "\(inkedRows(host)) rows with ink")
     }
 }

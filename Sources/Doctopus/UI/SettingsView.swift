@@ -93,6 +93,18 @@ private struct GeneralSettings: View {
                     Text("Days to skip when reading a document's date, as yyyy-MM-dd — the date printed in a letterhead, or a form's revision date, which otherwise gets picked up on every document that uses it.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
+
+                Section("History", scope: .library) {
+                    Picker("Keep", selection: $model.settings.historyLimit) {
+                        Text("Every change").tag(0)
+                        ForEach([1_000, 5_000, 10_000, 50_000], id: \.self) { n in
+                            Text("The last \(n.formatted()) changes").tag(n)
+                        }
+                    }
+                    Text("Every change to this library is kept in View › Change History, where it can be reverted, and is what a document's own history shows. Older changes beyond this many are forgotten for good.")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
 
             Section("Indexing", scope: .app) {

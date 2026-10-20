@@ -8,7 +8,7 @@ import AppKit
 /// Views only ever read this; every mutation funnels through an action here so
 /// there is exactly one place where "disk changed" turns into "UI changed".
 enum DocumentSheet: Identifiable {
-    case rename, addTag, quickOpen
+    case rename, addTag, quickOpen, changeHistory
     case file(DocumentRow)
 
     var id: String {
@@ -16,6 +16,7 @@ enum DocumentSheet: Identifiable {
         case .rename: return "rename"
         case .addTag: return "addTag"
         case .quickOpen: return "quickOpen"
+        case .changeHistory: return "changeHistory"
         case .file(let row): return "file \(row.id)"
         }
     }

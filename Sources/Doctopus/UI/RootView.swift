@@ -48,6 +48,7 @@ struct RootView: View {
             case .rename: RenameSheet()
             case .addTag: AddTagSheet()
             case .quickOpen: QuickSwitcherSheet()
+            case .changeHistory: ChangeHistorySheet()
             case .file(let row): FilingSheet(row: row)
             }
         }

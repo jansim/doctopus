@@ -304,8 +304,45 @@ extension Indexer {
         return undone
     }
 
+    enum RevertError: LocalizedError {
+        case fileNotPutBack
+        case originalNotRestored
+
+        var errorDescription: String? {
+            switch self {
+            case .fileNotPutBack: return "The file could not be put back where it was."
+            case .originalNotRestored: return "The original could not be put back."
+            }
+        }
+    }
+
+    /// Takes back one change from the log, however it has to be: on disk for
+    /// a file that moved, an alias or an optimization, and otherwise through
+    /// the rows it wrote.
+    func revert(_ eventID: Int64) async throws {
+        guard let event = try await store.event(eventID), let kind = event.revert else {
+            throw Store.RevertError.notRevertible
+        }
+        switch kind {
+        case .rows:
+            try await store.revertRows(of: eventID)
+        case .file:
+            guard let undoable = try await store.undoableEvent(eventID) else { throw Store.RevertError.notRevertible }
+            guard await takeBack(undoable, fromTheLog: true) else { throw RevertError.fileNotPutBack }
+        case .optimization:
+            guard let doc = event.docID, await revertOptimization(ids: [doc]).done == 1 else {
+                throw RevertError.originalNotRestored
+            }
+            try await store.markEventReverted(eventID)
+        }
+        onDataChanged()
+    }
+
     /// False when the change could not be put back, which leaves it on record.
-    private func takeBack(_ event: Store.UndoableEvent) async -> Bool {
+    /// Undo takes the change out of the history as if it never happened; a
+    /// revert `fromTheLog` keeps it there, marked, and moves the file from
+    /// wherever it is now, since later changes may have taken it further.
+    private func takeBack(_ event: Store.UndoableEvent, fromTheLog: Bool = false) async -> Bool {
         let moved = URL(fileURLWithPath: event.to)
         let current = (try? await store.documentPath(event.docID)).map { URL(fileURLWithPath: $0) }
         switch event.action {
@@ -321,9 +358,14 @@ extension Indexer {
                 try? await store.recordAlias(docID: event.docID, path: alias.path)
             }
         default:
-            guard FileManager.default.fileExists(atPath: moved.path) else { break }
+            let source = fromTheLog ? (current ?? moved) : moved
+            guard FileManager.default.fileExists(atPath: source.path) else {
+                if fromTheLog { return false }
+                break
+            }
             let original = URL(fileURLWithPath: event.from)
-            guard let target = try? await relocate(event.docID, from: moved,
+            if fromTheLog, source.standardizedFileURL == original.standardizedFileURL { break }
+            guard let target = try? await relocate(event.docID, from: source,
                                                    into: original.deletingLastPathComponent(),
                                                    named: original.lastPathComponent, action: nil, detail: nil)
             else { return false }
@@ -331,6 +373,10 @@ extension Indexer {
                let alias = try? AliasManager.createAlias(to: target, in: moved.deletingLastPathComponent()) {
                 try? await store.recordAlias(docID: event.docID, path: alias.path)
             }
+        }
+        if fromTheLog {
+            do { try await store.markEventReverted(event.id) } catch { return false }
+            return true
         }
         // An event that stays on record would be handed straight back by
         // `lastUndoableEvent`, and `undo` would loop on it forever.

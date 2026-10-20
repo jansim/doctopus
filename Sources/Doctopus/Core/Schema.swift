@@ -7,7 +7,7 @@ enum Schema {
 
     private static let steps: [@Sendable (Database) throws -> Void] = [
         v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19,
-        v20, v21, v22, v23, v24, v25, v26, v27, v28, v29, v30, v31, v32,
+        v20, v21, v22, v23, v24, v25, v26, v27, v28, v29, v30, v31, v32, v33,
     ]
     static var current: Int { steps.count }
 
@@ -87,6 +87,79 @@ enum Schema {
         try db.exec("""
         DELETE FROM date_candidates
         WHERE doc_id IN (SELECT doc_id FROM metadata WHERE approved_at IS NOT NULL);
+        """)
+    }
+
+    /// `events` becomes the library's change log. A change to the library as a
+    /// whole — a tag renamed, a rule edited — belongs to no document, so
+    /// `doc_id` may be empty; a change can be reverted, and is marked when it
+    /// was; and `event_rows` keeps every row a recorded change wrote, as it was
+    /// before and after, which is what reverting it puts back. SQLite cannot
+    /// relax a NOT NULL in place, so `events` is rebuilt, and `processing`,
+    /// which refers to it, with it.
+    private static func v33(_ db: Database) throws {
+        let tables = Set(try db.map(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('events', 'processing', 'documents')") { $0.string(0) })
+        let rebuilt = try db.first(
+            "SELECT COUNT(*) FROM pragma_table_info('events') WHERE name='reverted_at'") { $0.int(0) } ?? 0
+        if tables.contains("events"), rebuilt == 0 {
+            let queued = tables.contains("processing")
+            let kept = tables.contains("documents") ? "WHERE doc_id IN (SELECT id FROM documents)" : ""
+            let wanted = ["id", "doc_id", "at", "action", "detail", "rule", "from_path", "to_path"]
+            let present = Set(try db.map("SELECT name FROM pragma_table_info('events')") { $0.string(0) })
+            let copied = wanted.filter(present.contains).joined(separator: ", ")
+            if queued {
+                try db.exec("""
+                CREATE TEMP TABLE processing_v33 AS SELECT id, event_id, doc_id, status FROM processing;
+                DROP TABLE processing;
+                """)
+            }
+            try db.exec("""
+            CREATE TABLE events_v33 (
+                id          INTEGER PRIMARY KEY,
+                doc_id      INTEGER REFERENCES documents(id) ON DELETE CASCADE,
+                at          REAL NOT NULL,
+                action      TEXT NOT NULL,
+                detail      TEXT,
+                rule        TEXT,
+                from_path   TEXT,
+                to_path     TEXT,
+                reverted_at REAL,
+                reverts     INTEGER  -- the event this one reverted
+            );
+            INSERT INTO events_v33(\(copied)) SELECT \(copied) FROM events \(kept);
+            DROP TABLE events;
+            ALTER TABLE events_v33 RENAME TO events;
+            CREATE INDEX IF NOT EXISTS idx_events_doc ON events(doc_id);
+            CREATE INDEX IF NOT EXISTS idx_events_at  ON events(at DESC);
+            """)
+            if queued {
+                try db.exec("""
+                CREATE TABLE processing (
+                    id       INTEGER PRIMARY KEY,
+                    event_id INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+                    doc_id   INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+                    status   INTEGER NOT NULL DEFAULT 0 -- 0 needs review, 1 approved
+                );
+                INSERT INTO processing(id, event_id, doc_id, status)
+                SELECT id, event_id, doc_id, status FROM processing_v33
+                WHERE event_id IN (SELECT id FROM events) \(tables.contains("documents") ? "AND doc_id IN (SELECT id FROM documents)" : "");
+                DROP TABLE processing_v33;
+                CREATE INDEX IF NOT EXISTS idx_processing_doc   ON processing(doc_id);
+                CREATE INDEX IF NOT EXISTS idx_processing_event ON processing(event_id);
+                """)
+            }
+        }
+        try db.exec("""
+        CREATE TABLE IF NOT EXISTS event_rows (
+            event_id INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+            seq      INTEGER NOT NULL,
+            tbl      TEXT NOT NULL,
+            op       TEXT NOT NULL,  -- 'insert' | 'update' | 'delete'
+            old      TEXT,           -- the row before, as JSON; NULL for an insert
+            new      TEXT,           -- the row after; NULL for a delete
+            PRIMARY KEY (event_id, seq)
+        );
         """)
     }
 

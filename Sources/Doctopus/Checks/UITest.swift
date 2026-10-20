@@ -52,6 +52,7 @@ enum UITest {
             await uiStatePersists(model)
             await sidebarShowsBothTagSystems(model, snapshots: snapshots)
             await handEditsReachTheHistory(model)
+            await changeHistoryDraws(model, snapshots: snapshots)
             await unsavedEditsAreAskedAbout(model)
             await dateCommitsWhenDone()
             await dateUntouchedSavesNothing()

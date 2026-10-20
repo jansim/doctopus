@@ -15,6 +15,12 @@ actor Store {
     // Store+RuleMatches
     var ruleMatchCache = RuleMatchCache()
 
+    // Store+Changes
+    /// The change being recorded, while `record` runs.
+    var recording: Recording?
+    /// How many changes the log keeps; 0 keeps every one.
+    var historyLimit = 0
+
     private let rootPrefix: String
 
     init(directory: URL, lock: LibraryLock? = nil) throws {
@@ -31,6 +37,7 @@ actor Store {
         do { try Schema.migrate(db) } catch is Schema.TooNew {
             throw OpenError.newer(writtenBy: meta.appVersion)
         }
+        try Store.installChangeCapture(db)
         // Stamped only once the index is known to be readable, so a refused
         // library keeps naming the build that can open it.
         if meta.formatVersion != Store.formatVersion || meta.appVersion != Store.appVersion {
@@ -201,9 +208,7 @@ actor Store {
         case .inLibrary:
             detail = "In library at \(path)"
         }
-        try db.run("INSERT INTO events(doc_id, at, action, detail, from_path) VALUES(?,?,?,?,?)",
-                   [.int(docID), .double(Date().timeIntervalSince1970),
-                    .text(EventAction.added.rawValue), .text(detail), .text(source)])
+        try insertEvent(doc: docID, action: .added, detail: detail, from: source)
     }
 
     /// Marks every document the scan did not see as missing — except where the

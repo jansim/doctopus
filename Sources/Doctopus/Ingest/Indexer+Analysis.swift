@@ -87,7 +87,7 @@ extension Indexer {
                                                       pageCount: pages, examples: examples)
         else { return .failed }
 
-        try? await store.storeMetadata(Store.MetadataPatch(
+        let patch = Store.MetadataPatch(
             docID: id,
             title: insight.title,
             correspondent: insight.correspondent,
@@ -98,13 +98,15 @@ extension Indexer {
             docDate: nil,
             dateSource: nil,
             source: insight.source,
-            amount: nil))
-
-        for tag in insight.tags.prefix(4) {
-            try? await store.suggestTag(tag, for: id, autoAcceptMatching: settings.autoAcceptMatchingTagSuggestions)
-        }
+            amount: nil)
+        let tags = Array(insight.tags.prefix(4))
+        let autoAccept = settings.autoAcceptMatchingTagSuggestions
+        // One change, so reverting it from the history takes back what the model said.
         try? await store.logProcessing(docID: id, action: .analyzed, detail: analysisLine(insight),
-                                       rule: nil, from: nil, to: nil, approved: true)
+                                       approved: true) { store in
+            try store.storeMetadata(patch)
+            for tag in tags { try? store.suggestTag(tag, for: id, autoAcceptMatching: autoAccept) }
+        }
         return .updated(name)
     }
 

@@ -86,6 +86,7 @@ extension AppSettings {
                 problems.append("its settings could not be read or kept aside (\(error.localizedDescription))")
             }
         }
+        try? await store.setHistoryLimit(library.historyLimit)
         let appWide = Preferences.appWide
         if Preferences.appWideUnreadable {
             Preferences.appWideUnreadable = false
@@ -104,5 +105,6 @@ extension AppSettings {
         guard let data = try? JSONEncoder().encode(library),
               let raw = String(data: data, encoding: .utf8) else { return }
         try await store.setSetting(Self.storageKey, raw)
+        try await store.setHistoryLimit(library.historyLimit)
     }
 }

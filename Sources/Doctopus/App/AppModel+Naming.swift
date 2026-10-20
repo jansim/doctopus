@@ -22,17 +22,19 @@ extension AppModel {
     func setNamingSuppressed(_ suppressed: Bool, for row: DocumentRow) {
         guard let lib = library else { return }
         Task {
-            do { try await lib.store.setNamingSuppressed(suppressed, doc: row.doc) }
-            catch {
+            let detail = suppressed ? "Name kept apart from the naming template"
+                                    : "Name follows the naming template again"
+            do {
+                try await lib.store.change(doc: row.doc, detail) { store in
+                    try store.setNamingSuppressed(suppressed, doc: row.doc)
+                }
+            } catch {
                 report(error, suppressed ? "keep the name of “\(row.displayTitle)”"
                                          : "hand the name of “\(row.displayTitle)” back to the template")
                 return
             }
             // Update now rather than after the debounced pass.
             lib.namingMismatches[row.doc]?.suppressed = suppressed
-            try? await lib.store.logEdit(docID: row.doc, detail: suppressed
-                                         ? "Name kept apart from the naming template"
-                                         : "Name follows the naming template again")
             refreshRuleMatches()
             reloadDetail()
         }

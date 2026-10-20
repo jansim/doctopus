@@ -107,8 +107,11 @@ extension AppModel {
             let sv = SavedView(id: 0, name: name, icon: icon, query: searchText,
                                sortKey: sort.storageKey, ascending: sortAscending,
                                viewMode: viewMode.rawValue, position: Int64(savedViews.count * 10))
-            do { _ = try await lib.store.upsertSavedView(sv) }
-            catch { report(error, "save the smart folder “\(name)”"); return }
+            do {
+                try await lib.store.change(doc: nil, "Saved the smart folder “\(name)”") { store in
+                    _ = try store.upsertSavedView(sv)
+                }
+            } catch { report(error, "save the smart folder “\(name)”"); return }
             refreshAll()
             notify("Saved smart folder “\(name)”.", .success)
         }
@@ -117,8 +120,12 @@ extension AppModel {
     func deleteSavedView(_ sv: SavedView) {
         guard let lib = library else { return }
         Task {
-            do { try await lib.store.deleteSavedView(sv.id) }
-            catch { report(error, "delete the smart folder “\(sv.name)”"); return }
+            let id = sv.id
+            do {
+                try await lib.store.change(doc: nil, "Deleted the smart folder “\(sv.name)”") { store in
+                    try store.deleteSavedView(id)
+                }
+            } catch { report(error, "delete the smart folder “\(sv.name)”"); return }
             if case .savedView(let id, _) = selection, id == sv.id {
                 selection = .all
             }

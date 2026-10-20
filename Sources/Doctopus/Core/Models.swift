@@ -85,6 +85,8 @@ enum DocumentOrigin: Sendable {
 enum EventAction: String, Sendable {
     case added, imported, indexed, analyzed, optimized, aliased, unfiled, moved, renamed, routed, promoted, edited
     case revertedOptimization = "reverted_optimization"
+    /// A change taken back from the log.
+    case reverted
 
     init(stored: String) { self = EventAction(rawValue: stored) ?? .indexed }
 
@@ -103,6 +105,7 @@ enum EventAction: String, Sendable {
         case .imported: return "tray.and.arrow.down"
         case .analyzed: return "sparkles"
         case .edited: return "pencil"
+        case .reverted: return "arrow.uturn.backward"
         case .indexed, .aliased, .revertedOptimization: return "doc.text.magnifyingglass"
         }
     }
@@ -259,6 +262,16 @@ struct ProcessingEntry: Identifiable, Hashable, Sendable {
     var missing: Bool
 }
 
+/// How a change in the log is taken back.
+enum RevertKind: Sendable, Hashable {
+    /// By putting back the rows it wrote.
+    case rows
+    /// By moving the file back, or taking back the alias, on disk.
+    case file
+    /// By swapping the kept original back in.
+    case optimization
+}
+
 struct HistoryEvent: Identifiable, Hashable, Sendable {
     var id: Int64
     var at: Date
@@ -267,6 +280,17 @@ struct HistoryEvent: Identifiable, Hashable, Sendable {
     var rule: String?
     var fromPath: String?
     var toPath: String?
+    /// Nil for a change to the library as a whole.
+    var docID: Int64? = nil
+    var filename: String? = nil
+    var reverted = false
+    /// Nil when it cannot be reverted.
+    var revert: RevertKind? = nil
+
+    /// One line to name it by.
+    var summary: String {
+        detail?.split(separator: "\n").first.map(String.init) ?? action.label
+    }
 
     func move(relativeTo root: String) -> String? {
         guard let fromPath, let toPath, fromPath != toPath else { return nil }
