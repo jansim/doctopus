@@ -174,7 +174,7 @@ private struct GeneratedInfoEditor: View {
                             .id(row.id)
                         }
                     }
-                    if detail.dateCandidates.count > 1 { dateChoices }
+                    if detail.dateCandidates.contains(where: { $0.date != row.docDate }) { dateChoices }
                     if let summary = row.summary {
                         Text(summary)
                             .font(.caption).foregroundStyle(.secondary)

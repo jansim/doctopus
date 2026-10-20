@@ -3,9 +3,9 @@ import AppKit
 
 /// A date control that only reports a day once it is finished with. Typing a
 /// date piece by piece would otherwise save, re-file and possibly rename the
-/// document after every digit, so keyboard edits stay a draft until Return or
-/// the field losing focus. A click in the calendar or on the stepper picks a
-/// whole day and goes through at once.
+/// document after every digit, so keyboard edits stay a draft until Return,
+/// which also leaves the field, or the field losing focus. A click in the
+/// calendar or on the stepper picks a whole day and goes through at once.
 struct DayField: NSViewRepresentable {
     let date: Date
     let onCommit: (Date) -> Void
@@ -27,7 +27,9 @@ struct DayField: NSViewRepresentable {
         /// the same value does not throw away a draft or flash an old day
         /// while a commit is still on its way.
         private var shown: Date?
-        private var committed = Date()
+        /// Nil until the model has handed in a day: the picker's own starting
+        /// value, 1 January 2001, must never be taken for an edit.
+        private var committed: Date?
         /// Set while a keystroke is being handled, so the change it makes
         /// stays a draft.
         private var typing = false
@@ -59,12 +61,13 @@ struct DayField: NSViewRepresentable {
             committed = day
         }
 
-        private var isDirty: Bool { DayDate.startOfDay(dateValue) != committed }
+        private var isDirty: Bool { committed.map { DayDate.startOfDay(dateValue) != $0 } ?? false }
 
         private func commit() {
             guard isDirty else { return }
-            committed = DayDate.startOfDay(dateValue)
-            onCommit?(committed)
+            let day = DayDate.startOfDay(dateValue)
+            committed = day
+            onCommit?(day)
         }
 
         @objc private func changed() {
@@ -73,9 +76,11 @@ struct DayField: NSViewRepresentable {
 
         override func keyDown(with event: NSEvent) {
             switch event.keyCode {
-            case 36, 76: commit()                    // Return, Enter
+            case 36, 76:                             // Return, Enter
+                commit()
+                window?.makeFirstResponder(nil)
             case 53:                                 // Escape
-                dateValue = committed
+                if let committed { dateValue = committed }
             default:
                 typing = true
                 defer { typing = false }

@@ -55,6 +55,7 @@ enum UITest {
             await changeHistoryDraws(model, snapshots: snapshots)
             await unsavedEditsAreAskedAbout(model)
             await dateCommitsWhenDone()
+            await dateUntouchedSavesNothing()
             await tagCountsFollowEdits(model)
             await tagIconsReachTheSidebar(model, snapshots: snapshots)
             await metadataPaneLists(model, snapshots: snapshots)

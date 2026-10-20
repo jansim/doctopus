@@ -7,7 +7,7 @@ enum Schema {
 
     private static let steps: [@Sendable (Database) throws -> Void] = [
         v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19,
-        v20, v21, v22, v23, v24, v25, v26, v27, v28, v29, v30,
+        v20, v21, v22, v23, v24, v25, v26, v27, v28, v29, v30, v31, v32, v33,
     ]
     static var current: Int { steps.count }
 
@@ -37,6 +37,59 @@ enum Schema {
         try db.exec("ALTER TABLE \(table) ADD COLUMN \(column) \(declaration)")
     }
 
+    /// A date field briefly saved its picker's starting day, 1 January 2001,
+    /// as a hand-set date on every document it was shown for. Such a date goes
+    /// back to the one the document's text gave, or to none, which the next
+    /// read fills in; the history says so.
+    private static func v30(_ db: Database) throws {
+        guard try hasColumn(db, table: "metadata", column: "date_source") else { return }
+        let broken = "date_source='manual' AND doc_date=978307200"
+        if try hasColumn(db, table: "events", column: "detail") {
+            try db.exec("""
+            INSERT INTO events(doc_id, at, action, detail)
+            SELECT doc_id, CAST(strftime('%s', 'now') AS REAL), 'edited',
+                   'Date → put back, after 1 Jan 2001 was saved by mistake'
+            FROM metadata WHERE \(broken);
+            """)
+        }
+        let candidates = try db.first(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='date_candidates'") { $0.int(0) } ?? 0
+        let best = { (column: String) in
+            candidates > 0
+                ? "(SELECT c.\(column) FROM date_candidates c WHERE c.doc_id = metadata.doc_id ORDER BY c.rank LIMIT 1)"
+                : "NULL"
+        }
+        try db.exec("UPDATE metadata SET doc_date = \(best("date")), date_source = \(best("source")) WHERE \(broken)")
+    }
+
+    private static func hasColumn(_ db: Database, table: String, column: String) throws -> Bool {
+        try db.first("SELECT COUNT(*) FROM pragma_table_info(?) WHERE name=?",
+                     [.text(table), .text(column)]) { $0.int(0) } ?? 0 > 0
+    }
+
+    /// When what a document's metadata row holds was last approved in review,
+    /// from when on reading the file again only fills in what is blank, and
+    /// the dates offered alongside it are settled with it. Documents approved
+    /// before are taken as approved when they were reviewed.
+    private static func v31(_ db: Database) throws {
+        let tables = Set(try db.map(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('metadata', 'documents', 'date_candidates')") { $0.string(0) })
+        guard tables.contains("metadata") else { return }
+        try addColumn(db, table: "metadata", column: "approved_at", declaration: "REAL")
+        guard tables.contains("documents"), try hasColumn(db, table: "documents", column: "reviewed_at")
+        else { return }
+        try db.exec("""
+        UPDATE metadata SET approved_at = (
+            SELECT reviewed_at FROM documents WHERE documents.id = metadata.doc_id)
+        WHERE approved_at IS NULL;
+        """)
+        guard tables.contains("date_candidates") else { return }
+        try db.exec("""
+        DELETE FROM date_candidates
+        WHERE doc_id IN (SELECT doc_id FROM metadata WHERE approved_at IS NOT NULL);
+        """)
+    }
+
     /// `events` becomes the library's change log. A change to the library as a
     /// whole — a tag renamed, a rule edited — belongs to no document, so
     /// `doc_id` may be empty; a change can be reverted, and is marked when it
@@ -44,7 +97,7 @@ enum Schema {
     /// before and after, which is what reverting it puts back. SQLite cannot
     /// relax a NOT NULL in place, so `events` is rebuilt, and `processing`,
     /// which refers to it, with it.
-    private static func v30(_ db: Database) throws {
+    private static func v33(_ db: Database) throws {
         let tables = Set(try db.map(
             "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('events', 'processing', 'documents')") { $0.string(0) })
         let rebuilt = try db.first(
@@ -57,12 +110,12 @@ enum Schema {
             let copied = wanted.filter(present.contains).joined(separator: ", ")
             if queued {
                 try db.exec("""
-                CREATE TEMP TABLE processing_v30 AS SELECT id, event_id, doc_id, status FROM processing;
+                CREATE TEMP TABLE processing_v33 AS SELECT id, event_id, doc_id, status FROM processing;
                 DROP TABLE processing;
                 """)
             }
             try db.exec("""
-            CREATE TABLE events_v30 (
+            CREATE TABLE events_v33 (
                 id          INTEGER PRIMARY KEY,
                 doc_id      INTEGER REFERENCES documents(id) ON DELETE CASCADE,
                 at          REAL NOT NULL,
@@ -74,9 +127,9 @@ enum Schema {
                 reverted_at REAL,
                 reverts     INTEGER  -- the event this one reverted
             );
-            INSERT INTO events_v30(\(copied)) SELECT \(copied) FROM events \(kept);
+            INSERT INTO events_v33(\(copied)) SELECT \(copied) FROM events \(kept);
             DROP TABLE events;
-            ALTER TABLE events_v30 RENAME TO events;
+            ALTER TABLE events_v33 RENAME TO events;
             CREATE INDEX IF NOT EXISTS idx_events_doc ON events(doc_id);
             CREATE INDEX IF NOT EXISTS idx_events_at  ON events(at DESC);
             """)
@@ -89,9 +142,9 @@ enum Schema {
                     status   INTEGER NOT NULL DEFAULT 0 -- 0 needs review, 1 approved
                 );
                 INSERT INTO processing(id, event_id, doc_id, status)
-                SELECT id, event_id, doc_id, status FROM processing_v30
+                SELECT id, event_id, doc_id, status FROM processing_v33
                 WHERE event_id IN (SELECT id FROM events) \(tables.contains("documents") ? "AND doc_id IN (SELECT id FROM documents)" : "");
-                DROP TABLE processing_v30;
+                DROP TABLE processing_v33;
                 CREATE INDEX IF NOT EXISTS idx_processing_doc   ON processing(doc_id);
                 CREATE INDEX IF NOT EXISTS idx_processing_event ON processing(event_id);
                 """)
@@ -132,6 +185,15 @@ enum Schema {
         WHERE analyzed_at IS NULL
           AND (source LIKE 'llm%' OR source LIKE 'remote%' OR source LIKE 'vlm%');
         """)
+    }
+
+    /// Whether a tag shows on the thumbnails of the documents it is on, kept on
+    /// its row with its colour and icon. Existing tags start off not shown.
+    private static func v32(_ db: Database) throws {
+        let present = try db.first(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='tags'") { $0.int(0) } ?? 0
+        guard present > 0 else { return }
+        try addColumn(db, table: "tags", column: "highlighted", declaration: "INTEGER NOT NULL DEFAULT 0")
     }
 
     /// A tag's own icon, on its row like a correspondent's, so a rename, a

@@ -412,29 +412,35 @@ actor Store {
         var dateSource: String?
         var source: String?
         var amount: String?
+        /// Read off the file, which only fills in what an approved document
+        /// leaves blank. A rule or a model asked to analyze it still replaces.
+        var extracted = false
     }
+
+    private static let mergedColumns = ["title", "correspondent_id", "doc_type_id", "language", "summary",
+                                        "intent", "source", "amount", "amount_value", "analyzed_at"]
 
     func storeMetadata(_ p: MetadataPatch) throws {
         let correspondentID = try entityID(named: p.correspondent, builtin: "correspondent")
         let docTypeID = try entityID(named: p.docType, builtin: "doc_type")
         let analyzedAt = p.source.flatMap { MetadataSource($0) == .heuristics ? nil : Date() }
+        let fillOnly = try p.extracted && metadataApproved(p.docID)
+        func merged(_ column: String) -> String {
+            fillOnly ? "\(column)=COALESCE(metadata.\(column), excluded.\(column))"
+                     : "\(column)=COALESCE(excluded.\(column), metadata.\(column))"
+        }
+        // A date set by hand is never second-guessed by one read off the file.
+        let keepsDate = "metadata.date_source='manual'" + (fillOnly ? " OR metadata.doc_date IS NOT NULL" : "")
         try db.run("""
             INSERT INTO metadata(doc_id, title, correspondent_id, doc_type_id, language, summary,
                                  intent, doc_date, date_source, source, amount, amount_value, analyzed_at)
             VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(doc_id) DO UPDATE SET
-                title=COALESCE(excluded.title, metadata.title),
-                correspondent_id=COALESCE(excluded.correspondent_id, metadata.correspondent_id),
-                doc_type_id=COALESCE(excluded.doc_type_id, metadata.doc_type_id),
-                language=COALESCE(excluded.language, metadata.language),
-                summary=COALESCE(excluded.summary, metadata.summary),
-                intent=COALESCE(excluded.intent, metadata.intent),
-                doc_date=COALESCE(excluded.doc_date, metadata.doc_date),
-                date_source=COALESCE(excluded.date_source, metadata.date_source),
-                source=COALESCE(excluded.source, metadata.source),
-                amount=COALESCE(excluded.amount, metadata.amount),
-                amount_value=COALESCE(excluded.amount_value, metadata.amount_value),
-                analyzed_at=COALESCE(excluded.analyzed_at, metadata.analyzed_at)
+                \(Self.mergedColumns.map(merged).joined(separator: ", ")),
+                doc_date=CASE WHEN \(keepsDate) THEN metadata.doc_date
+                              ELSE COALESCE(excluded.doc_date, metadata.doc_date) END,
+                date_source=CASE WHEN \(keepsDate) THEN metadata.date_source
+                                 ELSE COALESCE(excluded.date_source, metadata.date_source) END
             """, [.int(p.docID), .text(p.title), .int(correspondentID), .int(docTypeID),
                   .text(p.language), .text(p.summary), .text(p.intent),
                   .date(p.docDate.map { DayDate.startOfDay($0) }),

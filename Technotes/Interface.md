@@ -78,6 +78,10 @@ documents and stays pinned while its section scrolls under it, so the gallery
 always says where in time it is. Sorted any other way, or ranked by a search,
 it has no headings.
 
+A tag can be highlighted, from its sidebar menu or the Tags settings, and a
+highlighted tag shows as a small chip in the top corner of the thumbnail of
+every document under it.
+
 ### Review and assign
 
 In Needs Review and Recently Reviewed the centre pane splits, and the selected
