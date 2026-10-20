@@ -173,7 +173,7 @@ final class AppModel {
             guard let lib = library else { continue }
             var updated = field
             updated.showInList = shown
-            Task {
+            Task { [updated] in
                 do { try await lib.store.updateField(updated) }
                 catch { report(error, "update the column for “\(field.name)”") }
                 refreshAll()

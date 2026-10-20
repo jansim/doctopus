@@ -268,7 +268,7 @@ extension SelfTest {
         print("\nNOTES")
         if let subject = rows.first {
             let phrase = "cancelled by phone \(UUID().uuidString.prefix(6).lowercased())"
-            try? await store.setNote(phrase, for: subject.doc)
+            _ = try? await store.setNote(phrase, for: subject.doc)
             let kept = (try? await store.note(for: subject.doc)) ?? ""
             let found = (try? await store.listDocuments(selection: .all, query: SearchQuery(phrase),
                                                         sort: .relevance, ascending: false)) ?? []
@@ -276,7 +276,7 @@ extension SelfTest {
             Check.that("a note is kept with the document", kept == phrase, kept)
             Check.that("…and is searchable straight away", found.contains { $0.id == subject.id })
 
-            try? await store.setNote("the original is in the red folder\n\ncall them back", for: subject.doc)
+            _ = try? await store.setNote("the original is in the red folder\n\ncall them back", for: subject.doc)
             let edited = (try? await store.note(for: subject.doc)) ?? ""
             Check.that("a document has one note, which an edit replaces",
                        edited == "the original is in the red folder\n\ncall them back", edited)
@@ -284,7 +284,7 @@ extension SelfTest {
                                                         sort: .relevance, ascending: false)) ?? []
             Check.that("…and the old wording stops matching", stale.isEmpty, "\(stale.count) hit(s)")
 
-            try? await store.setNote("  \n ", for: subject.doc)
+            _ = try? await store.setNote("  \n ", for: subject.doc)
             Check.that("a blank note takes it away again",
                        ((try? await store.note(for: subject.doc)) ?? "x").isEmpty)
         }

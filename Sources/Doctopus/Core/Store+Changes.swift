@@ -87,13 +87,20 @@ extension Store {
         recording = Recording(action: action, docID: docID, detail: detail, rule: rule, from: from,
                               to: to, queued: queued, always: always, reverts: reverts)
         defer { recording = nil }
-        return try db.transaction {
+        // Not `db.transaction { … }`: a closure capturing `body` is a data race
+        // to the region checker, since `body` is isolated to this actor.
+        let scope = try db.begin()
+        do {
             try db.run("DELETE FROM captured_rows")
             try db.run("UPDATE capture_state SET recording=1")
             let result = try body()
             try db.run("UPDATE capture_state SET recording=0")
             try commitRecording()
+            try db.commit(scope)
             return result
+        } catch {
+            db.rollback(scope)
+            throw error
         }
     }
 

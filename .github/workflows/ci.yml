@@ -42,7 +42,7 @@ jobs:
 
       # Debug builds incrementally; file hashing because checkout resets mtimes.
       - name: Build
-        run: Scripts/build.sh debug -Xswiftc -gnone -Xswiftc -enable-incremental-file-hashing
+        run: Scripts/build.sh debug -Xswiftc -gnone -Xswiftc -enable-incremental-file-hashing -Xswiftc -warnings-as-errors
 
       - name: Generate the demo library
         run: swift Testing/makefixtures.swift Testing/DemoLibrary
@@ -62,3 +62,32 @@ jobs:
           name: snapshots
           path: build/snapshots
           if-no-files-found: warn
+
+  # Some concurrency diagnostics only show up in an optimized build,
+  # so the release build `Scripts/build.sh` makes by default is built as well.
+  release:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: macos-26
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain
+        id: toolchain
+        run: |
+          swift --version && xcodebuild -version
+          echo "id=$( (swift --version; xcodebuild -version) 2>&1 | shasum | cut -c1-12)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore build cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            .build
+            build/icon
+          key: release-${{ steps.toolchain.outputs.id }}-${{ hashFiles('Package.swift', 'Package.resolved') }}-${{ github.sha }}
+          restore-keys: |
+            release-${{ steps.toolchain.outputs.id }}-${{ hashFiles('Package.swift', 'Package.resolved') }}-
+
+      - name: Build
+        run: Scripts/build.sh release -Xswiftc -enable-incremental-file-hashing -Xswiftc -warnings-as-errors

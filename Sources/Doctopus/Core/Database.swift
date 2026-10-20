@@ -117,14 +117,13 @@ final class Database {
     /// Inside another transaction it is a savepoint, so a recorded change can
     /// wrap store methods that keep transactions of their own.
     func transaction<T>(_ body: () throws -> T) throws -> T {
-        guard sqlite3_get_autocommit(handle) != 0 else { return try savepoint(body) }
-        try exec("BEGIN IMMEDIATE")
+        let scope = try begin()
         do {
             let result = try body()
-            try exec("COMMIT")
+            try commit(scope)
             return result
         } catch {
-            try? exec("ROLLBACK")
+            rollback(scope)
             throw error
         }
     }
@@ -132,15 +131,41 @@ final class Database {
     /// Undoes only what `body` wrote when it throws, leaving the transaction
     /// around it to go on.
     func savepoint<T>(_ body: () throws -> T) throws -> T {
-        try exec("SAVEPOINT nested")
+        let scope = try begin(.savepoint)
         do {
             let result = try body()
-            try exec("RELEASE nested")
+            try commit(scope)
             return result
         } catch {
+            rollback(scope)
+            throw error
+        }
+    }
+
+    enum Scope { case transaction, savepoint }
+
+    /// The opening half of `transaction`, for a caller whose body cannot be
+    /// handed over as a closure; pair it with `commit` or `rollback`.
+    func begin(_ scope: Scope = .transaction) throws -> Scope {
+        if scope == .transaction, sqlite3_get_autocommit(handle) != 0 {
+            try exec("BEGIN IMMEDIATE")
+            return .transaction
+        }
+        try exec("SAVEPOINT nested")
+        return .savepoint
+    }
+
+    func commit(_ scope: Scope) throws {
+        try exec(scope == .transaction ? "COMMIT" : "RELEASE nested")
+    }
+
+    func rollback(_ scope: Scope) {
+        switch scope {
+        case .transaction:
+            try? exec("ROLLBACK")
+        case .savepoint:
             try? exec("ROLLBACK TO nested")
             try? exec("RELEASE nested")
-            throw error
         }
     }
 
