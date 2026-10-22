@@ -23,6 +23,26 @@ No third-party dependencies.
 - **Never surprised** — nothing already in the library moves, is renamed or is
   deleted without an explicit action.
 
+## Installation
+
+With [Homebrew](https://brew.sh), on an Apple silicon Mac with macOS 15 or later:
+
+```bash
+brew install --cask jansim/tools/doctopus
+```
+
+This installs the latest release into `/Applications`. The cask always points
+at the newest release, so a plain `brew upgrade` does not notice new ones;
+`brew upgrade --greedy doctopus` fetches it. Releases are ad-hoc signed, not
+notarized: the cask removes the quarantine flag so macOS will open the app.
+
+Without Homebrew, download `Doctopus.zip` from the
+[latest release](https://github.com/jansim/doctopus/releases/latest), unzip it
+and move `Doctopus.app` to `/Applications`. macOS will refuse to open it at
+first; allow it under System Settings › Privacy & Security › Open Anyway, or
+run `xattr -dr com.apple.quarantine /Applications/Doctopus.app`. Or build it
+yourself, see [Building](#building).
+
 ## Building
 
 Requires Xcode 26, for the macOS 26 SDK. Runs on macOS 15 or later.
@@ -39,6 +59,9 @@ signs the bundle.
 Two check suites are built into the binary and run against a generated demo
 library — `--selftest` for the ingest pipeline, `--uitest` for the panes. Both
 run in CI on every push; [Testing](Technotes/Testing.md) has the commands.
+
+Pushing a tag such as `v1.1` builds the app with that version, runs the
+pipeline checks and publishes it as `Doctopus.zip` in a GitHub release.
 
 ## Technotes
 
