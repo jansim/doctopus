@@ -360,7 +360,7 @@ private struct DocumentGalleryView: View {
         let headed = model.selection == .reviewed || !timeline.isEmpty
         ScrollView {
             LazyVGrid(columns: [GridItem(.adaptive(minimum: cell, maximum: cell * 1.4), spacing: 18)],
-                      spacing: 20, pinnedViews: .sectionHeaders) {
+                      spacing: 20) {
                 if model.selection == .reviewed {
                     ForEach(ReviewedPeriod.groups(model.documents, now: .now)) { group in
                         Section {
@@ -442,11 +442,7 @@ struct GalleryHeader: View {
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(.secondary)
         }
-        .padding(.horizontal, 18)
         .frame(maxWidth: .infinity, minHeight: Self.height, maxHeight: Self.height)
-        .background(.bar)
-        // Cover the grid's padding so thumbnails don't show at the ends.
-        .padding(.horizontal, -18)
     }
 }
 

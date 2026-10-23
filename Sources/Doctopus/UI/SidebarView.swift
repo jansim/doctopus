@@ -428,20 +428,34 @@ private struct StatusFooter: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Divider()
-            HStack(spacing: 6) {
-                Text("\(model.stats.total.formatted()) doc\(model.stats.total == 1 ? "" : "s")")
-                Spacer(minLength: 6)
-                Text(ByteFormat.string(model.stats.bytes))
+        if #available(macOS 26.0, *) {
+            // The sidebar list scrolls beneath the footer, so it needs its own glass
+            // to stay legible over the rows passing under it.
+            label
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .glassEffect(.regular, in: .rect(cornerRadius: 10))
+                .padding(.horizontal, 8)
+                .padding(.bottom, 8)
+        } else {
+            VStack(alignment: .leading, spacing: 0) {
+                Divider()
+                label.padding(.top, 6)
             }
-            .font(.caption.monospacedDigit())
-            .foregroundStyle(.secondary)
-            .lineLimit(1)
-            .padding(.top, 6)
+            .padding(.horizontal, 12)
+            .padding(.bottom, 8)
         }
-        .padding(.horizontal, 12)
-        .padding(.bottom, 8)
+    }
+
+    private var label: some View {
+        HStack(spacing: 6) {
+            Text("\(model.stats.total.formatted()) doc\(model.stats.total == 1 ? "" : "s")")
+            Spacer(minLength: 6)
+            Text(ByteFormat.string(model.stats.bytes))
+        }
+        .font(.caption.monospacedDigit())
+        .foregroundStyle(.secondary)
+        .lineLimit(1)
     }
 }
 
