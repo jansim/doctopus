@@ -163,8 +163,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func application(_ application: NSApplication, open urls: [URL]) {
         // Checked on disk: a URL handed over for a package need not end in a
         // slash, so `hasDirectoryPath` would turn it away.
-        for url in urls where (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true {
-            MainActor.assumeIsolated { Workspace.shared.open(folderOrLibrary: url) }
+        let folders = urls.filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true }
+        // Documents dropped on the Dock icon, or opened with Doctopus from Finder.
+        let documents = urls.filter {
+            !folders.contains($0) && FileScanner.supportedExtensions.contains($0.pathExtension.lowercased())
+        }
+        MainActor.assumeIsolated {
+            for url in folders { Workspace.shared.open(folderOrLibrary: url) }
+            if !documents.isEmpty { Workspace.shared.importHandedOver(documents) }
         }
     }
 

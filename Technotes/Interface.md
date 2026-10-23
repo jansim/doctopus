@@ -58,6 +58,13 @@ an ⌥ drag the copy badge.
 Dropping onto a tag, a Finder tag or a facet assigns it rather than filing
 anything.
 
+Documents dropped on the Dock icon, or opened with Doctopus from Finder, reach
+the app rather than a window. They are imported into the front window's
+library, as File › Import Files… would, or into the one library open when the
+front window has none. Arriving while Doctopus is still launching, they wait
+for last time's libraries to reopen. A folder or a library dropped there is
+opened instead.
+
 Dragging documents out of Doctopus hands over the files themselves, so a drop
 on Finder, Mail or Preview gets the document; ⌘C copies them the same way, and
 Share in the context menu offers the system's share targets.

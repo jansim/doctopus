@@ -40,6 +40,9 @@ final class Workspace {
     @ObservationIgnored private var reopening: [(container: URL, bookmark: Data)] = []
     /// Finder opens that arrive before the first window is up.
     @ObservationIgnored private var pending: [URL] = []
+    /// Documents handed to the app before the libraries reopened at launch
+    /// are in their windows, since one of those is where they go.
+    @ObservationIgnored private var pendingImports: [URL] = []
 
     private struct WeakModel { weak var model: AppModel? }
 
@@ -138,6 +141,39 @@ final class Workspace {
     func doneReopening(_ container: URL) {
         let key = Self.key(container)
         reopening.removeAll { Self.key($0.container) == key }
+        deliverImports()
+    }
+
+    /// Where a document handed to the app as a whole goes: the front window's
+    /// library, as with File › Import Files…, or else the one library open.
+    var importTarget: AppModel? {
+        if let current, current.library != nil { return current }
+        let showing = windows.filter { $0.library != nil }
+        return showing.count == 1 ? showing.first : nil
+    }
+
+    /// Documents handed to the app rather than to a window: dropped on the
+    /// Dock icon, or opened with Doctopus from Finder.
+    func importHandedOver(_ urls: [URL]) {
+        pendingImports += urls
+        deliverImports()
+    }
+
+    private func deliverImports() {
+        guard restored, reopening.isEmpty, !pendingImports.isEmpty else { return }
+        let urls = pendingImports
+        pendingImports = []
+        guard let target = importTarget else {
+            let front = frontmost
+            front.bringToFront()
+            let what = urls.count == 1 ? "“\(urls[0].lastPathComponent)”" : "\(urls.count) documents"
+            front.errorMessage = windows.contains { $0.library != nil }
+                ? "Several libraries are open. Drop \(what) onto the window of the one to import into."
+                : "Open a library to import \(what) into."
+            return
+        }
+        target.bringToFront()
+        target.importFiles(urls, into: nil)
     }
 
     /// Launch opens a single empty window. It takes the first library that was
@@ -172,6 +208,7 @@ final class Workspace {
         let waiting = pending
         pending = []
         for url in waiting { open(folderOrLibrary: url) }
+        deliverImports()
     }
 
     func persistOpenLibraries() {

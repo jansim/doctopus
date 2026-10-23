@@ -2,7 +2,7 @@ import SwiftUI
 import AppKit
 import UniformTypeIdentifiers
 
-/// Drops onto the window and onto folders, and Undo of what a drop did.
+/// Drops onto the window, the Dock icon and folders, and Undo of what a drop did.
 extension UITest {
     static func droppingAFolderImportsIt(_ model: AppModel) async {
         let fm = FileManager.default
@@ -41,6 +41,51 @@ extension UITest {
                                    timeout: 30)
         Check.that("dropping a folder imports the documents inside it", accepted && arrived,
                    "accepted \(accepted), \(model.documents.filter { $0.filename.contains(tag) }.count) of 2 arrived")
+        for row in model.documents where row.filename.contains(tag) { try? fm.removeItem(at: row.url) }
+    }
+
+    /// A document dropped on the Dock icon reaches the app rather than a
+    /// window, and the one library open takes it even with an empty window in
+    /// front. At launch it waits for the libraries being reopened.
+    static func handedOverDocumentsImport(_ model: AppModel) async {
+        let fm = FileManager.default
+        let workspace = Workspace.shared
+        workspace.register(model)
+        let empty = AppModel()
+        workspace.register(empty)
+        workspace.current = empty
+        defer {
+            empty.windowClosed()
+            workspace.current = model
+        }
+        Check.that("a document handed to the app goes to the one library open, even with an empty window in front",
+                   workspace.importTarget === model)
+
+        model.selection = .all
+        guard let source = model.documents.first(where: {
+            $0.filename.lowercased().hasSuffix(".pdf") && !$0.isAliasHere
+        }) else {
+            return Check.that("a document handed over at launch lands once the libraries are open", false,
+                              "no PDF to copy")
+        }
+        let folder = fm.temporaryDirectory.appendingPathComponent("doctopus-handed-\(UUID().uuidString)")
+        try? fm.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: folder) }
+        let tag = String(UUID().uuidString.prefix(6))
+        let file = folder.appendingPathComponent("handed-\(tag).pdf")
+        copyAsNew(source.url, to: file)
+        func arrived() -> Bool { model.documents.contains { $0.filename.contains(tag) } }
+
+        // Nothing in the UI checks reopens last time's libraries, so until
+        // `restore` runs this is the app still launching.
+        workspace.importHandedOver([file])
+        try? await Task.sleep(for: .seconds(1))
+        let waited = !arrived()
+        Preferences.libraryBookmarks = []
+        workspace.restore(into: empty)
+        let landed = await settle(arrived, timeout: 30)
+        Check.that("a document handed over at launch lands once the libraries are open",
+                   waited && landed, "waited \(waited), landed \(landed)")
         for row in model.documents where row.filename.contains(tag) { try? fm.removeItem(at: row.url) }
     }
 
