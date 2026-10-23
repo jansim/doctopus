@@ -48,6 +48,7 @@ struct RootView: View {
             case .rename: RenameSheet()
             case .addTag: AddTagSheet()
             case .quickOpen: QuickSwitcherSheet()
+            case .advancedSearch: AdvancedSearchSheet()
             case .changeHistory: ChangeHistorySheet()
             case .file(let row): FilingSheet(row: row)
             }
@@ -141,6 +142,14 @@ struct RootView: View {
         ToolbarItemGroup(placement: .primaryAction) {
             ViewModePicker()
             SortMenu()
+
+            Button {
+                model.sheet = .advancedSearch
+            } label: {
+                Label("Advanced Search", systemImage: "line.3.horizontal.decrease.circle")
+            }
+            .help("Search by tag, field, date or status (⇧⌘F)")
+            .disabled(model.library == nil)
 
             Button {
                 showInspector.toggle()
