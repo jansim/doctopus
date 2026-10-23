@@ -134,7 +134,7 @@ struct SearchQuery: Sendable, Equatable {
         }
     }
 
-    private static func split(_ raw: String) -> [String] {
+    static func split(_ raw: String) -> [String] {
         var out: [String] = []
         var cur = ""
         var quoted = false

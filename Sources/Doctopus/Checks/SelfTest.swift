@@ -114,6 +114,7 @@ enum SelfTest {
         await fileSafety(store: store, indexer: indexer, settings: settings)
         await halfTypedSearches(store: store)
         await folderMatching(store: store)
+        advancedSearch()
         metadataSource()
         scanCaptures()
         continuousScanning()

@@ -89,6 +89,17 @@ A tag can be highlighted, from its sidebar menu or the Tags settings, and a
 highlighted tag shows as a small chip in the top corner of the thumbnail of
 every document under it.
 
+### Advanced search
+
+File › Advanced Search… (⇧⌘F), or the filter button in the toolbar, takes the
+search field's query apart into a form: the words to find, the words to leave
+out, and a row for each condition — a tag, a Finder tag, a folder, the file
+type, a status, any field, or a date, which can also be before or after a
+period. Each row offers the values already in use. The query is shown in the
+field's own syntax as it is built; Search puts it in the field, and Save as
+Smart Folder… keeps it as one. Anything the form has no row for stays among
+the words, so nothing typed is lost on the way through.
+
 ### Review and assign
 
 In Needs Review and Recently Reviewed the centre pane splits, and the selected
@@ -178,7 +189,8 @@ Full keyboard navigation with native Quick Look — Space on any file gives an
 instant preview with text selection and pagination. Double-click, or ⌘↓, hands
 the document to whichever app owns it, the way Finder does. ⌘A selects every
 document in the pane from anywhere in the library window, unless a text field
-is being edited.
+is being edited. ⌘F puts the cursor in the search field, and ⇧⌘F opens
+Advanced Search.
 
 The sidebar and inspector are shown and hidden from the View menu (⌃⌘S,
 ⌃⌘I), and the inspector stays as it was left. Libraries appear in File › Open

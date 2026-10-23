@@ -61,6 +61,7 @@ enum UITest {
             await metadataPaneLists(model, snapshots: snapshots)
             await optionRevealsFolders(model)
             await searchFieldTakesAndGivesUpFocus(model)
+            await advancedSearchDraws(model, snapshots: snapshots)
             await secondLibraryOpensApart(model, alongside: library, snapshots: snapshots)
             await reviewPanelFiles(model, snapshots: snapshots)
             await reviewBatchTreatsEachKindApart(model, snapshots: snapshots)

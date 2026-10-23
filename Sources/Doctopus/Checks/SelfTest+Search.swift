@@ -79,6 +79,57 @@ extension SelfTest {
         }
     }
 
+    /// Advanced Search takes the field's query apart into rows and writes it
+    /// back, and what it writes has to mean what was typed.
+    static func advancedSearch() {
+        print("\nADVANCED SEARCH")
+        typealias Condition = SearchCriteria.Condition
+        let keys: Set<String> = ["doc_type", "correspondent", "language", "amount", "iban"]
+        let typed = "rechnung OR kontoauszug \"net pay\" -entwurf -\"old draft\" tag:\"Home Office\" -tag:Archiv "
+            + "finder:Red in:Taxes -ext:png is:review -is:duplicate type:Invoice -from:ACME iban:DE12 "
+            + "date:\"this year\" -added:2025 analyzed:\"last month\" before:2026-03 after:2025 foo:bar"
+        let criteria = SearchCriteria(typed, fieldKeys: keys)
+        Check.that("the words stay as typed, a prefix that is no filter among them",
+                   criteria.words == "rechnung OR kontoauszug \"net pay\" foo:bar", criteria.words)
+        Check.that("words with a minus are the ones left out, a phrase still a phrase",
+                   criteria.excluded == "entwurf \"old draft\"", criteria.excluded)
+        let read = criteria.conditions.map { "\($0.attribute) \($0.relation) \($0.value)" }
+        Check.that("every filter is a condition of its own", criteria.conditions.count == 15,
+                   read.joined(separator: " · "))
+        Check.that("a field is read under its alias",
+                   criteria.conditions.contains { $0.attribute == .field("doc_type") && $0.value == "Invoice" }
+                       && criteria.conditions.contains {
+                           $0.attribute == .field("correspondent") && $0.relation == .isNot && $0.value == "ACME"
+                       })
+        Check.that("before: and after: are the document date's",
+                   criteria.conditions.contains { $0.attribute == .documentDate && $0.relation == .before }
+                       && criteria.conditions.contains { $0.attribute == .documentDate && $0.relation == .after })
+        Check.that("put back together it is the same query",
+                   SearchQuery(criteria.query, fieldKeys: keys) == SearchQuery(typed, fieldKeys: keys),
+                   criteria.query)
+
+        let notBefore = SearchCriteria("-before:2024")
+        Check.that("a filter with no row to show it stays among the words",
+                   notBefore.conditions.isEmpty && notBefore.words == "-before:2024", notBefore.words)
+
+        var built = SearchCriteria()
+        built.words = "miete"
+        built.excluded = "entwurf -alt"
+        built.conditions = [
+            Condition(attribute: .tag, value: "Home Office"),
+            Condition(attribute: .field("doc_type"), relation: .isNot, value: "Invoice"),
+            Condition(attribute: .documentDate, relation: .after, value: "last month"),
+            Condition(attribute: .tag),
+        ]
+        Check.that("rows are written in the field's syntax, one still empty left out",
+                   built.query == "miete -entwurf -alt tag:\"Home Office\" -type:Invoice after:\"last month\"",
+                   built.query)
+        built.words = "\"net pay"
+        let unclosed = SearchQuery(built.query)
+        Check.that("a quote left open in the words does not swallow the conditions",
+                   unclosed.terms == ["net pay"] && unclosed.tags == ["Home Office"], built.query)
+    }
+
     static func shortcuts(store: Store) async {
         print("\nURL SCHEMES & SHORTCUTS")
         if let searchURL = URL(string: "doctopus://search?q=rechnung") {

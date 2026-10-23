@@ -224,6 +224,9 @@ struct DoctopusCommands: Commands {
             }
             Button("Quick Open…") { model.sheet = .quickOpen }
                 .keyboardShortcut("o", modifiers: [.command, .shift])
+            Button("Advanced Search…") { model.sheet = .advancedSearch }
+                .keyboardShortcut("f", modifiers: [.command, .shift])
+                .disabled(model.library == nil)
             Button("Import Files…") { importPanel() }
                 .keyboardShortcut("i", modifiers: [.command])
             if model.scanSession != nil {

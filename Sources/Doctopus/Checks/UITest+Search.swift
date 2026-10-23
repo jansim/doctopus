@@ -40,6 +40,27 @@ extension UITest {
         window.makeFirstResponder(nil)
     }
 
+    /// Advanced Search shows the field's query as a row for each condition;
+    /// how a query is taken apart is checked in `--selftest`.
+    static func advancedSearchDraws(_ model: AppModel, snapshots: String?) async {
+        func drawn(_ query: String, as name: String) async -> Int {
+            model.searchText = query
+            let (window, host) = host(AdvancedSearchSheet().environment(model),
+                                      size: NSSize(width: 660, height: 520))
+            defer { window.orderOut(nil) }
+            try? await Task.sleep(for: .seconds(1))
+            if let dir = snapshots { snapshot(host, to: dir + "/\(name).png") }
+            return inkedRows(host)
+        }
+        let words = await drawn("rechnung", as: "advanced-search-words")
+        let conditions = await drawn("rechnung -entwurf tag:Insurance type:Invoice before:\"last month\" is:review",
+                                     as: "advanced-search")
+        model.searchText = ""
+        Check.that("Advanced Search draws a row for each condition in the field's query",
+                   conditions > words + 20,
+                   "\(words) rows with ink for words alone, \(conditions) with four conditions")
+    }
+
     /// The whole window, toolbar and all, as the app shows it.
     static func libraryWindow(_ model: AppModel) -> NSWindow {
         let host = NSHostingView(rootView: RootView().environment(model))
