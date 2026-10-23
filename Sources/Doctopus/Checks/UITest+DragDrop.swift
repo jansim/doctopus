@@ -62,8 +62,11 @@ extension UITest {
                    workspace.importTarget === model)
 
         model.selection = .all
+        // The checks before this one take away files they brought in, and
+        // the list can still show them until the watcher has caught up.
         guard let source = model.documents.first(where: {
-            $0.filename.lowercased().hasSuffix(".pdf") && !$0.isAliasHere
+            $0.filename.lowercased().hasSuffix(".pdf") && !$0.isAliasHere && !$0.missing
+                && fm.fileExists(atPath: $0.path)
         }) else {
             return Check.that("a document handed over at launch lands once the libraries are open", false,
                               "no PDF to copy")
@@ -73,7 +76,10 @@ extension UITest {
         defer { try? fm.removeItem(at: folder) }
         let tag = String(UUID().uuidString.prefix(6))
         let file = folder.appendingPathComponent("handed-\(tag).pdf")
-        copyAsNew(source.url, to: file)
+        guard copyAsNew(source.url, to: file) else {
+            return Check.that("a document handed over at launch lands once the libraries are open", false,
+                              "could not copy \(source.filename)")
+        }
         func arrived() -> Bool { model.documents.contains { $0.filename.contains(tag) } }
 
         // Nothing in the UI checks reopens last time's libraries, so until
@@ -85,7 +91,9 @@ extension UITest {
         workspace.restore(into: empty)
         let landed = await settle(arrived, timeout: 30)
         Check.that("a document handed over at launch lands once the libraries are open",
-                   waited && landed, "waited \(waited), landed \(landed)")
+                   waited && landed,
+                   "waited \(waited), landed \(landed) · "
+                       + (model.errorMessage ?? empty.errorMessage ?? model.notice?.text ?? "nothing said"))
         for row in model.documents where row.filename.contains(tag) { try? fm.removeItem(at: row.url) }
     }
 
