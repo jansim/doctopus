@@ -42,18 +42,18 @@ jobs:
 
       # Debug builds incrementally; file hashing because checkout resets mtimes.
       - name: Build
-        run: Scripts/ci-check.sh Scripts/build.sh debug -Xswiftc -gnone -Xswiftc -enable-incremental-file-hashing -Xswiftc -warnings-as-errors
+        run: Scripts/build.sh debug -Xswiftc -gnone -Xswiftc -enable-incremental-file-hashing -Xswiftc -warnings-as-errors
 
       - name: Generate the demo library
         run: swift Testing/makefixtures.swift Testing/DemoLibrary
 
       - name: Pipeline checks
-        run: Scripts/ci-check.sh build/Doctopus.app/Contents/MacOS/Doctopus --selftest Testing/DemoLibrary
+        run: build/Doctopus.app/Contents/MacOS/Doctopus --selftest Testing/DemoLibrary
 
       # Hit testing and thumbnail rendering only fail when the views are really
       # on screen, so these drive hosted panes with synthetic events.
       - name: UI checks
-        run: Scripts/ci-check.sh build/Doctopus.app/Contents/MacOS/Doctopus --uitest Testing/DemoLibrary build/snapshots
+        run: build/Doctopus.app/Contents/MacOS/Doctopus --uitest Testing/DemoLibrary build/snapshots
 
       - name: Snapshots
         if: always()
@@ -90,4 +90,4 @@ jobs:
             release-${{ steps.toolchain.outputs.id }}-${{ hashFiles('Package.swift', 'Package.resolved') }}-
 
       - name: Build
-        run: Scripts/ci-check.sh Scripts/build.sh release -Xswiftc -enable-incremental-file-hashing -Xswiftc -warnings-as-errors
+        run: Scripts/build.sh release -Xswiftc -enable-incremental-file-hashing -Xswiftc -warnings-as-errors
