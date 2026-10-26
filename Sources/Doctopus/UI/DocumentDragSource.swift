@@ -43,7 +43,8 @@ struct DocumentDragSource: NSViewRepresentable {
             guard window != nil else { return }
             monitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .leftMouseDragged, .leftMouseUp]) {
                 [weak self] event in
-                MainActor.assumeIsolated { self?.handle(event) ?? event }
+                let consumed = MainActor.assumeIsolated { self?.handle(event) == nil }
+                return consumed ? nil : event
             }
         }
 
