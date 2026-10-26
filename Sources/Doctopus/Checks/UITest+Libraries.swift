@@ -3,6 +3,23 @@ import AppKit
 
 /// Libraries and their windows: one apart from another, and one whose folder moves.
 extension UITest {
+    static func creatingFolderKeepsTheCurrentView(_ model: AppModel) async {
+        guard let lib = model.library else { return }
+        model.selection = .all
+        model.searchText = ""
+        model.reloadDocuments()
+        _ = await settle { !model.documents.isEmpty }
+        guard let row = model.documents.first else { return }
+        model.selectedIDs = [row.id]
+        let folder = lib.root.appendingPathComponent("Created \(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        model.createFolder(named: folder.lastPathComponent, in: lib.root)
+        _ = await settle { lib.folders.first?.children.contains(where: { $0.path == folder.path }) == true }
+        Check.that("creating a folder keeps the current view and selected document",
+                   model.selection == .all && model.selectedIDs == [row.id]
+                       && FileManager.default.fileExists(atPath: folder.path))
+    }
+
     /// A library whose folder is renamed while open reopens where it went,
     /// and one whose folder is deleted closes, rather than going on handing
     /// out paths that no longer exist.

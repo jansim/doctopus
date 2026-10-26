@@ -148,7 +148,6 @@ extension AppModel {
         do {
             try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
             refreshAll()
-            selection = .folder(url.path)
         } catch {
             errorMessage = "Could not create “\(name)”: \(error.localizedDescription)"
         }
@@ -160,9 +159,42 @@ extension AppModel {
     /// only if that says so.
     func renameFolder(_ path: String, to name: String,
                       confirmRules: @escaping @MainActor ([Rule]) -> Bool = { _ in false }) {
-        guard let lib = library, lib.owns(path: path) else { return }
         let source = URL(fileURLWithPath: path)
         let destination = source.deletingLastPathComponent().appendingPathComponent(name, isDirectory: true).path
+        relocateFolder(path, to: destination, confirmRules: confirmRules)
+    }
+
+    func folderMoveDestination(_ path: String, into parent: String) -> String? {
+        guard let lib = library else { return nil }
+        let source = URL(fileURLWithPath: path).standardizedFileURL.resolvingSymlinksInPath().path
+        let target = URL(fileURLWithPath: parent).standardizedFileURL.resolvingSymlinksInPath().path
+        guard source == path, target == parent,
+              FolderPicker.relativePath(for: URL(fileURLWithPath: source), in: lib) != nil,
+              FolderPicker.relativePath(for: URL(fileURLWithPath: target), in: lib) != nil,
+              source != lib.root.path, target != source, !target.hasPrefix(source + "/") else { return nil }
+        let destination = URL(fileURLWithPath: target)
+            .appendingPathComponent(URL(fileURLWithPath: source).lastPathComponent, isDirectory: true).path
+        guard destination != source, !FileManager.default.fileExists(atPath: destination),
+              (try? URL(fileURLWithPath: source).resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true,
+              (try? URL(fileURLWithPath: target).resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true
+        else { return nil }
+        return destination
+    }
+
+    @discardableResult
+    func moveFolder(_ path: String, into parent: String,
+                    confirmRules: @escaping @MainActor ([Rule]) -> Bool = { _ in false }) -> Bool {
+        guard let destination = folderMoveDestination(path, into: parent) else { return false }
+        relocateFolder(path, to: destination, confirmRules: confirmRules)
+        return true
+    }
+
+    private func relocateFolder(_ path: String, to destination: String,
+                                confirmRules: @escaping @MainActor ([Rule]) -> Bool) {
+        guard let lib = library, lib.owns(path: path), path != lib.root.path,
+              lib.owns(path: destination), destination != path,
+              !destination.hasPrefix(path + "/") else { return }
+        let source = URL(fileURLWithPath: path)
         Task {
             do {
                 try await lib.store.moveFolder(from: path, to: destination)
@@ -173,13 +205,19 @@ extension AppModel {
                     throw error
                 }
             } catch {
-                errorMessage = "Could not rename “\(source.lastPathComponent)”: \(error.localizedDescription)"
+                errorMessage = "Could not move or rename “\(source.lastPathComponent)”: \(error.localizedDescription)"
                 return
             }
             if case .folder(let selected) = selection, selected == path || selected.hasPrefix(path + "/") {
                 selection = .folder(destination + selected.dropFirst(path.count))
             }
+            collapsedFolders = Set(collapsedFolders.map { folder in
+                folder == path || folder.hasPrefix(path + "/")
+                    ? destination + folder.dropFirst(path.count) : folder
+            })
+            collapsedFolders.remove(URL(fileURLWithPath: destination).deletingLastPathComponent().path)
             refreshAll()
+            reloadDetail()
             await refileRules(from: path, to: destination, in: lib, confirm: confirmRules)
         }
     }

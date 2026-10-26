@@ -23,10 +23,15 @@ struct DocumentListView: View {
     }
 
     private var browser: some View {
-        Group {
-            switch model.viewMode {
-            case .list: DocumentTableView()
-            case .gallery: DocumentGalleryView()
+        ScrollViewReader { proxy in
+            Group {
+                switch model.viewMode {
+                case .list: DocumentTableView()
+                case .gallery: DocumentGalleryView()
+                }
+            }
+            .onChange(of: model.documentToReveal) { _, id in
+                if let id { proxy.scrollTo(id, anchor: .center) }
             }
         }
         .overlay(alignment: .center) { emptyState }
@@ -557,6 +562,9 @@ private struct DocumentMenu: View {
             Button("Quick Look") { model.quickLook(startingAt: rows.first) }
             Button("Open in Default App") { model.open(rows) }
             Button("Reveal in Finder") { model.reveal(rows) }
+            if model.selection != .deleted {
+                Button("Show in All Documents") { model.showInAllDocuments(rows) }
+            }
             ShareLink(items: rows.map(\.url))
             if model.selection.isQueueMode {
                 Divider()

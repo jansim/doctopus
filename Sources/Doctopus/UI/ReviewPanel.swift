@@ -154,7 +154,7 @@ private struct DocumentReview: View {
     }
 }
 
-private struct GeneratedInfoEditor: View {
+struct GeneratedInfoEditor: View {
     @Environment(AppModel.self) private var model
     let detail: DocumentDetail
     @Binding var version: KeptVersion
@@ -206,12 +206,12 @@ private struct GeneratedInfoEditor: View {
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     tags
+                    if VersionPicker.applies(to: detail) {
+                        Divider()
+                        VersionPicker(detail: detail, version: $version)
+                    }
                 }
                 .padding(.horizontal, 12).padding(.bottom, 10)
-            }
-            if VersionPicker.applies(to: detail) {
-                Divider()
-                VersionPicker(detail: detail, version: $version)
             }
         }
         .confirmationDialog("Discard what was generated for “\(row.displayTitle)”?",

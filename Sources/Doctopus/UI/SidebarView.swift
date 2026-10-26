@@ -275,6 +275,19 @@ struct FolderRow: View {
     }
 
     var body: some View {
+        if !node.isRoot, let library = model.library {
+            row.draggable(FolderDragItem(path: node.path, libraryID: library.id))
+        } else {
+            row
+        }
+        if isExpanded {
+            ForEach(node.children) { child in
+                FolderRow(node: child, depth: depth + 1)
+            }
+        }
+    }
+
+    private var row: some View {
         Label {
             HStack(spacing: 2) {
                 if !node.children.isEmpty {
@@ -319,15 +332,9 @@ struct FolderRow: View {
         .padding(.leading, CGFloat(depth) * 11)
         .tag(Selection.folder(node.path))
         .contextMenu { menu }
-        .onDrop(of: [.doctopusDocument],
+        .onDrop(of: [.doctopusDocument, .doctopusFolder],
                 delegate: FolderDropDelegate(folder: node.path, model: model,
-                                             state: dropState))
-
-        if isExpanded {
-            ForEach(node.children) { child in
-                FolderRow(node: child, depth: depth + 1)
-            }
-        }
+                                             state: dropState, confirmRules: confirmRules))
     }
 
     @ViewBuilder
@@ -368,17 +375,19 @@ struct FolderRow: View {
         guard let name = TextPrompt.ask(title: "Rename Folder",
                                         message: "Renames the folder on disk; documents inside keep their tags and metadata.",
                                         initial: node.name) else { return }
-        model.renameFolder(node.path, to: name) { rules in
-            let alert = NSAlert()
-            alert.messageText = rules.count == 1
-                ? "Update the rule that files into “\(node.name)”?"
-                : "Update the \(rules.count) rules that file into “\(node.name)”?"
-            alert.informativeText = rules.map { "“\($0.name)” → \($0.destination ?? "")" }
-                .joined(separator: "\n")
-            alert.addButton(withTitle: rules.count == 1 ? "Update Rule" : "Update Rules")
-            alert.addButton(withTitle: "Leave As They Are")
-            return alert.runModal() == .alertFirstButtonReturn
-        }
+        model.renameFolder(node.path, to: name, confirmRules: confirmRules)
+    }
+
+    private func confirmRules(_ rules: [Rule]) -> Bool {
+        let alert = NSAlert()
+        alert.messageText = rules.count == 1
+            ? "Update the rule that files into this folder?"
+            : "Update the \(rules.count) rules that file into this folder?"
+        alert.informativeText = rules.map { "“\($0.name)” → \($0.destination ?? "")" }
+            .joined(separator: "\n")
+        alert.addButton(withTitle: rules.count == 1 ? "Update Rule" : "Update Rules")
+        alert.addButton(withTitle: "Leave As They Are")
+        return alert.runModal() == .alertFirstButtonReturn
     }
 }
 

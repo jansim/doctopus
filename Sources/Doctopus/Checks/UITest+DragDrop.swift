@@ -169,6 +169,67 @@ extension UITest {
         try? fm.removeItem(at: destination)
     }
 
+    static func draggingFoldersMovesTheirContents(_ model: AppModel) async {
+        guard let lib = model.library else { return }
+        let fm = FileManager.default
+        let source = lib.root.appendingPathComponent("Folder drag \(UUID().uuidString)")
+        let child = source.appendingPathComponent("Nested")
+        let target = lib.root.appendingPathComponent("Folder target \(UUID().uuidString)")
+        try? fm.createDirectory(at: child, withIntermediateDirectories: true)
+        try? fm.createDirectory(at: target, withIntermediateDirectories: true)
+        defer {
+            try? fm.removeItem(at: source)
+            try? fm.removeItem(at: target)
+            model.selection = .all
+        }
+        guard let row = model.documents.first(where: { fm.fileExists(atPath: $0.path) }) else { return }
+        let file = child.appendingPathComponent("nested.pdf")
+        guard copyAsNew(row.url, to: file) else { return }
+        _ = await lib.indexer.indexAll()
+        let indexed = try? await lib.store.listDocuments(selection: .folder(child.path), query: SearchQuery(""),
+                                                        sort: .name, ascending: true)
+        guard let document = indexed?.first else {
+            return Check.that("a nested document to move with its folder", false)
+        }
+        model.selection = .folder(child.path)
+        model.collapsedFolders.insert(source.path)
+        Check.that("folder drops refuse the root, cycles, unchanged parents and destinations outside the library",
+                   model.folderMoveDestination(lib.root.path, into: target.path) == nil
+                       && model.folderMoveDestination(source.path, into: child.path) == nil
+                       && model.folderMoveDestination(source.path, into: source.path) == nil
+                       && model.folderMoveDestination(source.path, into: lib.root.path) == nil
+                       && model.folderMoveDestination(source.path, into: lib.root.deletingLastPathComponent().path) == nil)
+        let node = FolderNode(path: target.path, name: target.lastPathComponent,
+                              children: [], count: 0, deepCount: 0)
+        let (window, host) = host(VStack { FolderRow(node: node, depth: 0) }.environment(model),
+                                  size: NSSize(width: 300, height: 90))
+        defer { window.orderOut(nil) }
+        var targetView: NSView?
+        _ = await settle {
+            targetView = dropTargets(in: host).first { view in
+                view.registeredDraggedTypes.contains {
+                    UTType($0.rawValue).map(UTType.doctopusFolder.conforms(to:)) == true
+                }
+            }
+            return targetView != nil
+        }
+        guard let targetView else { return Check.that("a sidebar row accepts folder drags", false) }
+        let accepted = drop(FolderDragItem(path: source.path, libraryID: lib.id), type: .doctopusFolder,
+                            on: targetView, in: window)
+        let moved = target.appendingPathComponent(source.lastPathComponent)
+        let movedChild = moved.appendingPathComponent("Nested")
+        let arrived = await settle { fm.fileExists(atPath: movedChild.appendingPathComponent("nested.pdf").path) }
+        let detail = await model.loadDetail(document.id)
+        _ = await settle { model.selection == .folder(movedChild.path) }
+        Check.that("a sidebar folder drop moves nested files and preserves indexed document identities",
+                   accepted && arrived && detail?.row.path == movedChild.appendingPathComponent("nested.pdf").path)
+        Check.that("selection and collapsed folders follow a folder drop",
+                   model.selection == .folder(movedChild.path) && model.collapsedFolders.contains(moved.path))
+        try? fm.createDirectory(at: source, withIntermediateDirectories: true)
+        Check.that("a folder drop refuses an existing destination instead of merging folders",
+                   model.folderMoveDestination(source.path, into: target.path) == nil)
+    }
+
     static func undoTakesBackAMove(_ model: AppModel) async {
         let undo = UndoManager()
         model.undoManager = undo
@@ -186,13 +247,14 @@ extension UITest {
         Check.that("…and undoing it puts the file back where it was", back)
     }
 
-    private static func drop(_ item: DocumentDragItem, on target: NSView, in window: NSWindow) -> Bool {
+    private static func drop<T: Encodable>(_ item: T, type: UTType = .doctopusDocument,
+                                            on target: NSView, in window: NSWindow) -> Bool {
         guard let payload = try? JSONEncoder().encode(item) else { return false }
         let pasteboard = NSPasteboard(name: .init("doctopus-uitest-\(UUID().uuidString)"))
         defer { pasteboard.releaseGlobally() }
         pasteboard.clearContents()
         let entry = NSPasteboardItem()
-        _ = entry.setData(payload, forType: .init(UTType.doctopusDocument.identifier))
+        _ = entry.setData(payload, forType: .init(type.identifier))
         _ = pasteboard.writeObjects([entry])
 
         let middle = target.convert(NSPoint(x: target.bounds.midX, y: target.bounds.midY), to: nil)

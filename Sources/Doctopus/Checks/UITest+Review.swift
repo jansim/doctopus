@@ -3,6 +3,38 @@ import AppKit
 
 /// Filing from the review panel and the folder picker.
 extension UITest {
+    static func versionChoiceScrollsIntoView(_ model: AppModel, snapshots: String?) async {
+        guard let row = model.documents.first(where: { $0.ext.lowercased() == "pdf" }),
+              var detail = await model.loadDetail(row.doc) else { return }
+        detail.row.originalSize = row.size + 100
+        detail.originalFileURL = row.url
+        detail.row.summary = Array(repeating: "A long document can have a long summary.", count: 80)
+            .joined(separator: "\n")
+        var version = KeptVersion.optimized
+        let binding = Binding(get: { version }, set: { version = $0 })
+        let (window, host) = host(GeneratedInfoEditor(detail: detail, version: binding).environment(model),
+                                  size: NSSize(width: 380, height: 240))
+        defer { window.orderOut(nil) }
+        func descendants<T: NSView>(_ view: NSView, of type: T.Type) -> [T] {
+            (view as? T).map { [$0] } ?? view.subviews.flatMap { descendants($0, of: type) }
+        }
+        var picker: NSSegmentedControl?
+        _ = await settle {
+            picker = descendants(host, of: NSSegmentedControl.self).first
+            return picker != nil
+        }
+        guard let picker else { return Check.that("the version choice exists in a short review pane", false) }
+        picker.scrollToVisible(picker.bounds)
+        try? await Task.sleep(for: .milliseconds(300))
+        let visible = !picker.visibleRect.isEmpty
+        picker.setSelected(true, forSegment: 0)
+        _ = picker.sendAction(picker.action, to: picker.target)
+        _ = await settle { version == .original }
+        Check.that("the version choice scrolls into view below a long summary and remains selectable",
+                   visible && version == .original)
+        if let dir = snapshots { snapshot(host, to: dir + "/review-version-scrolled.png") }
+    }
+
     static func folderPickerResolvesPaths(_ model: AppModel) {
         guard let library = model.library else {
             Check.that("a library to resolve chosen folders against", false)

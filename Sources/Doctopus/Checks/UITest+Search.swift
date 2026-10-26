@@ -4,6 +4,24 @@ import AppKit
 /// The search field in a library window's toolbar, which only exists once
 /// the whole window is on screen with its toolbar.
 extension UITest {
+    static func showingSearchResultsInAllDocuments(_ model: AppModel) async {
+        model.selection = .all
+        model.searchText = ""
+        model.reloadDocuments()
+        _ = await settle { !model.documents.isEmpty }
+        guard let row = model.documents.first else { return }
+        model.selection = .folder(row.directory)
+        model.searchText = "filename:\"\(row.filename)\""
+        _ = await settle { model.documents.contains(where: { $0.id == row.id }) }
+        model.showInAllDocuments([row])
+        let shown = await settle {
+            model.selection == .all && model.searchText.isEmpty
+                && model.selectedIDs == [row.doc] && model.documentToReveal == row.doc
+                && model.documents.contains(where: { $0.id == row.doc })
+        }
+        Check.that("Show in All Documents clears folder and search filters and selects the result", shown)
+    }
+
     /// Asks `ToolbarSearch` rather than posting a keystroke: a local monitor
     /// only sees events the run loop takes off the queue itself.
     static func searchFieldTakesAndGivesUpFocus(_ model: AppModel) async {

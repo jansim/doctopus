@@ -73,7 +73,15 @@ extension AppModel {
         reloadDocuments(resetPaging: false)
     }
 
-    func reloadDocuments(resetPaging: Bool = true) {
+    func showInAllDocuments(_ rows: [DocumentRow]) {
+        documentToReveal = nil
+        selection = .all
+        searchText = ""
+        searchTask?.cancel()
+        reloadDocuments(revealing: Set(rows.map(\.doc)))
+    }
+
+    func reloadDocuments(resetPaging: Bool = true, revealing: Set<Int64>? = nil) {
         if resetPaging { currentLimit = Self.pageBatchSize }
         let sel = selection, text = searchText, sortField = sort, asc = sortAscending
         let keys = Set(fields.map(\.key))
@@ -85,18 +93,29 @@ extension AppModel {
         reloadDocsTask = Task { [weak self] in
             guard let self else { return }
             let query = SearchQuery(text, fieldKeys: keys)
-            let limit = self.currentLimit
-            let rows = (try? await lib.store.listDocuments(
+            var limit = self.currentLimit
+            var rows = (try? await lib.store.listDocuments(
                 selection: sel, query: query, sort: sortField, ascending: asc, limit: limit,
                 ruleMatched: sel == .needsReview ? lib.ruleMatchedDocs : [])) ?? []
+            // The result may have been found beyond the first page in All Documents.
+            while let revealing, !revealing.isSubset(of: Set(rows.map(\.id))), rows.count >= limit {
+                guard !Task.isCancelled else { return }
+                limit += Self.pageBatchSize
+                rows = (try? await lib.store.listDocuments(
+                    selection: sel, query: query, sort: sortField, ascending: asc, limit: limit)) ?? []
+            }
             guard !Task.isCancelled else { return }
-
+            self.currentLimit = limit
             self.documents = rows
             self.hasMoreDocuments = rows.count >= limit
             let live = Set(rows.map(\.id))
-            let kept = self.selectedIDs.intersection(live)
+            let kept = (revealing ?? self.selectedIDs).intersection(live)
             if kept != self.selectedIDs { self.selectedIDs = kept }
             if self.selectedIDs.isEmpty { self.detail = nil }
+            else if revealing != nil {
+                self.reloadDetail()
+                self.documentToReveal = rows.first(where: { kept.contains($0.id) })?.id
+            }
         }
     }
 

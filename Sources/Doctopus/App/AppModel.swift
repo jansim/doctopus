@@ -115,6 +115,7 @@ final class AppModel {
     var stats: Store.Stats { library?.stats ?? Store.Stats() }
 
     var documents: [DocumentRow] = []
+    var documentToReveal: Int64?
     /// Only one sidebar folder owns the current drag highlight.
     var folderDropTarget: String?
     var metadataKind = MetadataKind.tags

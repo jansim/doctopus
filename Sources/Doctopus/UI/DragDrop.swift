@@ -5,7 +5,17 @@ import Observation
 
 extension UTType {
     static let doctopusDocument = UTType(exportedAs: "io.doctopus.document")
+    static let doctopusFolder = UTType(exportedAs: "io.doctopus.folder")
     static let doctopusLibrary = UTType(exportedAs: "io.doctopus.library")
+}
+
+struct FolderDragItem: Codable, Transferable, Sendable {
+    var path: String
+    var libraryID: LibraryID
+
+    static var transferRepresentation: some TransferRepresentation {
+        CodableRepresentation(contentType: .doctopusFolder)
+    }
 }
 
 struct DocumentDragItem: Codable, Transferable, Hashable, Sendable {
@@ -132,19 +142,20 @@ struct FolderDropDelegate: DropDelegate {
     let folder: String
     let model: AppModel
     let state: FolderDropState
+    var confirmRules: @MainActor @Sendable ([Rule]) -> Bool = { _ in false }
 
     func validateDrop(info: DropInfo) -> Bool {
-        info.hasItemsConforming(to: [.doctopusDocument])
+        info.hasItemsConforming(to: [.doctopusDocument, .doctopusFolder])
     }
 
     func dropEntered(info: DropInfo) {
         state.finished = false
-        note(.held)
+        note(info.hasItemsConforming(to: [.doctopusFolder]) ? .move : .held)
     }
 
     func dropUpdated(info: DropInfo) -> DropProposal? {
         guard !state.finished else { return nil }
-        note(.held)
+        note(info.hasItemsConforming(to: [.doctopusFolder]) ? .move : .held)
         // A move shows the plain arrow; copy would badge it with the green
         // plus, which says the opposite of what letting go will do.
         return DropProposal(operation: state.intent == .move ? .move : .copy)
@@ -159,6 +170,17 @@ struct FolderDropDelegate: DropDelegate {
     func performDrop(info: DropInfo) -> Bool {
         state.finished = true
         MainActor.assumeIsolated { model.folderDropTarget = nil }
+        if info.hasItemsConforming(to: [.doctopusFolder]) {
+            guard let provider = info.itemProviders(for: [.doctopusFolder]).first else { return false }
+            _ = provider.loadDataRepresentation(for: .doctopusFolder) { [model, folder, confirmRules] data, _ in
+                guard let data, let item = try? JSONDecoder().decode(FolderDragItem.self, from: data) else { return }
+                Task { @MainActor in
+                    guard item.libraryID == model.library?.id else { return }
+                    model.moveFolder(item.path, into: folder, confirmRules: confirmRules)
+                }
+            }
+            return true
+        }
         let providers = info.itemProviders(for: [.doctopusDocument])
         guard !providers.isEmpty else { return false }
         // Decided now, while the keys still say what was held.
