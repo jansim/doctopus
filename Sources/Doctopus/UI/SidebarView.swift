@@ -260,7 +260,9 @@ struct FolderRow: View {
     let node: FolderNode
     let depth: Int
 
-    @State private var hovering: FolderDropIntent?
+    private var hovering: FolderDropIntent? {
+        model.folderDropTarget == node.path ? dropState.intent : nil
+    }
     @State private var dropState = FolderDropState()
     private var isExpanded: Bool { !model.collapsedFolders.contains(node.path) }
     /// Lit while ⌥ is held and a selected document is in this folder. A
@@ -319,7 +321,7 @@ struct FolderRow: View {
         .contextMenu { menu }
         .onDrop(of: [.doctopusDocument],
                 delegate: FolderDropDelegate(folder: node.path, model: model,
-                                             state: dropState, hovering: $hovering))
+                                             state: dropState))
 
         if isExpanded {
             ForEach(node.children) { child in

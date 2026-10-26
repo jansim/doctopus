@@ -17,12 +17,27 @@ extension Indexer {
         }
     }
 
-    /// A file from outside the library is copied in and the original left alone —
-    /// `movingSource` is only for files the app itself produced. A file already in
-    /// the library is indexed in place, never optimized or moved.
+    struct ImportBatch: Sendable {
+        var summary: ImportSummary
+        var imported: [(Int64, String)]
+        var inPlace: [(Int64, String)]
+        var fresh: Set<Int64>
+        var route: Bool
+        var scanned: Bool
+    }
+
     @discardableResult
     func importFiles(_ urls: [URL], into destination: URL,
                      movingSource: Bool = false, route: Bool = false) async -> ImportSummary {
+        let batch = await receiveFiles(urls, into: destination, movingSource: movingSource, route: route)
+        return await processImport(batch)
+    }
+
+    /// A file from outside the library is copied in and the original left alone —
+    /// `movingSource` is only for files the app itself produced. A file already in
+    /// the library is indexed in place, never optimized or moved.
+    func receiveFiles(_ urls: [URL], into destination: URL,
+                      movingSource: Bool = false, route: Bool = false) async -> ImportBatch {
         var summary = ImportSummary()
         var imported: [(Int64, String)] = []
         var inPlace: [(Int64, String)] = []
@@ -44,7 +59,8 @@ extension Indexer {
                 if r.isNew { fresh.insert(r.id) }
                 continue
             }
-            if let sourceHash = FileScanner.hash(url),
+            let sourceHash = FileScanner.hash(url)
+            if let sourceHash,
                (try? await store.findDuplicate(hash: sourceHash)) != nil {
                 summary.duplicates += 1
                 summary.duplicateNames.append(url.lastPathComponent)
@@ -69,15 +85,31 @@ extension Indexer {
                     summary.fail(url.lastPathComponent, "its copy could not be read"); continue
                 }
                 let r = try await store.upsertDocument(facts, origin: origin)
+                if let sourceHash { try await store.setHash(r.id, hash: sourceHash, isOriginal: true) }
                 imported.append((r.id, target.path))
                 summary.imported += 1
             } catch {
                 summary.fail(url.lastPathComponent, error.localizedDescription)
             }
         }
-        await process(documents: inPlace, phase: "Indexing", isImport: false, found: fresh)
-        await process(documents: imported, phase: "Importing", isImport: true, route: route,
-                      scanned: movingSource)
+        for (id, path) in imported {
+            try? await store.logProcessing(docID: id, action: .imported,
+                                           detail: "Received — waiting for text extraction and analysis",
+                                           rule: nil, from: nil, to: path, approved: false)
+        }
+        onDataChanged()
+        return ImportBatch(summary: summary, imported: imported, inPlace: inPlace,
+                           fresh: fresh, route: route, scanned: movingSource)
+    }
+
+    @discardableResult
+    func processImport(_ batch: ImportBatch) async -> ImportSummary {
+        var summary = batch.summary
+        let imported = batch.imported
+        let route = batch.route
+        await process(documents: batch.inPlace, phase: "Indexing", isImport: false, found: batch.fresh)
+        await process(documents: imported, phase: "Processing", isImport: true, route: route,
+                      scanned: batch.scanned)
         if route {
             for (id, path) in imported {
                 if let now = try? await store.documentPath(id), now != path { summary.routed += 1 }

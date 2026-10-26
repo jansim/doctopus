@@ -35,8 +35,13 @@ extension AppModel {
             return
         }
         Task {
-            let result = await lib.indexer.importFiles(urls, into: dest, movingSource: movingSource,
+            let batch = await lib.indexer.receiveFiles(urls, into: dest, movingSource: movingSource,
                                                        route: chosen == nil)
+            if batch.summary.imported > 0 {
+                let n = batch.summary.imported
+                notify("Received \(n) document\(n == 1 ? "" : "s") — processing in the background.", .info)
+            }
+            let result = await lib.indexer.processImport(batch)
             if result.imported == 0, result.duplicates > 0, result.alreadyInLibrary == 0, result.failed == 0 {
                 notify(result.duplicates == 1
                        ? "Skipped “\(result.duplicateNames.first ?? "file")” — already in library."

@@ -161,6 +161,9 @@ extension UITest {
                    "taken \(movedTaken), at \(name)/\(moving.filename) \(fm.fileExists(atPath: landed.path)), "
                        + "gone from where it was \(!fm.fileExists(atPath: moving.path))")
 
+        Check.that("a completed folder drop clears the sidebar highlight",
+                   model.folderDropTarget == nil, model.folderDropTarget ?? "clear")
+
         try? fm.createDirectory(at: cameFrom, withIntermediateDirectories: true)
         try? fm.moveItem(at: landed, to: cameFrom.appendingPathComponent(moving.filename))
         try? fm.removeItem(at: destination)

@@ -14,7 +14,13 @@ extension SelfTest {
             quiet.autoRouteImports = false
             quiet.deriveWhenNoRule = false
             await indexer.update(settings: quiet)
-            await indexer.importFiles([outside], into: root.appendingPathComponent("Inbox"))
+            let received = await indexer.receiveFiles([outside], into: root.appendingPathComponent("Inbox"))
+            let receivedID = received.imported.first?.0 ?? 0
+            let receivedText = try? await store.ocrText(receivedID)
+            let waiting = (try? await store.processingQueue())?.contains { $0.docID == receivedID && !$0.approved }
+            Check.that("receiving a file makes it available for review before OCR or model analysis",
+                       received.summary.imported == 1 && (receivedText ?? "").isEmpty && waiting == true)
+            await indexer.processImport(received)
             let copied = ((try? await store.listDocuments(selection: .all, query: SearchQuery(""),
                                                           sort: .added, ascending: false)) ?? [])
                 .first { $0.filename == outside.lastPathComponent }
