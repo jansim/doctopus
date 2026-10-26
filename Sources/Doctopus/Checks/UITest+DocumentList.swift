@@ -55,22 +55,6 @@ extension UITest {
             Check.that("clicking the \(where_) of a gallery thumbnail selects it", selected)
         }
 
-        // Inside the empty part of the month header, clear of the scrollbar.
-        let margin = NSPoint(x: size.width / 2, y: size.height - 10)
-        func isDocument(_ point: NSPoint) -> Bool {
-            let event = NSEvent.mouseEvent(with: .leftMouseUp, location: point, modifierFlags: [],
-                                          timestamp: ProcessInfo.processInfo.systemUptime,
-                                          windowNumber: window.windowNumber, context: nil,
-                                          eventNumber: 1, clickCount: 1, pressure: 1)
-            return DocumentDragSource.containsDocumentClick(event)
-        }
-        Check.that("gallery document clicks are distinguished from clicks in an empty header",
-                   isDocument(middle) && !isDocument(margin))
-        let cleared = await click(window, at: margin, attempts: 1, settling: 0.6) {
-            model.selectedIDs.isEmpty
-        }
-        Check.that("clicking empty gallery space clears the selection", cleared)
-
         model.selectedIDs = []
         let start = Date()
         post(window, at: middle)

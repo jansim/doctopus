@@ -385,20 +385,13 @@ private struct DocumentGalleryView: View {
             .padding(.bottom, 18)
             // The first header starts flush with the top, not floating below a gap.
             .padding(.top, headed ? 0 : 18)
-            .background { galleryBackground }
         }
-        .background { galleryBackground }
-    }
-
-    private var galleryBackground: some View {
-        Color.clear
-            .contentShape(Rectangle())
-            .onTapGesture {
-                if !DocumentDragSource.containsDocumentClick(NSApp.currentEvent) {
-                    model.selectedIDs = []
-                }
-            }
-            .contextMenu { BackgroundMenu() }
+        .background {
+            Color.clear
+                .contentShape(Rectangle())
+                .onTapGesture { model.selectedIDs = [] }
+                .contextMenu { BackgroundMenu() }
+        }
     }
 
     private func cells(_ rows: [DocumentRow]) -> some View {
