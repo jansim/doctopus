@@ -403,28 +403,27 @@ private struct DocumentGalleryView: View {
     private func cells(_ rows: [DocumentRow]) -> some View {
         ForEach(rows) { row in
             GalleryCell(row: row, width: cell)
-                .background(DocumentDragSource(row: row, model: model).allowsHitTesting(false))
+                .background(DocumentDragSource(row: row, model: model,
+                                               onClick: { click(row, event: $0) })
+                    .allowsHitTesting(false))
                 .contentShape(Rectangle())
-                // One tap handler reading the click count: a stacked double-tap gesture
-                // makes SwiftUI hold every single click back.
-                .onTapGesture { click(row) }
                 .contextMenu {
                     DocumentMenu(rows: model.selectedIDs.contains(row.id) ? model.selectedRows : [row])
                 }
         }
     }
 
-    private func click(_ row: DocumentRow) {
-        if (NSApp.currentEvent?.clickCount ?? 1) >= 2 {
+    private func click(_ row: DocumentRow, event: NSEvent) {
+        if event.clickCount >= 2 {
             model.open(model.selectedIDs.contains(row.id) ? model.selectedRows : [row])
         } else {
-            select(row)
+            select(row, modifiers: event.modifierFlags)
         }
     }
 
-    private func select(_ row: DocumentRow) {
+    private func select(_ row: DocumentRow, modifiers: NSEvent.ModifierFlags) {
         let outcome = GallerySelection.click(row.id, in: model.documents.map(\.id),
-                                             modifiers: NSEvent.modifierFlags,
+                                             modifiers: modifiers,
                                              selection: model.selectedIDs, anchor: selectionAnchor)
         model.selectedIDs = outcome.selection
         selectionAnchor = outcome.anchor

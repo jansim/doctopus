@@ -7,12 +7,14 @@ struct DocumentDragSource: NSViewRepresentable {
     let row: DocumentRow
     let model: AppModel
     var wholeTableRow = false
+    var onClick: ((NSEvent) -> Void)?
 
     func makeNSView(context: Context) -> SourceView { SourceView() }
 
     func updateNSView(_ view: SourceView, context: Context) {
         view.rows = { model.selectedIDs.contains(row.id) ? model.selectedRows : [row] }
         view.wholeTableRow = wholeTableRow
+        view.onClick = onClick
         view.ended = { model.folderDropTarget = nil }
     }
 
@@ -45,6 +47,7 @@ struct DocumentDragSource: NSViewRepresentable {
     final class SourceView: NSView, NSDraggingSource {
         var rows: () -> [DocumentRow] = { [] }
         var ended: () -> Void = {}
+        var onClick: ((NSEvent) -> Void)?
         private var monitor: Any?
         private var down: NSPoint?
         private var startingRows: [DocumentRow] = []
@@ -75,6 +78,13 @@ struct DocumentDragSource: NSViewRepresentable {
 
         private func containsStart(_ event: NSEvent, point: NSPoint) -> Bool {
             guard !isHiddenOrHasHiddenAncestor else { return false }
+            // Native controls, such as the gallery's approval checkbox, keep
+            // their own click and tracking loop.
+            var hit = window?.contentView?.hitTest(event.locationInWindow)
+            while let view = hit {
+                if view is NSControl { return false }
+                hit = view.superview
+            }
             if wholeTableRow {
                 var ancestor = superview
                 while let view = ancestor {
@@ -98,8 +108,13 @@ struct DocumentDragSource: NSViewRepresentable {
                 down = containsStart(event, point: point) ? point : nil
                 startingRows = down == nil ? [] : rows()
             case .leftMouseUp:
+                let wasClick = down != nil && containsStart(event, point: point)
                 down = nil
                 startingRows = []
+                if wasClick, let onClick {
+                    onClick(event)
+                    return nil
+                }
             case .leftMouseDragged:
                 guard let start = down, hypot(point.x - start.x, point.y - start.y) >= 4 else { break }
                 down = nil
