@@ -1,43 +1,52 @@
 import Foundation
 import PDFKit
+import CoreText
 
 extension SelfTest {
     static func mixedPDFCompression(rows: [DocumentRow]) {
         let fm = FileManager.default
         let file = fm.temporaryDirectory.appendingPathComponent("doctopus-mixed-\(UUID().uuidString).pdf")
         defer { try? fm.removeItem(at: file) }
-        guard let text = rows.compactMap({ PDFDocument(url: $0.url) }).first(where: {
-            ($0.string ?? "").count > 100
-        })?.page(at: 0) else {
-            Check.that("a text page for mixed PDF compression", false); return
-        }
-        guard let scan = rows.compactMap({ PDFDocument(url: $0.url) }).compactMap({ $0.page(at: 0) })
-            .first(where: { ($0.string ?? "").trimmingCharacters(in: .whitespacesAndNewlines).count < 24 }),
-              let scanCopy = scan.copy() as? PDFPage else {
+        guard let row = rows.first(where: {
+            guard let page = PDFDocument(url: $0.url)?.page(at: 0) else { return false }
+            return (page.string ?? "").trimmingCharacters(in: .whitespacesAndNewlines).count < 24
+        }), let source = CGPDFDocument(row.url as CFURL), let scan = source.page(at: 1) else {
             Check.that("a scan page for mixed PDF compression", false); return
         }
-        let mixed = PDFDocument()
-        mixed.insert(scanCopy, at: 0)
-        for i in 1...30 {
-            guard let page = text.copy() as? PDFPage else { return }
-            mixed.insert(page, at: i)
+        var box = scan.getBoxRect(.mediaBox)
+        guard let context = CGContext(file as CFURL, mediaBox: &box, nil) else {
+            Check.that("the mixed PDF fixture can be created", false); return
         }
-        guard mixed.write(to: file) else { return }
+        context.beginPDFPage(nil)
+        withExtendedLifetime(source) { context.drawPDFPage(scan) }
+        context.endPDFPage()
+        let font = CTFontCreateWithName("Helvetica" as CFString, 14, nil)
+        for i in 1...30 {
+            context.beginPDFPage(nil)
+            context.textMatrix = .identity
+            context.textPosition = CGPoint(x: 64, y: 700)
+            let text = NSAttributedString(string: "Mixed document page \(i) keeps its searchable text.",
+                                         attributes: [NSAttributedString.Key(kCTFontAttributeName as String): font])
+            CTLineDraw(CTLineCreateWithAttributedString(text), context)
+            context.endPDFPage()
+        }
+        context.closePDF()
+        let pageCount = 31
         do {
             var bytes = try Data(contentsOf: file)
             bytes.append(Data(("\n%" + String(repeating: "padding", count: 200_000) + "\n").utf8))
             try bytes.write(to: file)
             Check.that("a long mixed PDF falls below the old average-page cutoff",
-                       Int64(bytes.count / mixed.pageCount) < Optimizer.Options.default.minimumPageBytes)
-            let beforeText = PDFDocument(url: file)?.page(at: 1)?.string ?? ""
+                       Int64(bytes.count / pageCount) < Optimizer.Options.default.minimumPageBytes)
+            let beforeText = PDFDocument(url: file)?.string ?? ""
             let result = try Optimizer.optimize(url: file)
             let after = PDFDocument(url: file)
             Check.that("long mixed PDFs can offer an optimized version without losing pages or text",
-                       result != nil && after?.pageCount == mixed.pageCount && !beforeText.isEmpty
-                        && after?.page(at: 1)?.string?.split(whereSeparator: \.isWhitespace)
+                       result != nil && after?.pageCount == pageCount && !beforeText.isEmpty
+                        && after?.string?.split(whereSeparator: \.isWhitespace)
                             == beforeText.split(whereSeparator: \.isWhitespace),
-                       "optimized \(result != nil), pages \(after?.pageCount ?? 0)/\(mixed.pageCount), "
-                        + "before \(beforeText.debugDescription), after \((after?.page(at: 1)?.string ?? "").debugDescription)")
+                       "optimized \(result != nil), pages \(after?.pageCount ?? 0)/\(pageCount), "
+                        + "before \(beforeText.debugDescription), after \((after?.string ?? "").debugDescription)")
         } catch { Check.that("mixed PDF compression completes", false, error.localizedDescription) }
     }
 
