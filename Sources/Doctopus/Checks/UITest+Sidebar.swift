@@ -62,4 +62,26 @@ extension UITest {
         model.revealingFolders = false
         Check.that("letting go of ⌥ clears it", model.revealedFolders.isEmpty)
     }
+    static func folderCreationKeepsContext(_ model: AppModel) async {
+        guard let lib = model.library, let row = model.documents.first else { return }
+        let name = "New-folder-\(UUID().uuidString.prefix(6))"
+        let folder = lib.root.appendingPathComponent(name)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        model.selection = .all
+        model.searchText = row.filename
+        model.selectedIDs = [row.id]
+        model.createFolder(named: name, in: lib.root)
+        Check.that("creating a folder keeps the current view, search and document selection",
+                   model.selection == .all && model.searchText == row.filename
+                    && model.selectedIDs == [row.id] && FileManager.default.fileExists(atPath: folder.path))
+        model.showInAllDocuments(row)
+        let shown = await settle { model.documentToReveal == row.id }
+        Check.that("Show in All Documents clears the search and keeps the document selected",
+                   shown && model.selection == .all && model.searchText.isEmpty
+                    && model.selectedIDs == [row.id] && model.documents.count > 1)
+        model.documentToReveal = nil
+        model.selectedIDs = []
+    }
+
+
 }

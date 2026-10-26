@@ -170,7 +170,7 @@ extension UITest {
     }
 
     static func draggingFoldersMovesTheirContents(_ model: AppModel) async {
-        guard let lib = model.library, let sample = model.documents.first else { return }
+        guard let lib = model.library, let sample = model.documents.first(where: { $0.ext == "pdf" && !$0.missing }) else { return }
         let fm = FileManager.default
         let base = lib.root.appendingPathComponent("Folder-drag-\(UUID().uuidString.prefix(6))")
         let source = base.appendingPathComponent("Source")

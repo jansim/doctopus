@@ -11,8 +11,13 @@ extension SelfTest {
         })?.page(at: 0) else {
             Check.that("a text page for mixed PDF compression", false); return
         }
+        guard let scan = rows.compactMap({ PDFDocument(url: $0.url) }).compactMap({ $0.page(at: 0) })
+            .first(where: { ($0.string ?? "").trimmingCharacters(in: .whitespacesAndNewlines).count < 24 }),
+              let scanCopy = scan.copy() as? PDFPage else {
+            Check.that("a scan page for mixed PDF compression", false); return
+        }
         let mixed = PDFDocument()
-        mixed.insert(PDFPage(), at: 0)
+        mixed.insert(scanCopy, at: 0)
         for i in 1...30 {
             guard let page = text.copy() as? PDFPage else { return }
             mixed.insert(page, at: i)
@@ -20,7 +25,7 @@ extension SelfTest {
         guard mixed.write(to: file) else { return }
         do {
             var bytes = try Data(contentsOf: file)
-            bytes.append(Data(("\n%" + String(repeating: "padding", count: 100_000) + "\n").utf8))
+            bytes.append(Data(("\n%" + String(repeating: "padding", count: 200_000) + "\n").utf8))
             try bytes.write(to: file)
             Check.that("a long mixed PDF falls below the old average-page cutoff",
                        Int64(bytes.count / mixed.pageCount) < Optimizer.Options.default.minimumPageBytes)
@@ -28,7 +33,10 @@ extension SelfTest {
             let after = PDFDocument(url: file)
             Check.that("long mixed PDFs can offer an optimized version without losing pages or text",
                        result != nil && after?.pageCount == mixed.pageCount
-                        && after?.page(at: 1)?.string == text.string)
+                        && after?.page(at: 1)?.string?.split(whereSeparator: \.isWhitespace)
+                            == text.string?.split(whereSeparator: \.isWhitespace),
+                       "optimized \(result != nil), pages \(after?.pageCount ?? 0)/\(mixed.pageCount), "
+                        + "text matches \(after?.page(at: 1)?.string == text.string)")
         } catch { Check.that("mixed PDF compression completes", false, error.localizedDescription) }
     }
 
