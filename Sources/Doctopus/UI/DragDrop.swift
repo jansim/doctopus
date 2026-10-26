@@ -151,12 +151,14 @@ struct FolderDropDelegate: DropDelegate {
     }
 
     func dropExited(info: DropInfo) {
-        if model.folderDropTarget == folder { model.folderDropTarget = nil }
+        MainActor.assumeIsolated {
+            if model.folderDropTarget == folder { model.folderDropTarget = nil }
+        }
     }
 
     func performDrop(info: DropInfo) -> Bool {
         state.finished = true
-        model.folderDropTarget = nil
+        MainActor.assumeIsolated { model.folderDropTarget = nil }
         let providers = info.itemProviders(for: [.doctopusDocument])
         guard !providers.isEmpty else { return false }
         // Decided now, while the keys still say what was held.
@@ -170,7 +172,7 @@ struct FolderDropDelegate: DropDelegate {
 
     private func note(_ intent: FolderDropIntent) {
         state.intent = intent
-        model.folderDropTarget = folder
+        MainActor.assumeIsolated { model.folderDropTarget = folder }
     }
 }
 
