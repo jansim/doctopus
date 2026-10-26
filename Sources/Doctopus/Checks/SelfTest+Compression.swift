@@ -29,14 +29,15 @@ extension SelfTest {
             try bytes.write(to: file)
             Check.that("a long mixed PDF falls below the old average-page cutoff",
                        Int64(bytes.count / mixed.pageCount) < Optimizer.Options.default.minimumPageBytes)
+            let beforeText = PDFDocument(url: file)?.page(at: 1)?.string ?? ""
             let result = try Optimizer.optimize(url: file)
             let after = PDFDocument(url: file)
             Check.that("long mixed PDFs can offer an optimized version without losing pages or text",
-                       result != nil && after?.pageCount == mixed.pageCount
+                       result != nil && after?.pageCount == mixed.pageCount && !beforeText.isEmpty
                         && after?.page(at: 1)?.string?.split(whereSeparator: \.isWhitespace)
-                            == text.string?.split(whereSeparator: \.isWhitespace),
+                            == beforeText.split(whereSeparator: \.isWhitespace),
                        "optimized \(result != nil), pages \(after?.pageCount ?? 0)/\(mixed.pageCount), "
-                        + "text matches \(after?.page(at: 1)?.string == text.string)")
+                        + "before \(beforeText.debugDescription), after \((after?.page(at: 1)?.string ?? "").debugDescription)")
         } catch { Check.that("mixed PDF compression completes", false, error.localizedDescription) }
     }
 
