@@ -92,11 +92,6 @@ extension Indexer {
                 summary.fail(url.lastPathComponent, error.localizedDescription)
             }
         }
-        for (id, path) in imported {
-            try? await store.logProcessing(docID: id, action: .imported,
-                                           detail: "Received — waiting for text extraction and analysis",
-                                           rule: nil, from: nil, to: path, approved: false)
-        }
         onDataChanged()
         return ImportBatch(summary: summary, imported: imported, inPlace: inPlace,
                            fresh: fresh, route: route, scanned: movingSource)

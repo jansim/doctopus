@@ -2,16 +2,17 @@ import SwiftUI
 import AppKit
 import UniformTypeIdentifiers
 
-/// SwiftUI's gallery drag exports one Transferable, even when its preview
-/// counts a selection. AppKit needs one dragging item per file for other apps.
+/// AppKit needs one dragging item per file to export a selection to other apps.
 struct DocumentDragSource: NSViewRepresentable {
     let row: DocumentRow
     let model: AppModel
+    var wholeTableRow = false
 
     func makeNSView(context: Context) -> SourceView { SourceView() }
 
     func updateNSView(_ view: SourceView, context: Context) {
         view.rows = { model.selectedIDs.contains(row.id) ? model.selectedRows : [row] }
+        view.wholeTableRow = wholeTableRow
         view.ended = { model.folderDropTarget = nil }
     }
 
@@ -32,8 +33,10 @@ struct DocumentDragSource: NSViewRepresentable {
         var ended: () -> Void = {}
         private var monitor: Any?
         private var down: NSPoint?
+        private var startingRows: [DocumentRow] = []
+        var wholeTableRow = false
 
-        // The gallery keeps receiving clicks, including modifier clicks and
+        // The browser keeps receiving clicks, including modifier clicks and
         // double-clicks. Only a movement past the drag threshold is taken.
         override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
@@ -43,7 +46,8 @@ struct DocumentDragSource: NSViewRepresentable {
             guard window != nil else { return }
             monitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .leftMouseDragged, .leftMouseUp]) {
                 [weak self] event in
-                let consumed = MainActor.assumeIsolated { self?.handle(event) == nil }
+                guard let self else { return event }
+                let consumed = MainActor.assumeIsolated { self.handle(event) == nil }
                 return consumed ? nil : event
             }
         }
@@ -52,6 +56,24 @@ struct DocumentDragSource: NSViewRepresentable {
             if let monitor { NSEvent.removeMonitor(monitor) }
             monitor = nil
             down = nil
+            startingRows = []
+        }
+
+        private func containsStart(_ event: NSEvent, point: NSPoint) -> Bool {
+            guard !isHiddenOrHasHiddenAncestor else { return false }
+            if wholeTableRow {
+                var ancestor = superview
+                while let view = ancestor {
+                    if let table = view as? NSTableView {
+                        let center = convert(NSPoint(x: bounds.midX, y: bounds.midY), to: table)
+                        let offered = table.convert(event.locationInWindow, from: nil)
+                        let row = table.row(at: center)
+                        return row >= 0 && table.visibleRect.contains(offered) && table.row(at: offered) == row
+                    }
+                    ancestor = view.superview
+                }
+            }
+            return visibleRect.contains(point)
         }
 
         private func handle(_ event: NSEvent) -> NSEvent? {
@@ -59,13 +81,16 @@ struct DocumentDragSource: NSViewRepresentable {
             let point = convert(event.locationInWindow, from: nil)
             switch event.type {
             case .leftMouseDown:
-                down = bounds.contains(point) && !isHiddenOrHasHiddenAncestor ? point : nil
+                down = containsStart(event, point: point) ? point : nil
+                startingRows = down == nil ? [] : rows()
             case .leftMouseUp:
                 down = nil
+                startingRows = []
             case .leftMouseDragged:
                 guard let start = down, hypot(point.x - start.x, point.y - start.y) >= 4 else { break }
                 down = nil
-                let selected = rows()
+                let selected = startingRows
+                startingRows = []
                 let payloads = DocumentDragSource.pasteboardItems(for: selected)
                 guard !payloads.isEmpty else { return event }
                 let items = zip(selected, payloads).enumerated().map { index, pair in

@@ -288,5 +288,6 @@ falls back to the built-in optimizer. The normal original-file retention and
 review behavior applies to either compressor.
 
 File receipt is separate from processing: imported documents and scans appear
-in Needs Review once copied into the library, before text extraction or model
-analysis finishes. The toolbar calls the remaining work Processing.
+in the library once copied, before text extraction or model analysis finishes.
+The toolbar calls the remaining work Processing; Needs Review receives the
+completed analysis and routing suggestions as before.

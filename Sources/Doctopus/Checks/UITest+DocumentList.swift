@@ -172,11 +172,11 @@ extension UITest {
         let internalItems = payloads.compactMap {
             $0.data(forType: .init(UTType.doctopusDocument.identifier))
         }.compactMap { try? JSONDecoder().decode(DocumentDragItem.self, from: $0) }
-        Check.that("a gallery selection exports every file URL to other applications",
+        Check.that("a document selection exports every file URL to other applications",
                    Set(exported.map(\.path)) == Set(model.selectedRows.map(\.path)) && exported.count == 2)
         Check.that("each exported file also carries its own internal document identity",
                    Set(internalItems.map(\.id)) == model.selectedIDs)
-        Check.that("dragging an unselected gallery document exports only that file",
+        Check.that("dragging an unselected document exports only that file",
                    DocumentDragSource.pasteboardItems(for: [rows[2]]).count == 1)
 
         let outside = model.dragCount(from: rows[2])
@@ -190,41 +190,6 @@ extension UITest {
         foreign.path = "/elsewhere/" + rows[0].filename
         Check.that("a document dragged in from another library's window is not taken for one here",
                    model.rows(forDropped: [foreign]).isEmpty)
-    }
-
-    static func tableDragExportsFiles(_ model: AppModel) async {
-        let saved = model.selectedIDs
-        let savedMode = model.viewMode
-        model.viewMode = .list
-        model.selectedIDs = Set(model.documents.prefix(2).map(\.id))
-        defer { model.selectedIDs = saved; model.viewMode = savedMode }
-        let (window, host) = host(DocumentListView().environment(model),
-                                  size: NSSize(width: 760, height: 420))
-        defer { window.orderOut(nil) }
-        var table: NSTableView?
-        let ready = await settle {
-            table = tables(in: host).first
-            return table?.selectedRowIndexes.count == 2
-        }
-        guard ready, let table else {
-            Check.that("a selected table row exports a file URL for each selected document", false,
-                       "table selection did not arrive")
-            return
-        }
-        let writers: [NSPasteboardWriting] = table.selectedRowIndexes.compactMap {
-            table.dataSource?.tableView?(table, pasteboardWriterForRow: $0)
-        }
-        let pasteboard = NSPasteboard(name: .init("doctopus-table-export-\(UUID().uuidString)"))
-        defer { pasteboard.releaseGlobally() }
-        pasteboard.writeObjects(writers)
-        let name = pasteboard.name.rawValue
-        let paths = await Task.detached(priority: .utility) {
-            let board = NSPasteboard(name: .init(name))
-            return ((board.readObjects(forClasses: [NSURL.self]) as? [URL]) ?? []).map(\.path)
-        }.value
-        Check.that("a selected table row exports a file URL for each selected document",
-                   paths.count == 2 && Set(paths) == Set(model.selectedRows.map(\.path)),
-                   "\(writers.count) writers, \(paths.count) URLs")
     }
 
     static func headerClickSorts(_ model: AppModel, snapshots: String?) async {

@@ -40,7 +40,6 @@ enum UITest {
             galleryModifierClicks(model)
             commandASelectsEverything(model)
             dragCountsTheSelection(model)
-            await tableDragExportsFiles(model)
             folderPickerResolvesPaths(model)
             await headerClickSorts(model, snapshots: snapshots)
             await rowThumbnailIsAPage(model)

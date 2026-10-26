@@ -17,9 +17,10 @@ extension SelfTest {
             let received = await indexer.receiveFiles([outside], into: root.appendingPathComponent("Inbox"))
             let receivedID = received.imported.first?.0 ?? 0
             let receivedText = try? await store.ocrText(receivedID)
-            let waiting = (try? await store.processingQueue())?.contains { $0.docID == receivedID && !$0.approved }
-            Check.that("receiving a file makes it available for review before OCR or model analysis",
-                       received.summary.imported == 1 && (receivedText ?? "").isEmpty && waiting == true)
+            let receivedPath = try? await store.documentPath(receivedID)
+            Check.that("receiving a file makes it available in the library before OCR or model analysis",
+                       received.summary.imported == 1 && (receivedText ?? "").isEmpty
+                           && receivedPath.map { FileManager.default.fileExists(atPath: $0) } == true)
             await indexer.processImport(received)
             let copied = ((try? await store.listDocuments(selection: .all, query: SearchQuery(""),
                                                           sort: .added, ascending: false)) ?? [])

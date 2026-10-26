@@ -8,7 +8,9 @@ extension SelfTest {
         do {
             try fm.createDirectory(at: scratch, withIntermediateDirectories: true)
             defer { try? fm.removeItem(at: scratch) }
-            guard let row = rows.first(where: { $0.ext.lowercased() == "pdf" }),
+            guard let row = rows.first(where: {
+                $0.ext.lowercased() == "pdf" && PDFDocument(url: $0.url)?.string?.nilIfBlank != nil
+            }),
                   let document = PDFDocument(url: row.url), document.pageCount > 0 else {
                 Check.that("a PDF fixture for external compression", false); return
             }
@@ -37,10 +39,25 @@ extension SelfTest {
             Check.that("external compression accepts smaller PDFs while preserving selectable text",
                        result != nil && acceptedBytes == compact
                            && PDFDocument(url: input)?.string == document.string)
+            let blank = PDFDocument()
+            for i in 0..<document.pageCount {
+                let page = PDFPage()
+                guard let sourcePage = document.page(at: i) else {
+                    Check.that("the source PDF pages can be read", false); return
+                }
+                page.setBounds(sourcePage.bounds(for: .mediaBox), for: .mediaBox)
+                blank.insert(page, at: i)
+            }
+            let missingText = scratch.appendingPathComponent("missing-text.pdf")
+            guard blank.write(to: missingText) else {
+                Check.that("a PDF fixture with missing text can be written", false); return
+            }
             for (name, body) in [
                 ("a failed external compressor", "exit 1"),
                 ("invalid external output", "while [ \"$1\" != '-o' ]; do shift; done\nprintf broken > \"$2/document.pdf\""),
-                ("an external compressor that produces nothing", "exit 0")
+                ("an external compressor that produces nothing", "exit 0"),
+                ("external output without enough savings", "while [ \"$1\" != '-o' ]; do shift; done\ncp \"$3\" \"$2/document.pdf\""),
+                ("external output that loses selectable text", "while [ \"$1\" != '-o' ]; do shift; done\ncp " + quoted(missingText.path) + " \"$2/document.pdf\"")
             ] {
                 try padded.write(to: input)
                 try script(body)

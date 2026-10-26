@@ -22,19 +22,24 @@ struct BulkReview: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            header
-            if mixed { presetPicker }
-            ForEach(present, id: \.self) { arrival in
-                GroupTreatment(arrival: arrival, count: rows(arrival).count, treatment: treatment(arrival))
+        GeometryReader { geometry in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    header
+                    if mixed { presetPicker }
+                    ForEach(present, id: \.self) { arrival in
+                        GroupTreatment(arrival: arrival, count: rows(arrival).count, treatment: treatment(arrival),
+                                       compact: geometry.size.width < 600)
+                    }
+                    Divider()
+                    outcome
+                    Spacer(minLength: 0)
+                    actions
+                }
+                .padding(12)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
-            Divider()
-            outcome
-            Spacer(minLength: 0)
-            actions
         }
-        .padding(12)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .task(id: rows.map(\.id)) { await loadSuggestions() }
         .confirmationDialog("Discard what was generated for \(rows.count) documents?",
                             isPresented: $confirmingDiscard) {
@@ -222,6 +227,7 @@ private struct GroupTreatment: View {
     let arrival: Arrival
     let count: Int
     @Binding var treatment: ReviewTreatment
+    var compact = false
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
@@ -235,11 +241,7 @@ private struct GroupTreatment: View {
                 Grid(alignment: .leading, horizontalSpacing: 8, verticalSpacing: 6) {
                     GridRow {
                         Text("Folder").font(.caption).foregroundStyle(.secondary)
-                        Picker("Folder", selection: $treatment.move) {
-                            Text("Best suggestion").tag(true)
-                            Text("Where they are").tag(false)
-                        }
-                        .pickerStyle(.segmented).labelsHidden().controlSize(.small).fixedSize()
+                        folderPicker
                     }
                     GridRow {
                         Text("Version").font(.caption).foregroundStyle(.secondary)
@@ -252,12 +254,36 @@ private struct GroupTreatment: View {
         .help(arrival.help)
     }
 
+    @ViewBuilder
+    private var folderPicker: some View {
+        if compact {
+            folderControl.pickerStyle(.menu).labelsHidden().controlSize(.small)
+        } else {
+            folderControl.pickerStyle(.segmented).labelsHidden().controlSize(.small).fixedSize()
+        }
+    }
+
+    private var folderControl: some View {
+        Picker("Folder", selection: $treatment.move) {
+            Text("Best suggestion").tag(true)
+            Text("Where they are").tag(false)
+        }
+    }
+
+    @ViewBuilder
     private var versionPicker: some View {
+        if compact {
+            versionControl.pickerStyle(.menu).labelsHidden().controlSize(.small)
+        } else {
+            versionControl.pickerStyle(.segmented).labelsHidden().controlSize(.small).fixedSize()
+        }
+    }
+
+    private var versionControl: some View {
         Picker("Version", selection: $treatment.version) {
             Text("Optimized").tag(KeptVersion?.some(.optimized))
             Text("Original").tag(KeptVersion?.some(.original))
             Text("As they are").tag(KeptVersion?.none)
         }
-        .pickerStyle(.segmented).labelsHidden().controlSize(.small).fixedSize()
     }
 }
