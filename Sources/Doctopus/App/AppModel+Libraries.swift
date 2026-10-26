@@ -166,8 +166,8 @@ extension AppModel {
 
     func folderMoveDestination(_ path: String, into parent: String) -> String? {
         guard !isRelocatingFolder, let lib = library else { return nil }
-        let source = URL(fileURLWithPath: path).standardizedFileURL.resolvingSymlinksInPath().path
-        let target = URL(fileURLWithPath: parent).standardizedFileURL.resolvingSymlinksInPath().path
+        let source = Store.canonical(URL(fileURLWithPath: path).standardizedFileURL.resolvingSymlinksInPath().path)
+        let target = Store.canonical(URL(fileURLWithPath: parent).standardizedFileURL.resolvingSymlinksInPath().path)
         guard source == path, target == parent,
               FolderPicker.relativePath(for: URL(fileURLWithPath: source), in: lib) != nil,
               FolderPicker.relativePath(for: URL(fileURLWithPath: target), in: lib) != nil,

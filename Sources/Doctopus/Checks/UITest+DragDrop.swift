@@ -214,6 +214,10 @@ extension UITest {
             return targetView != nil
         }
         guard let targetView else { return Check.that("a sidebar row accepts folder drags", false) }
+        let proposed = model.folderMoveDestination(source.path, into: target.path)
+        Check.that("a folder drop can target another folder in the library", proposed != nil,
+                   "source \(source.path), resolved \(source.standardizedFileURL.resolvingSymlinksInPath().path), "
+                       + "target \(target.path), resolved \(target.standardizedFileURL.resolvingSymlinksInPath().path)")
         let accepted = drop(FolderDragItem(path: source.path, libraryID: lib.id), type: .doctopusFolder,
                             on: targetView, in: window)
         let moved = target.appendingPathComponent(source.lastPathComponent)
@@ -222,9 +226,12 @@ extension UITest {
         let detail = await model.loadDetail(document.id)
         _ = await settle { model.selection == .folder(movedChild.path) }
         Check.that("a sidebar folder drop moves nested files and preserves indexed document identities",
-                   accepted && arrived && detail?.row.path == movedChild.appendingPathComponent("nested.pdf").path)
+                   accepted && arrived && detail?.row.path == movedChild.appendingPathComponent("nested.pdf").path,
+                   "accepted \(accepted), arrived \(arrived), indexed \(detail?.row.path ?? "gone"), "
+                       + "problem \(model.errorMessage ?? "none")")
         Check.that("selection and collapsed folders follow a folder drop",
-                   model.selection == .folder(movedChild.path) && model.collapsedFolders.contains(moved.path))
+                   model.selection == .folder(movedChild.path) && model.collapsedFolders.contains(moved.path),
+                   "selection \(model.selection), collapsed \(model.collapsedFolders.sorted())")
         try? fm.createDirectory(at: source, withIntermediateDirectories: true)
         Check.that("a folder drop refuses an existing destination instead of merging folders",
                    model.folderMoveDestination(source.path, into: target.path) == nil)
