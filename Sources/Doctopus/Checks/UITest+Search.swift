@@ -8,6 +8,7 @@ extension UITest {
         model.selection = .all
         model.searchText = ""
         model.reloadDocuments()
+        await model.reloadDocsTask?.value
         _ = await settle { !model.documents.isEmpty }
         guard let row = model.documents.first else { return }
         model.selection = .folder(row.directory)

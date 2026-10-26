@@ -118,6 +118,7 @@ final class AppModel {
     var documentToReveal: Int64?
     /// Only one sidebar folder owns the current drag highlight.
     var folderDropTarget: String?
+    var isRelocatingFolder = false
     var metadataKind = MetadataKind.tags
 
     var selection: Selection = .all {

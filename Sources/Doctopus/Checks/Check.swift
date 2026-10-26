@@ -12,6 +12,12 @@ enum Check {
         } else {
             failures.append(name)
             print("  ✗ \(name)\(suffix)")
+            if ProcessInfo.processInfo.environment["GITHUB_ACTIONS"] == "true" {
+                let message = (name + suffix).replacingOccurrences(of: "%", with: "%25")
+                    .replacingOccurrences(of: "\r", with: "%0D")
+                    .replacingOccurrences(of: "\n", with: "%0A")
+                print("::error::\(message)")
+            }
         }
     }
 

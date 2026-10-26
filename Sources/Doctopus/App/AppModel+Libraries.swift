@@ -165,7 +165,7 @@ extension AppModel {
     }
 
     func folderMoveDestination(_ path: String, into parent: String) -> String? {
-        guard let lib = library else { return nil }
+        guard !isRelocatingFolder, let lib = library else { return nil }
         let source = URL(fileURLWithPath: path).standardizedFileURL.resolvingSymlinksInPath().path
         let target = URL(fileURLWithPath: parent).standardizedFileURL.resolvingSymlinksInPath().path
         guard source == path, target == parent,
@@ -191,11 +191,14 @@ extension AppModel {
 
     private func relocateFolder(_ path: String, to destination: String,
                                 confirmRules: @escaping @MainActor ([Rule]) -> Bool) {
-        guard let lib = library, lib.owns(path: path), path != lib.root.path,
+        guard !isRelocatingFolder, let lib = library, lib.owns(path: path), path != lib.root.path,
               lib.owns(path: destination), destination != path,
               !destination.hasPrefix(path + "/") else { return }
         let source = URL(fileURLWithPath: path)
+        // A second drop must not roll the first move's paths back after its source has gone.
+        isRelocatingFolder = true
         Task {
+            defer { isRelocatingFolder = false }
             do {
                 try await lib.store.moveFolder(from: path, to: destination)
                 do {
