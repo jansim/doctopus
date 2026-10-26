@@ -126,6 +126,8 @@ private struct DocumentReview: View {
                         .lineLimit(2)
                 }
             }
+            .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+            .layoutPriority(-1)
             Spacer(minLength: 8)
             ArrivalBadge(arrival: arrival)
             Badge(status.text, tint: status.tint)

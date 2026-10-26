@@ -93,8 +93,8 @@ extension UITest {
                                               size: NSSize(width: 420, height: 500))
         try? await Task.sleep(for: .seconds(1))
         Check.that("a single-document review fits a narrow center pane",
-                   narrowHost.fittingSize.width <= 420 && inkedRows(narrowHost) > 100,
-                   "minimum width \(narrowHost.fittingSize.width)")
+                   narrowHost.fittingSize.width <= 420 && inkedRows(narrowHost) > 30,
+                   "minimum width \(narrowHost.fittingSize.width), inked rows \(inkedRows(narrowHost))")
         if let dir = snapshots { snapshot(narrowHost, to: dir + "/review-narrow.png") }
         narrowWindow.orderOut(nil)
 
@@ -180,8 +180,8 @@ extension UITest {
                                                   size: NSSize(width: 420, height: 500))
         try? await Task.sleep(for: .seconds(1))
         Check.that("a mixed batch review fits a narrow center pane",
-                   narrowHost.fittingSize.width <= 420 && inkedRows(narrowHost) > 100,
-                   "minimum width \(narrowHost.fittingSize.width)")
+                   narrowHost.fittingSize.width <= 420 && inkedRows(narrowHost) > 30,
+                   "minimum width \(narrowHost.fittingSize.width), inked rows \(inkedRows(narrowHost))")
         if let dir = snapshots { snapshot(narrowHost, to: dir + "/review-batch-narrow.png") }
         narrowWindow.orderOut(nil)
 

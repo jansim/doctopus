@@ -401,7 +401,7 @@ private struct DocumentGalleryView: View {
                 .contentShape(Rectangle())
                 // One tap handler reading the click count: a stacked double-tap gesture
                 // makes SwiftUI hold every single click back.
-                .onTapGesture { click(row) }
+                .highPriorityGesture(TapGesture().onEnded { click(row) })
                 .contextMenu {
                     DocumentMenu(rows: model.selectedIDs.contains(row.id) ? model.selectedRows : [row])
                 }
