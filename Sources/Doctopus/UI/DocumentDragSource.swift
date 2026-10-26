@@ -18,6 +18,20 @@ struct DocumentDragSource: NSViewRepresentable {
 
     static func dismantleNSView(_ view: SourceView, coordinator: ()) { view.stopMonitoring() }
 
+    @MainActor
+    static func containsDocumentClick(_ event: NSEvent?) -> Bool {
+        guard let event, let root = event.window?.contentView else { return false }
+        func contains(_ view: NSView) -> Bool {
+            if let source = view as? SourceView, !source.wholeTableRow,
+               !source.isHiddenOrHasHiddenAncestor,
+               source.visibleRect.contains(source.convert(event.locationInWindow, from: nil)) {
+                return true
+            }
+            return view.subviews.contains(where: contains)
+        }
+        return contains(root)
+    }
+
     static func pasteboardItems(for rows: [DocumentRow]) -> [NSPasteboardItem] {
         rows.compactMap { row in
             guard let data = try? JSONEncoder().encode(DocumentDragItem(row)) else { return nil }

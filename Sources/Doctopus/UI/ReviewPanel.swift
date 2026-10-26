@@ -7,23 +7,25 @@ struct ReviewPanel: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
-        Group {
-            if model.selectedIDs.count == 1, let detail = model.detail,
-               model.selectedIDs.contains(detail.row.id) {
-                DocumentReview(detail: detail)
-                    .id(detail.row.id)
-            } else if model.selectedIDs.count > 1 {
-                BulkReview(rows: model.selectedRows)
-                    .id(model.selectedIDs)
-            } else {
-                ContentUnavailableView {
-                    Label("Nothing selected", systemImage: "checklist")
-                } description: {
-                    Text("Select a document above to check what was worked out and choose where it lives.")
+        GeometryReader { _ in
+            Group {
+                if model.selectedIDs.count == 1, let detail = model.detail,
+                   model.selectedIDs.contains(detail.row.id) {
+                    DocumentReview(detail: detail)
+                        .id(detail.row.id)
+                } else if model.selectedIDs.count > 1 {
+                    BulkReview(rows: model.selectedRows)
+                        .id(model.selectedIDs)
+                } else {
+                    ContentUnavailableView {
+                        Label("Nothing selected", systemImage: "checklist")
+                    } description: {
+                        Text("Select a document above to check what was worked out and choose where it lives.")
+                    }
                 }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(.background)
     }
 }

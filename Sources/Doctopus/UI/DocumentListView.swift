@@ -389,7 +389,13 @@ private struct DocumentGalleryView: View {
         .background {
             Color.clear
                 .contentShape(Rectangle())
-                .onTapGesture { model.selectedIDs = [] }
+                .onTapGesture {
+                    // A passive AppKit drag view can let a cell's tap reach
+                    // this background too; only empty space clears selection.
+                    if !DocumentDragSource.containsDocumentClick(NSApp.currentEvent) {
+                        model.selectedIDs = []
+                    }
+                }
                 .contextMenu { BackgroundMenu() }
         }
     }
@@ -401,7 +407,7 @@ private struct DocumentGalleryView: View {
                 .contentShape(Rectangle())
                 // One tap handler reading the click count: a stacked double-tap gesture
                 // makes SwiftUI hold every single click back.
-                .highPriorityGesture(TapGesture().onEnded { click(row) })
+                .onTapGesture { click(row) }
                 .contextMenu {
                     DocumentMenu(rows: model.selectedIDs.contains(row.id) ? model.selectedRows : [row])
                 }
