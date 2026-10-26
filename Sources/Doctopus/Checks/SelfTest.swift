@@ -109,6 +109,7 @@ enum SelfTest {
         await recentlyReviewedPeriods(store: store)
         timeline(rows: rows)
         await queue(store: store)
+        externalCompression(rows: rows)
         await importAFile(store: store, indexer: indexer, settings: settings, root: root, rows: rows)
         await importAFolder(store: store, indexer: indexer, root: root, rows: rows)
         await fileSafety(store: store, indexer: indexer, settings: settings)

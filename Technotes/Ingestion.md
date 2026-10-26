@@ -271,3 +271,23 @@ rule applied from the inspector or the review. Each such rename is logged and
 taken back by Undo like any other. Changing the setting, the template or a
 value across the library (renaming a correspondent in the sidebar) renames
 nothing by itself; neither does Analyze.
+
+## Optional external compression
+
+Settings › Optimization › Compressor can prefer `smolpdf` when installed.
+Doctopus finds the Homebrew command or the binary bundled inside
+`/Applications/smol-pdf.app` or `~/Applications/smol-pdf.app`. The default
+remains the built-in optimizer; no additional package is required.
+
+The external tool receives a scratch copy and a separate output directory,
+using its Low profile with Doctopus's quality and resolution settings. No
+metadata, annotation or attachment removal is requested. Results must save
+at least 15%, keep the page count, page sizes and rotation, and preserve
+selectable text. Encrypted PDFs are skipped. Failure, timeout or invalid output
+falls back to the built-in optimizer. The normal original-file retention and
+review behavior applies to either compressor.
+
+File receipt is separate from processing: imported documents and scans appear
+in the library once copied, before text extraction or model analysis finishes.
+The toolbar calls the remaining work Processing; Needs Review receives the
+completed analysis and routing suggestions as before.

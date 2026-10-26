@@ -7,23 +7,25 @@ struct ReviewPanel: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
-        Group {
-            if model.selectedIDs.count == 1, let detail = model.detail,
-               model.selectedIDs.contains(detail.row.id) {
-                DocumentReview(detail: detail)
-                    .id(detail.row.id)
-            } else if model.selectedIDs.count > 1 {
-                BulkReview(rows: model.selectedRows)
-                    .id(model.selectedIDs)
-            } else {
-                ContentUnavailableView {
-                    Label("Nothing selected", systemImage: "checklist")
-                } description: {
-                    Text("Select a document above to check what was worked out and choose where it lives.")
+        GeometryReader { _ in
+            Group {
+                if model.selectedIDs.count == 1, let detail = model.detail,
+                   model.selectedIDs.contains(detail.row.id) {
+                    DocumentReview(detail: detail)
+                        .id(detail.row.id)
+                } else if model.selectedIDs.count > 1 {
+                    BulkReview(rows: model.selectedRows)
+                        .id(model.selectedIDs)
+                } else {
+                    ContentUnavailableView {
+                        Label("Nothing selected", systemImage: "checklist")
+                    } description: {
+                        Text("Select a document above to check what was worked out and choose where it lives.")
+                    }
                 }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(.background)
     }
 }
@@ -78,15 +80,35 @@ private struct DocumentReview: View {
         VStack(spacing: 0) {
             header
             Divider()
-            HStack(alignment: .top, spacing: 0) {
-                GeneratedInfoEditor(detail: detail, version: $version)
-                    .frame(minWidth: 250, idealWidth: 330, maxWidth: 400)
-                Divider()
-                FilingEditor(detail: detail, mode: .review, version: version,
-                             ruleMatches: model.pendingRuleMatches(for: row))
-                    .frame(maxWidth: .infinity)
+            GeometryReader { geometry in
+                if geometry.size.width >= 600 {
+                    HStack(alignment: .top, spacing: 0) {
+                        generatedInfo
+                            .frame(minWidth: 250, idealWidth: 330, maxWidth: 400)
+                        Divider()
+                        filing
+                    }
+                } else {
+                    ScrollView {
+                        VStack(spacing: 0) {
+                            generatedInfo.frame(height: 240)
+                            Divider()
+                            filing.frame(height: 300)
+                        }
+                    }
+                }
             }
         }
+    }
+
+    private var generatedInfo: some View {
+        GeneratedInfoEditor(detail: detail, version: $version)
+    }
+
+    private var filing: some View {
+        FilingEditor(detail: detail, mode: .review, version: version,
+                     ruleMatches: model.pendingRuleMatches(for: row))
+            .frame(maxWidth: .infinity)
     }
 
     private var header: some View {
@@ -106,6 +128,8 @@ private struct DocumentReview: View {
                         .lineLimit(2)
                 }
             }
+            .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+            .layoutPriority(-1)
             Spacer(minLength: 8)
             ArrivalBadge(arrival: arrival)
             Badge(status.text, tint: status.tint)

@@ -1,6 +1,7 @@
 import SwiftUI
 import UniformTypeIdentifiers
 import AppKit
+import Observation
 
 extension UTType {
     static let doctopusDocument = UTType(exportedAs: "io.doctopus.document")
@@ -119,8 +120,10 @@ enum FolderDropIntent: Equatable {
 /// What the drag currently over a folder row is doing. A class, because SwiftUI
 /// builds the delegate afresh every time the row's body runs, and what was read
 /// while the drag was in the air has to survive into the drop.
+@Observable
 final class FolderDropState {
     var intent: FolderDropIntent = .move
+    var finished = false
 }
 
 /// A `DropDelegate` rather than `dropDestination`, which hands the items over
@@ -129,25 +132,33 @@ struct FolderDropDelegate: DropDelegate {
     let folder: String
     let model: AppModel
     let state: FolderDropState
-    @Binding var hovering: FolderDropIntent?
 
     func validateDrop(info: DropInfo) -> Bool {
         info.hasItemsConforming(to: [.doctopusDocument])
     }
 
-    func dropEntered(info: DropInfo) { note(.held) }
+    func dropEntered(info: DropInfo) {
+        state.finished = false
+        note(.held)
+    }
 
     func dropUpdated(info: DropInfo) -> DropProposal? {
+        guard !state.finished else { return nil }
         note(.held)
         // A move shows the plain arrow; copy would badge it with the green
         // plus, which says the opposite of what letting go will do.
         return DropProposal(operation: state.intent == .move ? .move : .copy)
     }
 
-    func dropExited(info: DropInfo) { hovering = nil }
+    func dropExited(info: DropInfo) {
+        MainActor.assumeIsolated {
+            if model.folderDropTarget == folder { model.folderDropTarget = nil }
+        }
+    }
 
     func performDrop(info: DropInfo) -> Bool {
-        hovering = nil
+        state.finished = true
+        MainActor.assumeIsolated { model.folderDropTarget = nil }
         let providers = info.itemProviders(for: [.doctopusDocument])
         guard !providers.isEmpty else { return false }
         // Decided now, while the keys still say what was held.
@@ -161,7 +172,7 @@ struct FolderDropDelegate: DropDelegate {
 
     private func note(_ intent: FolderDropIntent) {
         state.intent = intent
-        if hovering != intent { hovering = intent }
+        MainActor.assumeIsolated { model.folderDropTarget = folder }
     }
 }
 

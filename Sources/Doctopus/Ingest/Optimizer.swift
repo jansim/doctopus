@@ -21,12 +21,17 @@ enum Optimizer {
         var minimumSaving: Double = 0.15
         var minimumPageBytes: Int64 = 120_000
         var grayscale = false
+        var preferSmolPDF = false
 
         static let `default` = Options()
     }
 
     static func optimize(url: URL, options: Options = .default) throws -> Result? {
         guard url.pathExtension.lowercased() == "pdf" else { return nil }
+        if options.preferSmolPDF, let executable = SmolPDFOptimizer.executable(),
+           let result = try? SmolPDFOptimizer.optimize(url: url, options: options, executable: executable) {
+            return result
+        }
         let originalSize = fileSize(url)
         guard originalSize > options.minimumPageBytes else { return nil }
 
@@ -137,6 +142,7 @@ extension AppSettings {
         var o = Optimizer.Options()
         o.jpegQuality = CGFloat(appWide.jpegQuality)
         o.targetDPI = CGFloat(appWide.targetDPI)
+        o.preferSmolPDF = appWide.preferSmolPDF
         return o
     }
 }

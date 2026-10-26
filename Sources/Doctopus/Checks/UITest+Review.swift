@@ -89,6 +89,15 @@ extension UITest {
         Check.that("the approval view draws the review under the list", inkedRows(host) > 100,
                    "\(inkedRows(host)) rows with ink")
 
+        let (narrowWindow, narrowHost) = Self.host(ReviewPanel().environment(model),
+                                              size: NSSize(width: 420, height: 500))
+        try? await Task.sleep(for: .seconds(1))
+        Check.that("a single-document review fits a narrow center pane",
+                   narrowHost.fittingSize.width <= 420 && inkedRows(narrowHost) > 30,
+                   "minimum width \(narrowHost.fittingSize.width), inked rows \(inkedRows(narrowHost))")
+        if let dir = snapshots { snapshot(narrowHost, to: dir + "/review-narrow.png") }
+        narrowWindow.orderOut(nil)
+
         let secondary = lib.root.appendingPathComponent("Work").path
         model.file(candidate, in: URL(fileURLWithPath: primary.path), alsoIn: [secondary],
                    approve: true, advance: true)
@@ -166,6 +175,15 @@ extension UITest {
         if let dir = snapshots { snapshot(host, to: dir + "/review-batch.png") }
         Check.that("the batch review draws under the list", inkedRows(host) > 100,
                    "\(inkedRows(host)) rows with ink")
+
+        let (narrowWindow, narrowHost) = Self.host(ReviewPanel().environment(model),
+                                                  size: NSSize(width: 420, height: 500))
+        try? await Task.sleep(for: .seconds(1))
+        Check.that("a mixed batch review fits a narrow center pane",
+                   narrowHost.fittingSize.width <= 420 && inkedRows(narrowHost) > 30,
+                   "minimum width \(narrowHost.fittingSize.width), inked rows \(inkedRows(narrowHost))")
+        if let dir = snapshots { snapshot(narrowHost, to: dir + "/review-batch-narrow.png") }
+        narrowWindow.orderOut(nil)
 
         let planned = await model.suggestedFolder(for: newRow) ?? newRow.directory
         let foundHash = FileScanner.hash(foundRow.url)

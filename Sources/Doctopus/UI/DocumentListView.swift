@@ -133,10 +133,8 @@ private struct DocumentTableView: View {
     var body: some View {
         @Bindable var model = model
 
-        // Rows are built explicitly so the drag lives on the row rather than on
-        // the cell: `.draggable` inside a cell swallows the mouse-down, which
-        // left the document name — the largest target in the row — unable to
-        // change the selection.
+        // Passive drag observers leave mouse-down to the table for selection,
+        // then export one AppKit dragging item per selected document.
         Table(of: DocumentRow.self, selection: $model.selectedIDs,
               sortOrder: sortOrder, columnCustomization: $model.listColumns) {
             TableColumn("Document", sortUsing: DocumentSort(field: .name)) { row in
@@ -179,6 +177,8 @@ private struct DocumentTableView: View {
                         MismatchBadges(rules: pending, naming: misnamed, size: 16)
                     }
                 }
+                .background(DocumentDragSource(row: row, model: model, wholeTableRow: true)
+                    .allowsHitTesting(false))
             }
             .width(min: 240, ideal: 400)
             .customizationID("document")
@@ -261,13 +261,13 @@ private struct DocumentTableView: View {
                 ForEach(ReviewedPeriod.groups(model.documents, now: .now)) { group in
                     Section(group.period.title) {
                         ForEach(group.rows) { row in
-                            TableRow(row).draggable(DocumentDragItem(row))
+                            TableRow(row)
                         }
                     }
                 }
             } else {
                 ForEach(model.documents) { row in
-                    TableRow(row).draggable(DocumentDragItem(row))
+                    TableRow(row)
                 }
             }
         }
@@ -397,29 +397,27 @@ private struct DocumentGalleryView: View {
     private func cells(_ rows: [DocumentRow]) -> some View {
         ForEach(rows) { row in
             GalleryCell(row: row, width: cell)
-                .draggable(DocumentDragItem(row)) {
-                    DocumentDragPreview(row: row, count: model.dragCount(from: row))
-                }
-                // One tap handler reading the click count: a stacked double-tap gesture
-                // makes SwiftUI hold every single click back.
-                .onTapGesture { click(row) }
+                .background(DocumentDragSource(row: row, model: model,
+                                               onClick: { click(row, event: $0) })
+                    .allowsHitTesting(false))
+                .contentShape(Rectangle())
                 .contextMenu {
                     DocumentMenu(rows: model.selectedIDs.contains(row.id) ? model.selectedRows : [row])
                 }
         }
     }
 
-    private func click(_ row: DocumentRow) {
-        if (NSApp.currentEvent?.clickCount ?? 1) >= 2 {
+    private func click(_ row: DocumentRow, event: NSEvent) {
+        if event.clickCount >= 2 {
             model.open(model.selectedIDs.contains(row.id) ? model.selectedRows : [row])
         } else {
-            select(row)
+            select(row, modifiers: event.modifierFlags)
         }
     }
 
-    private func select(_ row: DocumentRow) {
+    private func select(_ row: DocumentRow, modifiers: NSEvent.ModifierFlags) {
         let outcome = GallerySelection.click(row.id, in: model.documents.map(\.id),
-                                             modifiers: NSEvent.modifierFlags,
+                                             modifiers: modifiers,
                                              selection: model.selectedIDs, anchor: selectionAnchor)
         model.selectedIDs = outcome.selection
         selectionAnchor = outcome.anchor

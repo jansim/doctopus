@@ -22,19 +22,24 @@ struct BulkReview: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            header
-            if mixed { presetPicker }
-            ForEach(present, id: \.self) { arrival in
-                GroupTreatment(arrival: arrival, count: rows(arrival).count, treatment: treatment(arrival))
+        GeometryReader { geometry in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    header
+                    if mixed { presetPicker }
+                    ForEach(present, id: \.self) { arrival in
+                        GroupTreatment(arrival: arrival, count: rows(arrival).count, treatment: treatment(arrival),
+                                       compact: geometry.size.width < 600)
+                    }
+                    Divider()
+                    outcome
+                    Spacer(minLength: 0)
+                    actions
+                }
+                .padding(12)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
-            Divider()
-            outcome
-            Spacer(minLength: 0)
-            actions
         }
-        .padding(12)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .task(id: rows.map(\.id)) { await loadSuggestions() }
         .confirmationDialog("Discard what was generated for \(rows.count) documents?",
                             isPresented: $confirmingDiscard) {
@@ -46,28 +51,40 @@ struct BulkReview: View {
     }
 
     private var header: some View {
-        HStack(spacing: 8) {
-            Text("\(rows.count) documents selected").font(.headline)
-            Spacer()
-            ForEach(present, id: \.self) { arrival in
-                ArrivalBadge(arrival: arrival, count: rows(arrival).count)
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 8) {
+                Text("\(rows.count) documents selected").font(.headline)
+                Spacer()
+                arrivalBadges
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                Text("\(rows.count) documents selected").font(.headline)
+                HStack(spacing: 8) { arrivalBadges }
             }
         }
     }
 
+    @ViewBuilder
+    private var arrivalBadges: some View {
+        ForEach(present, id: \.self) { arrival in
+            ArrivalBadge(arrival: arrival, count: rows(arrival).count)
+        }
+    }
+
     private var presetPicker: some View {
-        HStack(spacing: 8) {
-            Text("Treat them").font(.caption).foregroundStyle(.secondary)
-            Picker("Treat them", selection: Binding(get: { preset }, set: { apply($0) })) {
-                Text("Each by its default").tag(Preset.defaults)
-                Text("All like new").tag(Preset.allNew)
-                Text("All like already in library").tag(Preset.allInLibrary)
-                if preset == .custom { Text("Custom").tag(Preset.custom) }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .controlSize(.small)
-            .fixedSize()
+        ViewThatFits(in: .horizontal) {
+            presetControl.pickerStyle(.segmented).labelsHidden().fixedSize()
+            presetControl.pickerStyle(.menu)
+        }
+        .controlSize(.small)
+    }
+
+    private var presetControl: some View {
+        Picker("Treat them", selection: Binding(get: { preset }, set: { apply($0) })) {
+            Text("Each by its default").tag(Preset.defaults)
+            Text("All like new").tag(Preset.allNew)
+            Text("All like already in library").tag(Preset.allInLibrary)
+            if preset == .custom { Text("Custom").tag(Preset.custom) }
         }
     }
 
@@ -150,24 +167,46 @@ struct BulkReview: View {
     }
 
     private var actions: some View {
-        HStack(spacing: 10) {
-            Button("Approve \(rows.count)") {
-                model.approve(rows, newArrivals: newArrivals, alreadyInLibrary: inLibrary)
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 10) {
+                approveButton
+                moveMenu
+                Spacer()
+                discardButton
             }
-            .buttonStyle(.borderedProminent)
-            .tint(mixed ? Color.accentColor : (present.first?.tint ?? Color.accentColor))
-            .keyboardShortcut(.return, modifiers: [.command])
-            .help("⌘↩")
-            if let library, let rootNode = library.folders.first {
-                Menu("Move All To") {
-                    Button("\(library.displayName) (top level)") { moveAll(to: rootNode.path) }
-                    FolderMenuItems(nodes: rootNode.children) { moveAll(to: $0) }
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 10) {
+                    approveButton
+                    moveMenu
                 }
-                .fixedSize()
+                discardButton
             }
-            Spacer()
-            Button("Discard Generated Info…", role: .destructive) { confirmingDiscard = true }
         }
+    }
+
+    private var approveButton: some View {
+        Button("Approve \(rows.count)") {
+            model.approve(rows, newArrivals: newArrivals, alreadyInLibrary: inLibrary)
+        }
+        .buttonStyle(.borderedProminent)
+        .tint(mixed ? Color.accentColor : (present.first?.tint ?? Color.accentColor))
+        .keyboardShortcut(.return, modifiers: [.command])
+        .help("⌘↩")
+    }
+
+    @ViewBuilder
+    private var moveMenu: some View {
+        if let library, let rootNode = library.folders.first {
+            Menu("Move All To") {
+                Button("\(library.displayName) (top level)") { moveAll(to: rootNode.path) }
+                FolderMenuItems(nodes: rootNode.children) { moveAll(to: $0) }
+            }
+            .fixedSize()
+        }
+    }
+
+    private var discardButton: some View {
+        Button("Discard Generated Info…", role: .destructive) { confirmingDiscard = true }
     }
 
     private func moveAll(to path: String) {
@@ -188,6 +227,7 @@ private struct GroupTreatment: View {
     let arrival: Arrival
     let count: Int
     @Binding var treatment: ReviewTreatment
+    var compact = false
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
@@ -201,11 +241,7 @@ private struct GroupTreatment: View {
                 Grid(alignment: .leading, horizontalSpacing: 8, verticalSpacing: 6) {
                     GridRow {
                         Text("Folder").font(.caption).foregroundStyle(.secondary)
-                        Picker("Folder", selection: $treatment.move) {
-                            Text("Best suggestion").tag(true)
-                            Text("Where they are").tag(false)
-                        }
-                        .pickerStyle(.segmented).labelsHidden().controlSize(.small).fixedSize()
+                        folderPicker
                     }
                     GridRow {
                         Text("Version").font(.caption).foregroundStyle(.secondary)
@@ -218,12 +254,36 @@ private struct GroupTreatment: View {
         .help(arrival.help)
     }
 
+    @ViewBuilder
+    private var folderPicker: some View {
+        if compact {
+            folderControl.pickerStyle(.menu).labelsHidden().controlSize(.small)
+        } else {
+            folderControl.pickerStyle(.segmented).labelsHidden().controlSize(.small).fixedSize()
+        }
+    }
+
+    private var folderControl: some View {
+        Picker("Folder", selection: $treatment.move) {
+            Text("Best suggestion").tag(true)
+            Text("Where they are").tag(false)
+        }
+    }
+
+    @ViewBuilder
     private var versionPicker: some View {
+        if compact {
+            versionControl.pickerStyle(.menu).labelsHidden().controlSize(.small)
+        } else {
+            versionControl.pickerStyle(.segmented).labelsHidden().controlSize(.small).fixedSize()
+        }
+    }
+
+    private var versionControl: some View {
         Picker("Version", selection: $treatment.version) {
             Text("Optimized").tag(KeptVersion?.some(.optimized))
             Text("Original").tag(KeptVersion?.some(.original))
             Text("As they are").tag(KeptVersion?.none)
         }
-        .pickerStyle(.segmented).labelsHidden().controlSize(.small).fixedSize()
     }
 }

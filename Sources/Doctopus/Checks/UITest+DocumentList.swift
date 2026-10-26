@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import UniformTypeIdentifiers
 import QuickLookThumbnailing
 import QuickLookUI
 
@@ -163,6 +164,21 @@ extension UITest {
         let dropped = model.rows(forDropped: [DocumentDragItem(rows[0])]).count
         Check.that("dragging a selected document counts the whole selection",
                    promised == 2 && dropped == promised, "badge \(promised), drop \(dropped)")
+        let pasteboard = NSPasteboard(name: .init("doctopus-export-\(UUID().uuidString)"))
+        defer { pasteboard.releaseGlobally() }
+        let payloads = DocumentDragSource.pasteboardItems(for: model.selectedRows)
+        pasteboard.writeObjects(payloads)
+        let exported = (pasteboard.readObjects(forClasses: [NSURL.self]) as? [URL]) ?? []
+        let internalItems = payloads.compactMap {
+            $0.data(forType: .init(UTType.doctopusDocument.identifier))
+        }.compactMap { try? JSONDecoder().decode(DocumentDragItem.self, from: $0) }
+        Check.that("a document selection exports every file URL to other applications",
+                   Set(exported.map(\.path)) == Set(model.selectedRows.map(\.path)) && exported.count == 2)
+        Check.that("each exported file also carries its own internal document identity",
+                   Set(internalItems.map(\.id)) == model.selectedIDs)
+        Check.that("dragging an unselected document exports only that file",
+                   DocumentDragSource.pasteboardItems(for: [rows[2]]).count == 1)
+
         let outside = model.dragCount(from: rows[2])
         Check.that("dragging a document outside the selection counts just that one",
                    outside == 1 && model.rows(forDropped: [DocumentDragItem(rows[2])]).count == 1,
