@@ -49,6 +49,7 @@ struct AppWideSettings: StoredSettings, Sendable, Equatable {
     var galleryGrouping: Timeline.Grouping = .automatic
     var jpegQuality: Double = 0.6
     var targetDPI: Double = 150
+    var preferSmolPDF = false
 
     var effectiveConcurrency: Int {
         if ocrConcurrency > 0 { return min(ocrConcurrency, 16) }

@@ -382,6 +382,11 @@ private struct OptimizationSettings: View {
                 Text("Only files Doctopus brings in itself are optimized automatically. Files already in your library are yours, and are never rewritten unless you choose Optimize from the context menu.")
                     .font(.caption).foregroundStyle(.secondary)
             }
+            Section("Compressor", scope: .app) {
+                Toggle("Use smol-pdf when installed", isOn: $model.settings.preferSmolPDF)
+                Text("Uses the smolpdf command-line tool from Homebrew or the smol-pdf app in Applications. It compresses embedded images while keeping text and vectors. If unavailable or unsuccessful, the built-in optimizer is used. Originals are kept as usual.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             Section("Quality", scope: .app) {
                 LabeledContent("Raster resolution") {
                     HStack {
