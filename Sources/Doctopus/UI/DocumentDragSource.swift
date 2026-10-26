@@ -53,8 +53,8 @@ struct DocumentDragSource: NSViewRepresentable {
         private var startingRows: [DocumentRow] = []
         var wholeTableRow = false
 
-        // The browser keeps receiving clicks, including modifier clicks and
-        // double-clicks. Only a movement past the drag threshold is taken.
+        // Native controls keep their normal hit testing. Gallery clicks and
+        // movements past the drag threshold are handled by the event monitor.
         override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
         override func viewDidMoveToWindow() {
@@ -82,7 +82,7 @@ struct DocumentDragSource: NSViewRepresentable {
             // their own click and tracking loop.
             var hit = window?.contentView?.hitTest(event.locationInWindow)
             while let view = hit {
-                if view is NSControl { return false }
+                if view is NSControl && !(view is NSTableView) { return false }
                 hit = view.superview
             }
             if wholeTableRow {
