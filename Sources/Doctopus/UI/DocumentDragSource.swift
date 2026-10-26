@@ -36,6 +36,8 @@ struct DocumentDragSource: NSViewRepresentable {
         var onClick: ((NSEvent) -> Void)?
         private var monitor: Any?
         private var down: NSPoint?
+        private var windowOrigin: NSPoint?
+        var isArmed: Bool { down != nil }
         private var startingRows: [DocumentRow] = []
         var wholeTableRow = false
 
@@ -63,7 +65,8 @@ struct DocumentDragSource: NSViewRepresentable {
         }
 
         private func containsStart(_ event: NSEvent, point: NSPoint) -> Bool {
-            guard !isHiddenOrHasHiddenAncestor else { return false }
+            guard !isHiddenOrHasHiddenAncestor,
+                  window?.contentLayoutRect.contains(event.locationInWindow) == true else { return false }
             // Native controls, such as the gallery's approval checkbox, keep
             // their own click and tracking loop.
             var hit = window?.contentView?.hitTest(event.locationInWindow)
@@ -86,11 +89,12 @@ struct DocumentDragSource: NSViewRepresentable {
             return visibleRect.contains(point)
         }
 
-        private func handle(_ event: NSEvent) -> NSEvent? {
+        func handle(_ event: NSEvent) -> NSEvent? {
             guard event.window === window else { return event }
             let point = convert(event.locationInWindow, from: nil)
             switch event.type {
             case .leftMouseDown:
+                windowOrigin = window?.frame.origin
                 down = containsStart(event, point: point) ? point : nil
                 startingRows = down == nil ? [] : rows()
             case .leftMouseUp:
@@ -102,6 +106,11 @@ struct DocumentDragSource: NSViewRepresentable {
                     return nil
                 }
             case .leftMouseDragged:
+                guard window?.frame.origin == windowOrigin else {
+                    down = nil
+                    startingRows = []
+                    return event
+                }
                 guard let start = down, hypot(point.x - start.x, point.y - start.y) >= 4 else { break }
                 down = nil
                 let selected = startingRows

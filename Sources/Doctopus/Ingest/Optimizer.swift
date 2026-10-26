@@ -42,8 +42,8 @@ enum Optimizer {
         guard !cg.isEncrypted else { return nil }
         let pdfkit = PDFDocument(url: url)
         let pageCount = cg.numberOfPages
-        let bytesPerPage = originalSize / Int64(pageCount)
-        guard bytesPerPage > options.minimumPageBytes else { return nil }
+        // Text pages can dilute a large scan in a mixed PDF. The actual output
+        // saving, checked below, decides whether the rewrite is worthwhile.
 
         var rasterPages = Set<Int>()
         for i in 0..<pageCount {

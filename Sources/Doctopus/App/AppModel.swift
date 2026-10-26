@@ -135,6 +135,7 @@ final class AppModel {
             reloadDocuments()
         }
     }
+    var documentToReveal: Int64?
     var searchText = "" { didSet { if searchText != oldValue { scheduleSearch() } } }
     var listColumns = TableColumnCustomization<DocumentRow>() {
         didSet {

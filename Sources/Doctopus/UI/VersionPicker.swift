@@ -44,7 +44,7 @@ struct VersionPicker: View {
                 .labelsHidden()
                 .controlSize(.small)
                 .fixedSize()
-                .disabled(nothingToGain)
+                .disabled(trying || optimizedURL == nil)
                 Button {
                     compare()
                 } label: {
@@ -127,14 +127,15 @@ struct VersionPicker: View {
     private var optimizedNote: String? {
         if trying { return "Trying on a copy…" }
         guard let original = originalSize, let optimized = optimizedSize, original > 0 else {
-            return nothingToGain ? "Nothing to gain" : nil
+            return nothingToGain ? "No smaller version" : nil
         }
         let saving = 1 - Double(optimized) / Double(original)
         return "\(Int((saving * 100).rounded()))% smaller"
     }
 
     private var explanation: String {
-        if nothingToGain { return "This file is already compact, so it is kept as it is." }
+        if trying { return "Preparing an optimized copy. You can keep the original while it runs." }
+        if nothingToGain { return "No smaller version is available with the current settings. The original is kept." }
         switch (version, detail.isOptimized, row.fromOutside) {
         case (.optimized, true, true):
             return "Approving keeps the optimized file and deletes the original."

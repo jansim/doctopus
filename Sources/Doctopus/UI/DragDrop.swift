@@ -4,6 +4,7 @@ import AppKit
 import Observation
 
 extension UTType {
+    static let doctopusFolder = UTType(exportedAs: "io.doctopus.folder")
     static let doctopusDocument = UTType(exportedAs: "io.doctopus.document")
     static let doctopusLibrary = UTType(exportedAs: "io.doctopus.library")
 }
@@ -134,17 +135,17 @@ struct FolderDropDelegate: DropDelegate {
     let state: FolderDropState
 
     func validateDrop(info: DropInfo) -> Bool {
-        info.hasItemsConforming(to: [.doctopusDocument])
+        info.hasItemsConforming(to: [.doctopusDocument, .doctopusFolder])
     }
 
     func dropEntered(info: DropInfo) {
         state.finished = false
-        note(.held)
+        note(info.hasItemsConforming(to: [.doctopusFolder]) ? .move : .held)
     }
 
     func dropUpdated(info: DropInfo) -> DropProposal? {
         guard !state.finished else { return nil }
-        note(.held)
+        note(info.hasItemsConforming(to: [.doctopusFolder]) ? .move : .held)
         // A move shows the plain arrow; copy would badge it with the green
         // plus, which says the opposite of what letting go will do.
         return DropProposal(operation: state.intent == .move ? .move : .copy)
@@ -159,6 +160,19 @@ struct FolderDropDelegate: DropDelegate {
     func performDrop(info: DropInfo) -> Bool {
         state.finished = true
         MainActor.assumeIsolated { model.folderDropTarget = nil }
+        if info.hasItemsConforming(to: [.doctopusFolder]) {
+            guard let provider = info.itemProviders(for: [.doctopusFolder]).first else { return false }
+            _ = provider.loadDataRepresentation(forTypeIdentifier: UTType.doctopusFolder.identifier) { data, _ in
+                guard let data, let item = try? JSONDecoder().decode(FolderDragItem.self, from: data) else { return }
+                Task { @MainActor in
+                    guard model.canMoveFolder(item.path, into: folder) else { return }
+                    model.moveFolder(item.path, into: folder) { rules in
+                        FolderRuleConfirmation.ask(rules, folderName: URL(fileURLWithPath: item.path).lastPathComponent)
+                    }
+                }
+            }
+            return true
+        }
         let providers = info.itemProviders(for: [.doctopusDocument])
         guard !providers.isEmpty else { return false }
         // Decided now, while the keys still say what was held.

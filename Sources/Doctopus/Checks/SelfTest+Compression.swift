@@ -2,6 +2,36 @@ import Foundation
 import PDFKit
 
 extension SelfTest {
+    static func mixedPDFCompression(rows: [DocumentRow]) {
+        let fm = FileManager.default
+        let file = fm.temporaryDirectory.appendingPathComponent("doctopus-mixed-\(UUID().uuidString).pdf")
+        defer { try? fm.removeItem(at: file) }
+        guard let text = rows.compactMap({ PDFDocument(url: $0.url) }).first(where: {
+            ($0.string ?? "").count > 100
+        })?.page(at: 0) else {
+            Check.that("a text page for mixed PDF compression", false); return
+        }
+        let mixed = PDFDocument()
+        mixed.insert(PDFPage(), at: 0)
+        for i in 1...30 {
+            guard let page = text.copy() as? PDFPage else { return }
+            mixed.insert(page, at: i)
+        }
+        guard mixed.write(to: file) else { return }
+        do {
+            var bytes = try Data(contentsOf: file)
+            bytes.append(Data(("\n%" + String(repeating: "padding", count: 100_000) + "\n").utf8))
+            try bytes.write(to: file)
+            Check.that("a long mixed PDF falls below the old average-page cutoff",
+                       Int64(bytes.count / mixed.pageCount) < Optimizer.Options.default.minimumPageBytes)
+            let result = try Optimizer.optimize(url: file)
+            let after = PDFDocument(url: file)
+            Check.that("long mixed PDFs can offer an optimized version without losing pages or text",
+                       result != nil && after?.pageCount == mixed.pageCount
+                        && after?.page(at: 1)?.string == text.string)
+        } catch { Check.that("mixed PDF compression completes", false, error.localizedDescription) }
+    }
+
     static func externalCompression(rows: [DocumentRow]) {
         let fm = FileManager.default
         let scratch = fm.temporaryDirectory.appendingPathComponent("doctopus-compression-\(UUID().uuidString)")

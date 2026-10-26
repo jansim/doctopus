@@ -56,6 +56,28 @@ enum URLSchemeHandler: Sendable {
 
 extension AppModel {
 
+    func showInAllDocuments(_ row: DocumentRow) {
+        guard let lib = library else { return }
+        documentToReveal = nil
+        selection = .all
+        searchText = ""
+        searchTask?.cancel()
+        reloadDocuments()
+        Task {
+            while true {
+                await reloadDocsTask?.value
+                guard library === lib, selection == .all, searchText.isEmpty else { return }
+                if let found = documents.first(where: { $0.doc == row.doc }) {
+                    selectedIDs = [found.id]
+                    documentToReveal = found.id
+                    return
+                }
+                guard hasMoreDocuments else { return }
+                loadMore()
+            }
+        }
+    }
+
     func globalSearch(text: String, limit: Int = 20) -> [GlobalSearchResult] {
         guard !text.trimmingCharacters(in: .whitespaces).isEmpty else { return [] }
         let query = text.lowercased()

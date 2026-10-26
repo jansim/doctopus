@@ -148,7 +148,7 @@ extension AppModel {
         do {
             try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
             refreshAll()
-            selection = .folder(url.path)
+            collapsedFolders.remove(parent.path)
         } catch {
             errorMessage = "Could not create “\(name)”: \(error.localizedDescription)"
         }
@@ -160,9 +160,51 @@ extension AppModel {
     /// only if that says so.
     func renameFolder(_ path: String, to name: String,
                       confirmRules: @escaping @MainActor ([Rule]) -> Bool = { _ in false }) {
-        guard let lib = library, lib.owns(path: path) else { return }
+        guard !name.isEmpty, name != ".", name != "..", !name.contains("/") else { return }
         let source = URL(fileURLWithPath: path)
-        let destination = source.deletingLastPathComponent().appendingPathComponent(name, isDirectory: true).path
+        relocateFolder(path, to: source.deletingLastPathComponent()
+            .appendingPathComponent(name, isDirectory: true).path, confirmRules: confirmRules)
+    }
+
+    func canMoveFolder(_ path: String, into parent: String) -> Bool {
+        let destination = URL(fileURLWithPath: parent)
+            .appendingPathComponent(URL(fileURLWithPath: path).lastPathComponent).path
+        return canRelocateFolder(path, to: destination)
+    }
+
+    private func canRelocateFolder(_ path: String, to destination: String) -> Bool {
+        guard let lib = library else { return false }
+        func resolved(_ path: String) -> String {
+            Store.canonical(URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL.path)
+        }
+        let source = resolved(path), target = resolved(destination)
+        let container = resolved(lib.container.path)
+        guard lib.owns(path: source), source != lib.root.path,
+              lib.owns(path: target), target != lib.root.path,
+              source != container, !source.hasPrefix(container + "/"),
+              target != container, !target.hasPrefix(container + "/"),
+              target != source, !target.hasPrefix(source + "/"),
+              !FileManager.default.fileExists(atPath: destination),
+              (try? URL(fileURLWithPath: path).resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true
+        else { return false }
+        return true
+    }
+
+    func moveFolder(_ path: String, into parent: String,
+                    confirmRules: @escaping @MainActor ([Rule]) -> Bool = { _ in false }) {
+        let destination = URL(fileURLWithPath: parent)
+            .appendingPathComponent(URL(fileURLWithPath: path).lastPathComponent).path
+        relocateFolder(path, to: destination, confirmRules: confirmRules)
+    }
+
+    private func relocateFolder(_ path: String, to destination: String,
+                                confirmRules: @escaping @MainActor ([Rule]) -> Bool) {
+        guard let lib = library else { return }
+        guard canRelocateFolder(path, to: destination) else {
+            errorMessage = "That folder cannot be moved there. Choose a different folder in this library with no item of the same name."
+            return
+        }
+        let source = URL(fileURLWithPath: path)
         Task {
             do {
                 try await lib.store.moveFolder(from: path, to: destination)
@@ -173,13 +215,19 @@ extension AppModel {
                     throw error
                 }
             } catch {
-                errorMessage = "Could not rename “\(source.lastPathComponent)”: \(error.localizedDescription)"
+                errorMessage = "Could not move “\(source.lastPathComponent)”: \(error.localizedDescription)"
                 return
             }
             if case .folder(let selected) = selection, selected == path || selected.hasPrefix(path + "/") {
                 selection = .folder(destination + selected.dropFirst(path.count))
             }
+            collapsedFolders = Set(collapsedFolders.map { collapsed in
+                collapsed == path || collapsed.hasPrefix(path + "/")
+                    ? destination + collapsed.dropFirst(path.count) : collapsed
+            })
+            collapsedFolders.remove(URL(fileURLWithPath: destination).deletingLastPathComponent().path)
             refreshAll()
+            reloadDetail()
             await refileRules(from: path, to: destination, in: lib, confirm: confirmRules)
         }
     }
