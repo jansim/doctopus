@@ -6,7 +6,9 @@ extension Indexer {
     @discardableResult
     func pipeline(id: Int64, path: String, isImport: Bool, route: Bool,
                   scanned: Bool, isNew: Bool) async -> String? {
-        var url = URL(fileURLWithPath: path)
+        // The row says where the file is now: a received document is listed
+        // before it is processed, and may have been moved or renamed meanwhile.
+        var url = URL(fileURLWithPath: (try? await store.documentPath(id)) ?? path)
         let name = url.lastPathComponent
         guard FileManager.default.fileExists(atPath: url.path) else {
             try? await store.markOCR(id, state: .skipped)
@@ -117,9 +119,13 @@ extension Indexer {
 
         // 6. Routing — every new document gets suggestions; only undirected imports move.
         if isImport || isNew {
+            // Moved or renamed by hand while it was being read: what was chosen stands.
+            let now = (try? await store.documentPath(id)) ?? url.path
+            let movedMeanwhile = Store.canonical(now) != Store.canonical(url.path)
+            if movedMeanwhile { url = URL(fileURLWithPath: now) }
             await self.route(id: id, url: &url, text: extracted.text, findings: findings, insight: insight,
-                             moving: isImport && route && settings.autoRouteImports,
-                             chosen: isImport && !route, scanned: isImport && scanned,
+                             moving: !movedMeanwhile && isImport && route && settings.autoRouteImports,
+                             chosen: isImport && !route, scanned: !movedMeanwhile && isImport && scanned,
                              action: isImport ? .imported : .indexed)
         }
 
