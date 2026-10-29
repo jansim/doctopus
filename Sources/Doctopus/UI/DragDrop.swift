@@ -24,14 +24,45 @@ struct FolderDragItem: Codable, Transferable, Hashable, Sendable {
         CodableRepresentation(contentType: .doctopusFolder)
     }
 
-    /// The first provider's folder, if it carries one.
+    /// The first provider's folder, or nil when it carries none.
     static func load(from providers: [NSItemProvider],
-                     then deliver: @escaping @MainActor @Sendable (FolderDragItem) -> Void) {
-        guard let provider = providers.first else { return }
+                     then deliver: @escaping @MainActor @Sendable (FolderDragItem?) -> Void) {
+        guard let provider = providers.first else {
+            DispatchQueue.main.async { MainActor.assumeIsolated { deliver(nil) } }
+            return
+        }
         _ = provider.loadDataRepresentation(for: .doctopusFolder) { data, _ in
-            guard let item = data.flatMap({ try? JSONDecoder().decode(FolderDragItem.self, from: $0) }) else { return }
+            let item = data.flatMap { try? JSONDecoder().decode(FolderDragItem.self, from: $0) }
             DispatchQueue.main.async { MainActor.assumeIsolated { deliver(item) } }
         }
+    }
+}
+
+/// Both readings of one drop, started together while its pasteboard is
+/// still there, and settled once both are in.
+@MainActor
+private final class DropReading {
+    private var documents: [DocumentDragItem]?
+    private var folder: FolderDragItem??
+    private let settle: @MainActor ([DocumentDragItem], FolderDragItem?) -> Void
+
+    init(settle: @escaping @MainActor ([DocumentDragItem], FolderDragItem?) -> Void) {
+        self.settle = settle
+    }
+
+    func read(_ documents: [DocumentDragItem]) {
+        self.documents = documents
+        finish()
+    }
+
+    func read(_ folder: FolderDragItem?) {
+        self.folder = .some(folder)
+        finish()
+    }
+
+    private func finish() {
+        guard let documents, let folder else { return }
+        settle(documents, folder)
     }
 }
 
@@ -190,16 +221,18 @@ struct FolderDropDelegate: DropDelegate {
         guard !providers.isEmpty else { return false }
         // Decided now, while the keys still say what was held.
         let action = state.intent.action(on: folder)
-        DocumentDragItem.load(from: providers) { items in
-            guard items.isEmpty else {
-                model.handleDrop(items, action: action)
-                return
+        MainActor.assumeIsolated {
+            let reading = DropReading { [model, folder] items, moved in
+                if !items.isEmpty {
+                    model.handleDrop(items, action: action)
+                } else if let moved {
+                    // No document in it: a folder, which only ever moves.
+                    let name = URL(fileURLWithPath: moved.path).lastPathComponent
+                    model.moveFolder(moved.path, into: folder) { FolderRow.confirmRefiling($0, of: name) }
+                }
             }
-            // No document in it: a folder, which only ever moves.
-            FolderDragItem.load(from: providers) { item in
-                let name = URL(fileURLWithPath: item.path).lastPathComponent
-                model.moveFolder(item.path, into: folder) { FolderRow.confirmRefiling($0, of: name) }
-            }
+            DocumentDragItem.load(from: providers) { reading.read($0) }
+            FolderDragItem.load(from: providers) { reading.read($0) }
         }
         return true
     }
