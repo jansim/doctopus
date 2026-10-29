@@ -178,6 +178,15 @@ extension UITest {
                    Set(internalItems.map(\.id)) == model.selectedIDs)
         Check.that("dragging an unselected document exports only that file",
                    DocumentDragSource.pasteboardItems(for: [rows[2]]).count == 1)
+        // Sampled just inside the top of the badge, above its digits.
+        let badged = DocumentDragSource.dragImage(for: rows[0], count: promised)
+        let badge = badged.cgImage(forProposedRect: nil, context: nil, hints: nil)
+            .map { NSBitmapImageRep(cgImage: $0) }
+            .flatMap { $0.colorAt(x: $0.pixelsWide * 37 / 48, y: $0.pixelsHigh * 2 / 64) }?
+            .usingColorSpace(.sRGB)
+        Check.that("the drag image of a selection carries its count badge",
+                   badge.map { $0.redComponent > 0.6 && $0.greenComponent < 0.4 } == true,
+                   badge.map { "\($0)" } ?? "no image")
 
         let outside = model.dragCount(from: rows[2])
         Check.that("dragging a document outside the selection counts just that one",

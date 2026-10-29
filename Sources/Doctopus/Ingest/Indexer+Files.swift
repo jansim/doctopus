@@ -200,7 +200,15 @@ extension Indexer {
         do {
             savedOriginal = try await store.saveOriginalFile(for: id, from: url, hash: preHash) ? preHash : nil
         } catch { throw OptimizeError.originalNotKept(error.localizedDescription) }
-        guard let result = try? Optimizer.optimize(url: url, options: settings.optimizerOptions) else {
+        // On a thread of its own, which may block: an external compressor can
+        // take minutes, and the indexer must keep serving everything else.
+        let options = settings.optimizerOptions
+        let optimized = await withCheckedContinuation { (done: CheckedContinuation<Optimizer.Result?, Never>) in
+            DispatchQueue.global(qos: .utility).async {
+                done.resume(returning: try? Optimizer.optimize(url: url, options: options))
+            }
+        }
+        guard let result = optimized else {
             if let savedOriginal { await store.discardOriginalFile(hash: savedOriginal, ext: url.pathExtension) }
             return nil
         }

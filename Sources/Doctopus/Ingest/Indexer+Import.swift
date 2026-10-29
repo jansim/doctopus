@@ -85,7 +85,9 @@ extension Indexer {
                     summary.fail(url.lastPathComponent, "its copy could not be read"); continue
                 }
                 let r = try await store.upsertDocument(facts, origin: origin)
-                if let sourceHash { try await store.setHash(r.id, sourceHash, isOriginal: true) }
+                // Recorded now, so a second copy arriving before this one is processed
+                // is caught as a duplicate; the pipeline records it again anyway.
+                if let sourceHash { try? await store.setHash(r.id, sourceHash, isOriginal: true) }
                 imported.append((r.id, target.path))
                 summary.imported += 1
             } catch {

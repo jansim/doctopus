@@ -21,7 +21,19 @@ extension SelfTest {
             Check.that("receiving a file makes it available in the library before OCR or model analysis",
                        received.summary.imported == 1 && (receivedText ?? "").isEmpty
                            && receivedPath.map { FileManager.default.fileExists(atPath: $0) } == true)
+            // Filed by hand before its turn came: still processed, where it was put.
+            let meanwhile = root.appendingPathComponent("Filed Meanwhile", isDirectory: true)
+            let movedTo = try? await indexer.relocate(receivedID, from: URL(fileURLWithPath: receivedPath ?? ""),
+                                                      into: meanwhile, named: outside.lastPathComponent,
+                                                      action: .moved, detail: nil)
             await indexer.processImport(received)
+            let pathAfter = (try? await store.documentPath(receivedID)) ?? ""
+            let sampleText = (try? await store.ocrText(sample.doc)) ?? ""
+            let processedText = (try? await store.ocrText(receivedID)) ?? ""
+            Check.that("a received file moved before processing is still processed where it was put",
+                       movedTo.map { Store.canonical($0.path) == Store.canonical(pathAfter) } == true
+                           && (sampleText.isEmpty || !processedText.isEmpty),
+                       pathAfter)
             let copied = ((try? await store.listDocuments(selection: .all, query: SearchQuery(""),
                                                           sort: .added, ascending: false)) ?? [])
                 .first { $0.filename == outside.lastPathComponent }
@@ -49,6 +61,7 @@ extension SelfTest {
                 try? FileManager.default.removeItem(at: copied.url)
                 try? await store.deleteDocument(copied.doc)
             }
+            try? FileManager.default.removeItem(at: meanwhile)
             try? FileManager.default.removeItem(at: outside)
         }
     }
