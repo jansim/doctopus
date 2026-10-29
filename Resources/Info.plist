@@ -44,6 +44,13 @@
             <key>UTTypeTagSpecification</key><dict/>
         </dict>
         <dict>
+            <key>UTTypeIdentifier</key><string>io.doctopus.folder</string>
+            <key>UTTypeDescription</key><string>Doctopus Folder Reference</string>
+            <key>UTTypeConformsTo</key>
+            <array><string>public.data</string></array>
+            <key>UTTypeTagSpecification</key><dict/>
+        </dict>
+        <dict>
             <key>UTTypeIdentifier</key><string>io.doctopus.library</string>
             <key>UTTypeDescription</key><string>Doctopus Library</string>
             <!-- A package: Finder shows it as one item that opens in Doctopus

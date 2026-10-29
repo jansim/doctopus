@@ -6,6 +6,64 @@ import Observation
 extension UTType {
     static let doctopusDocument = UTType(exportedAs: "io.doctopus.document")
     static let doctopusLibrary = UTType(exportedAs: "io.doctopus.library")
+    static let doctopusFolder = UTType(exportedAs: "io.doctopus.folder")
+}
+
+/// A sidebar folder on its way to another one. Only within the app: the
+/// folder itself is never offered to Finder, where a drop would copy it out.
+///
+/// Drop targets cannot be relied on to tell its type from a document's, so
+/// a drop goes by what decodes: its key is not a document's, and a document
+/// lacks it.
+struct FolderDragItem: Codable, Transferable, Hashable, Sendable {
+    var path: String
+
+    private enum CodingKeys: String, CodingKey { case path = "folder" }
+
+    static var transferRepresentation: some TransferRepresentation {
+        CodableRepresentation(contentType: .doctopusFolder)
+    }
+
+    /// The first provider's folder, or nil when it carries none.
+    static func load(from providers: [NSItemProvider],
+                     then deliver: @escaping @MainActor @Sendable (FolderDragItem?) -> Void) {
+        guard let provider = providers.first else {
+            DispatchQueue.main.async { MainActor.assumeIsolated { deliver(nil) } }
+            return
+        }
+        _ = provider.loadDataRepresentation(for: .doctopusFolder) { data, _ in
+            let item = data.flatMap { try? JSONDecoder().decode(FolderDragItem.self, from: $0) }
+            DispatchQueue.main.async { MainActor.assumeIsolated { deliver(item) } }
+        }
+    }
+}
+
+/// Both readings of one drop, started together while its pasteboard is
+/// still there, and settled once both are in.
+@MainActor
+private final class DropReading {
+    private var documents: [DocumentDragItem]?
+    private var folder: FolderDragItem??
+    private let settle: @MainActor ([DocumentDragItem], FolderDragItem?) -> Void
+
+    init(settle: @escaping @MainActor ([DocumentDragItem], FolderDragItem?) -> Void) {
+        self.settle = settle
+    }
+
+    func read(_ documents: [DocumentDragItem]) {
+        self.documents = documents
+        finish()
+    }
+
+    func read(_ folder: FolderDragItem?) {
+        self.folder = .some(folder)
+        finish()
+    }
+
+    private func finish() {
+        guard let documents, let folder else { return }
+        settle(documents, folder)
+    }
 }
 
 struct DocumentDragItem: Codable, Transferable, Hashable, Sendable {
@@ -134,7 +192,7 @@ struct FolderDropDelegate: DropDelegate {
     let state: FolderDropState
 
     func validateDrop(info: DropInfo) -> Bool {
-        info.hasItemsConforming(to: [.doctopusDocument])
+        info.hasItemsConforming(to: [.doctopusDocument, .doctopusFolder])
     }
 
     func dropEntered(info: DropInfo) {
@@ -159,13 +217,22 @@ struct FolderDropDelegate: DropDelegate {
     func performDrop(info: DropInfo) -> Bool {
         state.finished = true
         MainActor.assumeIsolated { model.folderDropTarget = nil }
-        let providers = info.itemProviders(for: [.doctopusDocument])
+        let providers = info.itemProviders(for: [.doctopusDocument, .doctopusFolder])
         guard !providers.isEmpty else { return false }
         // Decided now, while the keys still say what was held.
         let action = state.intent.action(on: folder)
-        DocumentDragItem.load(from: providers) { items in
-            guard !items.isEmpty else { return }
-            model.handleDrop(items, action: action)
+        MainActor.assumeIsolated {
+            let reading = DropReading { [model, folder] items, moved in
+                if !items.isEmpty {
+                    model.handleDrop(items, action: action)
+                } else if let moved {
+                    // No document in it: a folder, which only ever moves.
+                    let name = URL(fileURLWithPath: moved.path).lastPathComponent
+                    model.moveFolder(moved.path, into: folder) { FolderRow.confirmRefiling($0, of: name) }
+                }
+            }
+            DocumentDragItem.load(from: providers) { reading.read($0) }
+            FolderDragItem.load(from: providers) { reading.read($0) }
         }
         return true
     }

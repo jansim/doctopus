@@ -164,8 +164,21 @@ extension UITest {
         Check.that("a completed folder drop clears the sidebar highlight",
                    model.folderDropTarget == nil, model.folderDropTarget ?? "clear")
 
+        let folder = library.root.appendingPathComponent("Moving-\(UUID().uuidString.prefix(6))", isDirectory: true)
+        try? fm.createDirectory(at: folder, withIntermediateDirectories: true)
+        let folderTaken = drop(FolderDragItem(path: folder.path), as: .doctopusFolder, on: target, in: window)
+        let folderLanded = destination.appendingPathComponent(folder.lastPathComponent, isDirectory: true)
+        let folderMoved = await settle({
+            fm.fileExists(atPath: folderLanded.path) && !fm.fileExists(atPath: folder.path)
+        }, timeout: 20)
+        Check.that("dragging a folder onto another moves it inside",
+                   folderTaken && folderMoved,
+                   "taken \(folderTaken), inside \(fm.fileExists(atPath: folderLanded.path)), "
+                       + "gone from where it was \(!fm.fileExists(atPath: folder.path))")
+
         try? fm.createDirectory(at: cameFrom, withIntermediateDirectories: true)
         try? fm.moveItem(at: landed, to: cameFrom.appendingPathComponent(moving.filename))
+        try? fm.removeItem(at: folder)
         try? fm.removeItem(at: destination)
     }
 
@@ -186,13 +199,14 @@ extension UITest {
         Check.that("…and undoing it puts the file back where it was", back)
     }
 
-    private static func drop(_ item: DocumentDragItem, on target: NSView, in window: NSWindow) -> Bool {
+    private static func drop(_ item: some Encodable, as type: UTType = .doctopusDocument,
+                             on target: NSView, in window: NSWindow) -> Bool {
         guard let payload = try? JSONEncoder().encode(item) else { return false }
         let pasteboard = NSPasteboard(name: .init("doctopus-uitest-\(UUID().uuidString)"))
         defer { pasteboard.releaseGlobally() }
         pasteboard.clearContents()
         let entry = NSPasteboardItem()
-        _ = entry.setData(payload, forType: .init(UTType.doctopusDocument.identifier))
+        _ = entry.setData(payload, forType: .init(type.identifier))
         _ = pasteboard.writeObjects([entry])
 
         let middle = target.convert(NSPoint(x: target.bounds.midX, y: target.bounds.midY), to: nil)

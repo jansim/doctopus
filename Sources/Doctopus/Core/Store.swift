@@ -278,10 +278,16 @@ actor Store {
         try db.first("SELECT COUNT(*) FROM documents") { Int($0.int(0)) } ?? 0
     }
 
+    /// `isOriginal`: these bytes are the original, unless the document was
+    /// optimized already. Then the kept original's hash stays, or it could no
+    /// longer be found to revert to.
     func setHash(_ id: Int64, _ hash: String, isOriginal: Bool = false) throws {
         if isOriginal {
-            try db.run("UPDATE documents SET hash=?, original_hash=? WHERE id=?",
-                       [.text(hash), .text(hash), .int(id)])
+            try db.run("""
+                UPDATE documents
+                SET hash = ?1, original_hash = CASE WHEN original_size IS NULL THEN ?1 ELSE original_hash END
+                WHERE id = ?2
+                """, [.text(hash), .int(id)])
         } else {
             try db.run("UPDATE documents SET hash=? WHERE id=?", [.text(hash), .int(id)])
         }
