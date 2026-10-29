@@ -37,7 +37,9 @@ struct BulkReview: View {
                     actions
                 }
                 .padding(12)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                // At least the pane's height, so the actions sit at its bottom
+                // until the content outgrows it and scrolls.
+                .frame(maxWidth: .infinity, minHeight: geometry.size.height, alignment: .topLeading)
             }
         }
         .task(id: rows.map(\.id)) { await loadSuggestions() }

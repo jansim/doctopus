@@ -7,6 +7,8 @@ struct ReviewPanel: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
+        // Takes whatever size the split view offers, so the content's minimum
+        // width does not become the pane's.
         GeometryReader { _ in
             Group {
                 if model.selectedIDs.count == 1, let detail = model.detail,
@@ -89,11 +91,14 @@ private struct DocumentReview: View {
                         filing
                     }
                 } else {
+                    // Stacked, they share the pane's height, and scroll only
+                    // once that is too little for either to be usable.
+                    let height = geometry.size.height - 1
                     ScrollView {
                         VStack(spacing: 0) {
-                            generatedInfo.frame(height: 240)
+                            generatedInfo.frame(height: max(240, height * 0.45))
                             Divider()
-                            filing.frame(height: 300)
+                            filing.frame(height: max(300, height * 0.55))
                         }
                     }
                 }
