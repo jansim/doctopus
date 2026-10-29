@@ -60,6 +60,8 @@ enum UITest {
             await tagIconsReachTheSidebar(model, snapshots: snapshots)
             await metadataPaneLists(model, snapshots: snapshots)
             await optionRevealsFolders(model)
+            await showInAllDocumentsKeepsTheSelection(model)
+            await creatingAFolderKeepsTheView(model)
             await searchFieldTakesAndGivesUpFocus(model)
             await advancedSearchDraws(model, snapshots: snapshots)
             await secondLibraryOpensApart(model, alongside: library, snapshots: snapshots)

@@ -131,6 +131,13 @@ private struct DocumentTableView: View {
     }
 
     var body: some View {
+        ScrollViewReader { proxy in
+            table.scrolling(to: model, with: proxy)
+        }
+    }
+
+    @ViewBuilder
+    private var table: some View {
         @Bindable var model = model
 
         // Passive drag observers leave mouse-down to the table for selection,
@@ -349,6 +356,17 @@ struct AliasBadgedThumbnail: View {
     }
 }
 
+private extension View {
+    /// Brings `AppModel.scrollTarget` into view once it is set.
+    func scrolling(to model: AppModel, with proxy: ScrollViewProxy) -> some View {
+        onChange(of: model.scrollTarget) { _, target in
+            guard let target else { return }
+            proxy.scrollTo(target, anchor: .center)
+            model.scrollTarget = nil
+        }
+    }
+}
+
 private struct DocumentGalleryView: View {
     @Environment(AppModel.self) private var model
     @State private var selectionAnchor: Int64?
@@ -356,6 +374,13 @@ private struct DocumentGalleryView: View {
     private var cell: CGFloat { CGFloat(model.settings.galleryThumbnailSize) }
 
     var body: some View {
+        ScrollViewReader { proxy in
+            gallery.scrolling(to: model, with: proxy)
+        }
+    }
+
+    @ViewBuilder
+    private var gallery: some View {
         let timeline = Timeline.sections(for: model)
         let headed = model.selection == .reviewed || !timeline.isEmpty
         ScrollView {
@@ -565,6 +590,9 @@ private struct DocumentMenu: View {
             } else if model.selection != .deleted {
                 Divider()
                 Button("Review…") { model.review(rows) }
+            }
+            if model.selection != .deleted, model.selection != .all || !model.searchText.isEmpty {
+                Button("Show in All Documents") { model.showInAllDocuments(rows) }
             }
             Divider()
             Menu("Tags") {

@@ -51,6 +51,16 @@ extension SelfTest {
                 try? await store.setSizes(targetDoc.doc, size: origSize / 2, originalSize: origSize)
                 let origURL = try? await store.originalFileURL(for: targetDoc.doc)
                 Check.that("pre-optimization original file is preserved", origURL != nil && FileManager.default.fileExists(atPath: origURL!.path))
+                // Its bytes now differ from the original's, as an optimized file's do;
+                // reading it again must not take them for the original.
+                if var changed = try? Data(contentsOf: targetDoc.url) {
+                    changed.append(Data("\n% optimized-\(UUID().uuidString)\n".utf8))
+                    try? changed.write(to: targetDoc.url)
+                }
+                await indexer.reprocess(ids: [targetDoc.doc])
+                let stillKept = try? await store.originalFileURL(for: targetDoc.doc)
+                Check.that("reprocessing an optimized document keeps its original revertible",
+                           stillKept != nil && stillKept == origURL)
                 let reverted = await indexer.revertOptimization(ids: [targetDoc.doc]).done == 1
                 Check.that("revert optimization restores document size and removes original_size", reverted)
             }

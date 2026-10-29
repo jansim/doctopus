@@ -90,14 +90,41 @@ extension AppModel {
                 selection: sel, query: query, sort: sortField, ascending: asc, limit: limit,
                 ruleMatched: sel == .needsReview ? lib.ruleMatchedDocs : [])) ?? []
             guard !Task.isCancelled else { return }
+            let live = Set(rows.map(\.id))
+            // Paged on until what is being shown is listed, however far down.
+            let wanted = self.showingInAll
+            if !wanted.isEmpty, !wanted.isSubset(of: live), rows.count >= limit {
+                self.currentLimit += Self.pageBatchSize
+                self.reloadDocuments(resetPaging: false)
+                return
+            }
 
             self.documents = rows
             self.hasMoreDocuments = rows.count >= limit
-            let live = Set(rows.map(\.id))
             let kept = self.selectedIDs.intersection(live)
             if kept != self.selectedIDs { self.selectedIDs = kept }
+            if !wanted.isEmpty {
+                self.showingInAll = []
+                let found = wanted.intersection(live)
+                if !found.isEmpty {
+                    self.selectedIDs = found
+                    self.scrollTarget = rows.first { found.contains($0.id) }?.id
+                }
+            }
             if self.selectedIDs.isEmpty { self.detail = nil }
         }
+    }
+
+    /// From a search, a folder or any other narrowed view back to every
+    /// document, with these still selected and in view among their neighbours.
+    func showInAllDocuments(_ rows: [DocumentRow]) {
+        guard !rows.isEmpty else { return }
+        showingInAll = Set(rows.map(\.id))
+        searchText = ""
+        // Its debounced reload would start paging over at the first page.
+        searchTask?.cancel()
+        selection = .all
+        reloadDocuments()
     }
 
     func scheduleSearch() {

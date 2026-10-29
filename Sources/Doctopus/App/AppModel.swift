@@ -277,6 +277,10 @@ final class AppModel {
     var reloadDocsTask: Task<Void, Never>?
     var currentLimit = 500
     var hasMoreDocuments = false
+    /// What Show in All Documents is looking for, selected once it is listed.
+    var showingInAll: Set<Int64> = []
+    /// A document the list or gallery should bring into view, cleared once it has.
+    var scrollTarget: Int64?
 
     // AppModel+Documents, the folders ⌥ points out
     /// Whether ⌥ is down, and so whether the sidebar is pointing out where the

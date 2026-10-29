@@ -194,7 +194,10 @@ private enum SourceMonitor {
         case .leftMouseDown:
             active?.reset()
             active = nil
-            guard !hitsNativeControl(event),
+            // Content scrolls on under the toolbar and title bar, and a press
+            // there moves the window: it never picks up the document beneath.
+            guard let window = event.window, window.contentLayoutRect.contains(event.locationInWindow),
+                  !hitsNativeControl(event),
                   let source = sources.allObjects.first(where: { $0.claims(event) }) else { return event }
             source.begin(event)
             active = source

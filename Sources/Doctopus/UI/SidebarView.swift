@@ -319,7 +319,8 @@ struct FolderRow: View {
         .padding(.leading, CGFloat(depth) * 11)
         .tag(Selection.folder(node.path))
         .contextMenu { menu }
-        .onDrop(of: [.doctopusDocument],
+        .modifier(FolderDrag(node: node))
+        .onDrop(of: [.doctopusDocument, .doctopusFolder],
                 delegate: FolderDropDelegate(folder: node.path, model: model,
                                              state: dropState))
 
@@ -360,7 +361,7 @@ struct FolderRow: View {
     private func newSubfolder() {
         guard let name = TextPrompt.ask(title: "New Folder",
                                         message: "Create a folder inside \(node.name).",
-                                        initial: "Untitled Folder") else { return }
+                                        initial: "Untitled Folder", confirm: "Create") else { return }
         model.createFolder(named: name, in: URL(fileURLWithPath: node.path))
     }
 
@@ -368,16 +369,33 @@ struct FolderRow: View {
         guard let name = TextPrompt.ask(title: "Rename Folder",
                                         message: "Renames the folder on disk; documents inside keep their tags and metadata.",
                                         initial: node.name) else { return }
-        model.renameFolder(node.path, to: name) { rules in
-            let alert = NSAlert()
-            alert.messageText = rules.count == 1
-                ? "Update the rule that files into “\(node.name)”?"
-                : "Update the \(rules.count) rules that file into “\(node.name)”?"
-            alert.informativeText = rules.map { "“\($0.name)” → \($0.destination ?? "")" }
-                .joined(separator: "\n")
-            alert.addButton(withTitle: rules.count == 1 ? "Update Rule" : "Update Rules")
-            alert.addButton(withTitle: "Leave As They Are")
-            return alert.runModal() == .alertFirstButtonReturn
+        let current = node.name
+        model.renameFolder(node.path, to: name) { Self.confirmRefiling($0, of: current) }
+    }
+
+    /// Asked when a folder rules file into is renamed or moved.
+    static func confirmRefiling(_ rules: [Rule], of name: String) -> Bool {
+        let alert = NSAlert()
+        alert.messageText = rules.count == 1
+            ? "Update the rule that files into “\(name)”?"
+            : "Update the \(rules.count) rules that file into “\(name)”?"
+        alert.informativeText = rules.map { "“\($0.name)” → \($0.destination ?? "")" }
+            .joined(separator: "\n")
+        alert.addButton(withTitle: rules.count == 1 ? "Update Rule" : "Update Rules")
+        alert.addButton(withTitle: "Leave As They Are")
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+}
+
+/// Any folder but the library itself can be dragged onto another to move it.
+private struct FolderDrag: ViewModifier {
+    let node: FolderNode
+
+    func body(content: Content) -> some View {
+        if node.isRoot {
+            content
+        } else {
+            content.draggable(FolderDragItem(path: node.path))
         }
     }
 }

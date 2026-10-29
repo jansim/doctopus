@@ -147,8 +147,9 @@ extension AppModel {
         let url = parent.appendingPathComponent(name, isDirectory: true)
         do {
             try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+            // Shown, not opened: what was being looked at stays in view.
+            collapsedFolders.remove(parent.path)
             refreshAll()
-            selection = .folder(url.path)
         } catch {
             errorMessage = "Could not create “\(name)”: \(error.localizedDescription)"
         }
@@ -163,6 +164,26 @@ extension AppModel {
         guard let lib = library, lib.owns(path: path) else { return }
         let source = URL(fileURLWithPath: path)
         let destination = source.deletingLastPathComponent().appendingPathComponent(name, isDirectory: true).path
+        relocateFolder(path, to: destination, in: lib, verb: "rename", confirmRules: confirmRules)
+    }
+
+    /// Into another folder of the library, keeping its name. Not the library
+    /// itself, not into itself or a folder within it, and not where it is.
+    func moveFolder(_ path: String, into parent: String,
+                    confirmRules: @escaping @MainActor ([Rule]) -> Bool = { _ in false }) {
+        guard let lib = library, lib.owns(path: path), lib.owns(path: parent) else { return }
+        let source = Store.canonical(path), into = Store.canonical(parent)
+        let current = Store.canonical(URL(fileURLWithPath: path).deletingLastPathComponent().path)
+        guard source != Store.canonical(lib.root.path), into != source, !into.hasPrefix(source + "/"),
+              into != current else { return }
+        let destination = URL(fileURLWithPath: parent, isDirectory: true)
+            .appendingPathComponent(URL(fileURLWithPath: path).lastPathComponent, isDirectory: true).path
+        relocateFolder(path, to: destination, in: lib, verb: "move", confirmRules: confirmRules)
+    }
+
+    private func relocateFolder(_ path: String, to destination: String, in lib: Library, verb: String,
+                                confirmRules: @escaping @MainActor ([Rule]) -> Bool) {
+        let source = URL(fileURLWithPath: path)
         Task {
             do {
                 try await lib.store.moveFolder(from: path, to: destination)
@@ -173,7 +194,7 @@ extension AppModel {
                     throw error
                 }
             } catch {
-                errorMessage = "Could not rename “\(source.lastPathComponent)”: \(error.localizedDescription)"
+                errorMessage = "Could not \(verb) “\(source.lastPathComponent)”: \(error.localizedDescription)"
                 return
             }
             if case .folder(let selected) = selection, selected == path || selected.hasPrefix(path + "/") {
