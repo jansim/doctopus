@@ -11,15 +11,23 @@ extension UTType {
 
 /// A sidebar folder on its way to another one. Only within the app: the
 /// folder itself is never offered to Finder, where a drop would copy it out.
+///
+/// Drop targets cannot be relied on to tell its type from a document's, so
+/// a drop goes by what decodes: its key is not a document's, and a document
+/// lacks it.
 struct FolderDragItem: Codable, Transferable, Hashable, Sendable {
     var path: String
+
+    private enum CodingKeys: String, CodingKey { case path = "folder" }
 
     static var transferRepresentation: some TransferRepresentation {
         CodableRepresentation(contentType: .doctopusFolder)
     }
 
-    static func load(from provider: NSItemProvider,
+    /// The first provider's folder, if it carries one.
+    static func load(from providers: [NSItemProvider],
                      then deliver: @escaping @MainActor @Sendable (FolderDragItem) -> Void) {
+        guard let provider = providers.first else { return }
         _ = provider.loadDataRepresentation(for: .doctopusFolder) { data, _ in
             guard let item = data.flatMap({ try? JSONDecoder().decode(FolderDragItem.self, from: $0) }) else { return }
             DispatchQueue.main.async { MainActor.assumeIsolated { deliver(item) } }
@@ -156,19 +164,14 @@ struct FolderDropDelegate: DropDelegate {
         info.hasItemsConforming(to: [.doctopusDocument, .doctopusFolder])
     }
 
-    /// A folder only ever moves: there is no filing it in a second place.
-    private func intent(_ info: DropInfo) -> FolderDropIntent {
-        info.hasItemsConforming(to: [.doctopusFolder]) ? .move : .held
-    }
-
     func dropEntered(info: DropInfo) {
         state.finished = false
-        note(intent(info))
+        note(.held)
     }
 
     func dropUpdated(info: DropInfo) -> DropProposal? {
         guard !state.finished else { return nil }
-        note(intent(info))
+        note(.held)
         // A move shows the plain arrow; copy would badge it with the green
         // plus, which says the opposite of what letting go will do.
         return DropProposal(operation: state.intent == .move ? .move : .copy)
@@ -183,20 +186,20 @@ struct FolderDropDelegate: DropDelegate {
     func performDrop(info: DropInfo) -> Bool {
         state.finished = true
         MainActor.assumeIsolated { model.folderDropTarget = nil }
-        if let provider = info.itemProviders(for: [.doctopusFolder]).first {
-            FolderDragItem.load(from: provider) { item in
-                let name = URL(fileURLWithPath: item.path).lastPathComponent
-                model.moveFolder(item.path, into: folder) { FolderRow.confirmRefiling($0, of: name) }
-            }
-            return true
-        }
-        let providers = info.itemProviders(for: [.doctopusDocument])
+        let providers = info.itemProviders(for: [.doctopusDocument, .doctopusFolder])
         guard !providers.isEmpty else { return false }
         // Decided now, while the keys still say what was held.
         let action = state.intent.action(on: folder)
         DocumentDragItem.load(from: providers) { items in
-            guard !items.isEmpty else { return }
-            model.handleDrop(items, action: action)
+            guard items.isEmpty else {
+                model.handleDrop(items, action: action)
+                return
+            }
+            // No document in it: a folder, which only ever moves.
+            FolderDragItem.load(from: providers) { item in
+                let name = URL(fileURLWithPath: item.path).lastPathComponent
+                model.moveFolder(item.path, into: folder) { FolderRow.confirmRefiling($0, of: name) }
+            }
         }
         return true
     }
