@@ -7,6 +7,10 @@ extension UITest {
     static func selectionMovesInTheList(_ model: AppModel) async {
         model.selection = .all
         model.viewMode = .list
+        // The library window's wider table would otherwise leave its column
+        // widths to the checks after this one.
+        let columns = model.listColumns
+        defer { model.listColumns = columns }
         _ = await settle({ model.documents.count >= 4 }, timeout: 10)
         guard model.documents.count >= 4 else {
             return Check.that("enough documents to move the selection through", false,
@@ -34,23 +38,20 @@ extension UITest {
         model.selection = .all
         model.viewMode = .gallery
         defer { model.viewMode = .list }
-        let size = NSSize(width: 760, height: 420)
-        let (window, _) = host(DocumentListView().environment(model), size: size)
+        let (window, host) = host(DocumentListView().environment(model), size: NSSize(width: 760, height: 420))
         defer { window.orderOut(nil) }
         try? await Task.sleep(for: .seconds(2))
 
-        // The grid's adaptive columns share out the width the padding leaves.
-        let cell = CGFloat(model.settings.galleryThumbnailSize)
-        let width = size.width - 36
-        let columns = max(1, floor((width + 18) / (cell + 18)))
-        let column = (width - 18 * (columns - 1)) / columns
-        let top = Timeline.sections(for: model).isEmpty ? 18 : GalleryHeader.height + 20
-        let y = size.height - (top + cell * 0.65)
-        let first = NSPoint(x: 18 + column / 2, y: y)
-        let second = NSPoint(x: 18 + column * 1.5 + 18, y: y)
-        guard columns >= 2 else {
-            return Check.that("two thumbnails side by side to click between", false, "\(columns) columns")
+        // The cells' own drag sources say where the thumbnails are, top row first.
+        let cells = sources(in: host)
+            .map { $0.convert($0.bounds, to: nil) }
+            .filter { host.convert(host.bounds, to: nil).contains(NSPoint(x: $0.midX, y: $0.midY)) }
+            .sorted { ($0.maxY, -$0.minX) > ($1.maxY, -$1.minX) }
+        guard cells.count >= 2 else {
+            return Check.that("two gallery thumbnails to click between", false, "\(cells.count) on screen")
         }
+        let first = NSPoint(x: cells[0].midX, y: cells[0].midY)
+        let second = NSPoint(x: cells[1].midX, y: cells[1].midY)
 
         model.selectedIDs = []
         _ = await click(window, at: first, attempts: 2, settling: 1) { model.selectedIDs.count == 1 }
@@ -59,14 +60,18 @@ extension UITest {
             model.selectedIDs.count == 1 && model.selectedIDs != before
         }
         Check.that("clicking another gallery thumbnail moves the selection to it",
-                   before.count == 1 && moved, "\(names(before, model)) → \(names(model.selectedIDs, model))")
+                   before.count == 1 && moved,
+                   "\(names(before, model)) → \(names(model.selectedIDs, model)), cells at \(first) and \(second)")
+
+        let back = await click(window, at: first, attempts: 2, settling: 1) { model.selectedIDs == before }
+        Check.that("and clicking the first again moves it back", back, names(model.selectedIDs, model))
         model.selectedIDs = []
     }
 
     private static func moveSelection(in window: NSWindow, host: NSView, _ model: AppModel,
                                       where place: String) async {
-        guard let table = documentTable(in: host, rows: model.documents.count) else {
-            return Check.that("\(place) shows the documents in a table", false)
+        guard let table = documentTable(in: host) else {
+            return Check.that("\(place) shows the documents in a table", false, tables(in: host))
         }
         let ids = model.documents.map(\.id)
 
@@ -102,12 +107,25 @@ extension UITest {
                    "\(names(model.selectedIDs, model)), table rows \(Array(table.selectedRowIndexes))")
     }
 
-    /// The centre pane's table, not the sidebar's outline or a table in the inspector.
-    private static func documentTable(in view: NSView, rows: Int) -> NSTableView? {
-        if let table = view as? NSTableView, !(table is NSOutlineView), table.numberOfRows == rows {
-            return table
+    private static func allTables(in view: NSView) -> [NSTableView] {
+        ((view as? NSTableView).map { [$0] } ?? []) + view.subviews.flatMap(allTables)
+    }
+
+    /// The centre pane's table: the only one with several columns, where the
+    /// sidebar and the inspector have one.
+    private static func documentTable(in view: NSView) -> NSTableView? {
+        allTables(in: view).first { $0.numberOfColumns > 1 }
+    }
+
+    private static func tables(in view: NSView) -> String {
+        let found = allTables(in: view).map {
+            "\(type(of: $0)): \($0.numberOfRows) rows × \($0.numberOfColumns) columns"
         }
-        return view.subviews.lazy.compactMap { documentTable(in: $0, rows: rows) }.first
+        return found.isEmpty ? "no tables" : found.joined(separator: "; ")
+    }
+
+    private static func sources(in view: NSView) -> [DocumentDragSource.SourceView] {
+        ((view as? DocumentDragSource.SourceView).map { [$0] } ?? []) + view.subviews.flatMap(sources)
     }
 
     /// In window coordinates, on the row's name rather than its thumbnail.
