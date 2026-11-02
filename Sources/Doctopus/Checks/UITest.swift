@@ -37,6 +37,8 @@ enum UITest {
 
             await clickSelectsARow(model, snapshots: snapshots)
             await clickSelectsAGalleryThumbnail(model, snapshots: snapshots)
+            await selectionMovesInTheList(model)
+            await selectionMovesInTheGallery(model)
             galleryModifierClicks(model)
             commandASelectsEverything(model)
             dragCountsTheSelection(model)
