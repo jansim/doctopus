@@ -64,10 +64,12 @@ extension UITest {
         let moved = await click(window, at: second, attempts: 2, settling: 1) {
             model.selectedIDs.count == 1 && model.selectedIDs != before
         }
-        let claimed = DocumentDragSource.lastClaimants.map { names([$0], model) }.joined(separator: " + ")
+        let claimants = DocumentDragSource.lastClaimants
+        let claimed = claimants.map { names([$0], model) }.joined(separator: " + ")
         Check.that("clicking another gallery thumbnail moves the selection to it",
                    before.count == 1 && moved,
                    "\(names(before, model)) → \(names(model.selectedIDs, model)), claimed by \(claimed)")
+        Check.that("only the thumbnail clicked claims the click", claimants.count == 1, claimed)
 
         let back = await click(window, at: first, attempts: 2, settling: 1) { model.selectedIDs == before }
         Check.that("and clicking the first again moves it back", back, names(model.selectedIDs, model))

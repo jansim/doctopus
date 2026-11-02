@@ -98,7 +98,11 @@ struct DocumentDragSource: NSViewRepresentable {
                     ancestor = view.superview
                 }
             }
-            return visibleRect.contains(convert(event.locationInWindow, from: nil))
+            // Its own frame first: by its visible rect alone, every gallery
+            // cell claimed every click, which then went to whichever cell
+            // the monitor happened to ask first.
+            return convert(bounds, to: nil).contains(event.locationInWindow)
+                && visibleRect.contains(convert(event.locationInWindow, from: nil))
         }
 
         func begin(_ event: NSEvent) {
