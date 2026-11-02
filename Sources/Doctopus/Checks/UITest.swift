@@ -42,6 +42,8 @@ enum UITest {
             dragCountsTheSelection(model)
             folderPickerResolvesPaths(model)
             await headerClickSorts(model, snapshots: snapshots)
+            await selectionMovesInTheList(model)
+            await selectionMovesInTheGallery(model)
             await rowThumbnailIsAPage(model)
             await inspectorDraws(model, snapshots: snapshots)
             await intelligencePaneDraws(model, snapshots: snapshots)
