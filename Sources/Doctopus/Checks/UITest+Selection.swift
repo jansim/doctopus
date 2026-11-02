@@ -43,10 +43,15 @@ extension UITest {
         try? await Task.sleep(for: .seconds(2))
 
         // The cells' own drag sources say where the thumbnails are, top row first.
-        let cells = sources(in: host)
+        let onScreen = host.convert(host.bounds, to: nil)
+        let all = sources(in: host)
+        let cells = all
             .map { $0.convert($0.bounds, to: nil) }
-            .filter { host.convert(host.bounds, to: nil).contains(NSPoint(x: $0.midX, y: $0.midY)) }
+            .filter { onScreen.contains(NSPoint(x: $0.midX, y: $0.midY)) }
             .sorted { ($0.maxY, -$0.minX) > ($1.maxY, -$1.minX) }
+        let ids = all.map(\.rowID)
+        Check.that("each gallery thumbnail has one drag source", Set(ids).count == ids.count,
+                   "\(ids.count) sources for \(Set(ids).count) documents")
         guard cells.count >= 2 else {
             return Check.that("two gallery thumbnails to click between", false, "\(cells.count) on screen")
         }
@@ -59,9 +64,10 @@ extension UITest {
         let moved = await click(window, at: second, attempts: 2, settling: 1) {
             model.selectedIDs.count == 1 && model.selectedIDs != before
         }
+        let claimed = DocumentDragSource.lastClaimants.map { names([$0], model) }.joined(separator: " + ")
         Check.that("clicking another gallery thumbnail moves the selection to it",
                    before.count == 1 && moved,
-                   "\(names(before, model)) → \(names(model.selectedIDs, model)), cells at \(first) and \(second)")
+                   "\(names(before, model)) → \(names(model.selectedIDs, model)), claimed by \(claimed)")
 
         let back = await click(window, at: first, attempts: 2, settling: 1) { model.selectedIDs == before }
         Check.that("and clicking the first again moves it back", back, names(model.selectedIDs, model))

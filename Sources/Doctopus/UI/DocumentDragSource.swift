@@ -12,6 +12,7 @@ struct DocumentDragSource: NSViewRepresentable {
     func makeNSView(context: Context) -> SourceView { SourceView() }
 
     func updateNSView(_ view: SourceView, context: Context) {
+        view.rowID = row.id
         view.rows = { model.selectedIDs.contains(row.id) ? model.selectedRows : [row] }
         view.count = { model.dragCount(from: row) }
         view.wholeTableRow = wholeTableRow
@@ -53,7 +54,11 @@ struct DocumentDragSource: NSViewRepresentable {
         }
     }
 
+    /// The documents of the sources that claimed the last mouse-down, for the UI checks.
+    @MainActor static var lastClaimants: [Int64] = []
+
     final class SourceView: NSView, NSDraggingSource {
+        var rowID: Int64 = 0
         var rows: () -> [DocumentRow] = { [] }
         var count: () -> Int = { 1 }
         var ended: () -> Void = {}
@@ -197,8 +202,10 @@ private enum SourceMonitor {
             // Content scrolls on under the toolbar and title bar, and a press
             // there moves the window: it never picks up the document beneath.
             guard let window = event.window, window.contentLayoutRect.contains(event.locationInWindow),
-                  !hitsNativeControl(event),
-                  let source = sources.allObjects.first(where: { $0.claims(event) }) else { return event }
+                  !hitsNativeControl(event) else { return event }
+            let claiming = sources.allObjects.filter { $0.claims(event) }
+            DocumentDragSource.lastClaimants = claiming.map(\.rowID)
+            guard let source = claiming.first else { return event }
             source.begin(event)
             active = source
             return event
