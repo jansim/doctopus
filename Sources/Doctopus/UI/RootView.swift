@@ -6,6 +6,9 @@ struct RootView: View {
     @Environment(\.undoManager) private var undoManager
     @State private var columnVisibility = NavigationSplitViewVisibility.all
     @SceneStorage("showInspector") private var showInspector = true
+    /// The width the inspector was last shown at. Its column reopens at its
+    /// ideal width, so without this a width dragged to is lost on closing it.
+    @SceneStorage("inspectorWidth") private var inspectorWidth = 340.0
 
     var body: some View {
         @Bindable var model = model
@@ -29,7 +32,13 @@ struct RootView: View {
             .inspector(isPresented: $model.showInspector) {
                 InspectorView()
                     .acceptsScans()
-                    .inspectorColumnWidth(min: 280, ideal: 340, max: 480)
+                    .inspectorColumnWidth(min: 280, ideal: inspectorWidth, max: 480)
+                    .onGeometryChange(for: Double.self) { $0.size.width } action: { width in
+                        // Only a width it is shown at: closing it can pass
+                        // through narrower ones.
+                        guard model.showInspector, (280...480).contains(width) else { return }
+                        inspectorWidth = width.rounded()
+                    }
             }
         }
         // For the Window menu and Mission Control, which tell windows apart

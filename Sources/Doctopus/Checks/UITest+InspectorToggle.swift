@@ -36,6 +36,7 @@ extension UITest {
             }
         }
 
+        let windowWidth = window.frame.width
         let first = widths(), firstWidth = inspectorWidth()
         await toggleTwice()
         let second = widths(), secondWidth = inspectorWidth()
@@ -43,7 +44,7 @@ extension UITest {
         let third = widths(), thirdWidth = inspectorWidth()
         Check.that("closing and opening the inspector keeps its width",
                    firstWidth != nil && firstWidth == secondWidth && secondWidth == thirdWidth
-                       && window.frame.width == 1100,
+                       && window.frame.width == windowWidth,
                    "\(first) → \(second) → \(third), window \(Int(window.frame.width))")
 
         // A width dragged to by hand should come back too.
