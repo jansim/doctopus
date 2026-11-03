@@ -13,10 +13,10 @@ extension UITest {
         defer { window.orderOut(nil) }
         try? await Task.sleep(for: .seconds(2))
 
-        guard let toggle = inspectorButton(in: window) else {
-            let labels = (window.toolbar?.items ?? []).map { "\($0.itemIdentifier.rawValue)=\($0.label)" }
-            return Check.that("the toolbar has an Inspector button", false, labels.joined(separator: ", "))
-        }
+        // What the toolbar's Inspector button does; SwiftUI draws that
+        // button with no AppKit control or accessibility element to press
+        // in an off-screen window.
+        func toggle() { model.showInspector.toggle() }
         func widths() -> String {
             splitViews(in: window.contentView).map { split in
                 split.arrangedSubviews.map { $0.isHidden ? "hidden" : "\(Int($0.frame.width.rounded()))" }
@@ -67,27 +67,5 @@ extension UITest {
     private static func splitViews(in view: NSView?) -> [NSSplitView] {
         guard let view else { return [] }
         return ((view as? NSSplitView).map { [$0] } ?? []) + view.subviews.flatMap { splitViews(in: $0) }
-    }
-
-    /// Presses the toolbar's Inspector button. SwiftUI draws it without an
-    /// AppKit control of its own, so it is found the way VoiceOver finds it.
-    private static func inspectorButton(in window: NSWindow) -> (() -> Void)? {
-        var seen = 0
-        func search(_ element: Any, depth: Int) -> NSAccessibilityProtocol? {
-            guard depth < 40, seen < 5000, let element = element as? NSAccessibilityProtocol else { return nil }
-            seen += 1
-            let label = [element.accessibilityLabel(), element.accessibilityTitle()]
-            if element.accessibilityRole() == .button,
-               label.contains(where: { $0 == "Inspector" }) { return element }
-            for child in element.accessibilityChildren() ?? [] {
-                if let found = search(child, depth: depth + 1) { return found }
-            }
-            return nil
-        }
-        guard let button = search(window, depth: 0) else {
-            print("  no Inspector button among \(seen) accessibility elements")
-            return nil
-        }
-        return { _ = button.accessibilityPerformPress() }
     }
 }

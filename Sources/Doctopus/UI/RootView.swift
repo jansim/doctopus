@@ -26,7 +26,7 @@ struct RootView: View {
             }
             .acceptsScans()
             .noticeOverlay(model, bottomPadding: 40)
-            .inspector(isPresented: $showInspector) {
+            .inspector(isPresented: $model.showInspector) {
                 InspectorView()
                     .acceptsScans()
                     .inspectorColumnWidth(min: 280, ideal: 340, max: 480)
@@ -56,7 +56,11 @@ struct RootView: View {
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in
             model.appResignedActive()
         }
-        .onAppear { model.undoManager = undoManager }
+        .onAppear {
+            model.undoManager = undoManager
+            model.showInspector = showInspector
+        }
+        .onChange(of: model.showInspector) { _, shown in showInspector = shown }
         .onOpenURL { url in
             guard url.isFileURL else { return model.handleURL(url) }
             // Checked on disk: a URL handed over for a package need not end in
@@ -152,7 +156,7 @@ struct RootView: View {
             .disabled(model.library == nil)
 
             Button {
-                showInspector.toggle()
+                model.showInspector.toggle()
             } label: {
                 Label("Inspector", systemImage: "sidebar.trailing")
             }

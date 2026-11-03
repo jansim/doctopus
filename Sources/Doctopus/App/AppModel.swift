@@ -209,6 +209,8 @@ final class AppModel {
             if revealingFolders { refreshRevealedFolders() }
         }
     }
+    /// The window's inspector; RootView keeps it in scene storage.
+    var showInspector = true
     var viewMode: ViewMode = .list {
         didSet {
             guard viewMode != oldValue else { return }
