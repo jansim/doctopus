@@ -51,6 +51,26 @@ extension UITest {
                 snapshot(view, to: dir + "/needs-review-switch-\(viewMode).png")
             }
 
+            // The review panel lays out differently either side of a width,
+            // and the split has minimum heights: a window anywhere near
+            // those must still settle.
+            print("  · resizing the window around Needs Review in the \(viewMode)")
+            let sizes = [NSSize(width: 1100, height: 640), NSSize(width: 1100, height: 380),
+                         NSSize(width: 1100, height: 470), NSSize(width: 900, height: 600),
+                         NSSize(width: 960, height: 600), NSSize(width: 1000, height: 600),
+                         NSSize(width: 1040, height: 600), NSSize(width: 1200, height: 600),
+                         NSSize(width: 1300, height: 600), NSSize(width: 820, height: 420),
+                         NSSize(width: 1100, height: 640)]
+            for size in sizes {
+                print("    \(Int(size.width))×\(Int(size.height))")
+                window.setContentSize(size)
+                try? await Task.sleep(for: .seconds(1))
+                _ = await clickSidebar(window, model, to: .needsReview)
+                try? await Task.sleep(for: .milliseconds(500))
+            }
+            Check.that("Needs Review settles at every window size tried (\(viewMode))", true,
+                       "ended at \(Int(window.frame.width))×\(Int(window.frame.height))")
+
             let others: [Selection] = [.reviewed, .all, .metadata, .folder(subject.directory), .untagged]
             for other in others {
                 print("  · from \(other) back into Needs Review in the \(viewMode)")

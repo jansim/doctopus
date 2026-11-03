@@ -69,25 +69,25 @@ extension UITest {
         return ((view as? NSSplitView).map { [$0] } ?? []) + view.subviews.flatMap { splitViews(in: $0) }
     }
 
-    /// Clicks the toolbar's Inspector button, wherever SwiftUI put it.
+    /// Presses the toolbar's Inspector button. SwiftUI draws it without an
+    /// AppKit control of its own, so it is found the way VoiceOver finds it.
     private static func inspectorButton(in window: NSWindow) -> (() -> Void)? {
-        let frame = window.contentView?.superview ?? window.contentView
-        let candidates = (window.toolbar?.items ?? []).compactMap(\.view).flatMap { controls(in: $0) }
-            + (frame.map { controls(in: $0) } ?? [])
-        func named(_ control: NSControl) -> Bool {
-            [control.accessibilityLabel(), control.toolTip, control.accessibilityTitle(),
-             (control as? NSButton)?.title, control.accessibilityIdentifier()]
-                .contains { $0?.localizedCaseInsensitiveContains("Inspector") == true }
+        var seen = 0
+        func search(_ element: Any, depth: Int) -> NSAccessibilityProtocol? {
+            guard depth < 40, seen < 5000, let element = element as? NSAccessibilityProtocol else { return nil }
+            seen += 1
+            let label = [element.accessibilityLabel(), element.accessibilityTitle()]
+            if element.accessibilityRole() == .button,
+               label.contains(where: { $0 == "Inspector" }) { return element }
+            for child in element.accessibilityChildren() ?? [] {
+                if let found = search(child, depth: depth + 1) { return found }
+            }
+            return nil
         }
-        if let button = candidates.first(where: named) {
-            return { button.performClick(nil) }
+        guard let button = search(window, depth: 0) else {
+            print("  no Inspector button among \(seen) accessibility elements")
+            return nil
         }
-        print("  controls in the window frame: "
-              + candidates.map { "\(type(of: $0))(\($0.accessibilityLabel() ?? "-"))" }.joined(separator: ", "))
-        return nil
-    }
-
-    private static func controls(in view: NSView) -> [NSControl] {
-        ((view as? NSControl).map { [$0] } ?? []) + view.subviews.flatMap { controls(in: $0) }
+        return { _ = button.accessibilityPerformPress() }
     }
 }
