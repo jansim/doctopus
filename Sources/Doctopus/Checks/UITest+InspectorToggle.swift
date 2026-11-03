@@ -71,22 +71,19 @@ extension UITest {
 
     /// Clicks the toolbar's Inspector button, wherever SwiftUI put it.
     private static func inspectorButton(in window: NSWindow) -> (() -> Void)? {
-        for item in window.toolbar?.items ?? [] {
-            let named = item.label == "Inspector" || item.paletteLabel == "Inspector"
-                || item.toolTip == "Inspector" || item.itemIdentifier.rawValue.localizedCaseInsensitiveContains("inspector")
-            if named, let view = item.view, let button = controls(in: view).first {
-                return { button.performClick(nil) }
-            }
-            if named, let action = item.action {
-                return { NSApp.sendAction(action, to: item.target, from: item) }
-            }
-            if let view = item.view {
-                for control in controls(in: view) where control.accessibilityLabel() == "Inspector"
-                    || control.toolTip == "Inspector" {
-                    return { control.performClick(nil) }
-                }
-            }
+        let frame = window.contentView?.superview ?? window.contentView
+        let candidates = (window.toolbar?.items ?? []).compactMap(\.view).flatMap { controls(in: $0) }
+            + (frame.map { controls(in: $0) } ?? [])
+        func named(_ control: NSControl) -> Bool {
+            [control.accessibilityLabel(), control.toolTip, control.accessibilityTitle(),
+             (control as? NSButton)?.title, control.accessibilityIdentifier()]
+                .contains { $0?.localizedCaseInsensitiveContains("Inspector") == true }
         }
+        if let button = candidates.first(where: named) {
+            return { button.performClick(nil) }
+        }
+        print("  controls in the window frame: "
+              + candidates.map { "\(type(of: $0))(\($0.accessibilityLabel() ?? "-"))" }.joined(separator: ", "))
         return nil
     }
 
