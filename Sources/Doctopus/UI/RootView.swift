@@ -223,7 +223,8 @@ private struct SearchSuggestions: View {
 
     var body: some View {
         if model.searchText.isEmpty {
-            ForEach(["is:review", "is:untagged", "is:duplicate", "is:stale-analysis", "is:unanalyzed", "ext:pdf",
+            ForEach(["is:review", "is:untagged", "is:duplicate", "is:stale-analysis", "is:unanalyzed", "is:unsummarized",
+                     "ext:pdf",
                      "date:\"this month\"", "date:\(thisYear)"], id: \.self) { token in
                 Text(token).searchCompletion(token)
             }

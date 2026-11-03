@@ -70,6 +70,8 @@ enum UITest {
             await reviewPanelFiles(model, snapshots: snapshots)
             await reviewBatchTreatsEachKindApart(model, snapshots: snapshots)
             await recentlyReviewedHasNoCheckboxes(model, snapshots: snapshots)
+            await switchingIntoNeedsReviewDraws(model, snapshots: snapshots)
+            await inspectorKeepsItsWidth(model)
             await droppingAFolderImportsIt(model)
             await handedOverDocumentsImport(model)
             await draggingOntoAFolderFilesOrMoves(model)

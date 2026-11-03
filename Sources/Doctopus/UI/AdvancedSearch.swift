@@ -274,7 +274,8 @@ private struct ConditionRow: View {
         "review": "Not reviewed", "approved": "Reviewed", "untagged": "Untagged", "tagged": "Tagged",
         "pending": "Waiting for OCR", "failed": "OCR failed", "optimized": "Optimized",
         "duplicate": "A duplicate", "stale-analysis": "Analysis out of date", "analyzed": "Analyzed",
-        "unanalyzed": "Not analyzed", "missing": "Missing", "trashed": "In the Trash",
+        "unanalyzed": "Not analyzed", "unsummarized": "No summary", "summarized": "Has a summary",
+        "missing": "Missing", "trashed": "In the Trash",
     ]
 
     private var statuses: [String] {
