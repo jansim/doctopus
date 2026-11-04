@@ -6,6 +6,9 @@ struct RootView: View {
     @Environment(\.undoManager) private var undoManager
     @State private var columnVisibility = NavigationSplitViewVisibility.all
     @SceneStorage("showInspector") private var showInspector = true
+    /// The width the inspector was last shown at. Its column reopens at its
+    /// ideal width, so without this a width dragged to is lost on closing it.
+    @SceneStorage("inspectorWidth") private var inspectorWidth = 340.0
 
     var body: some View {
         @Bindable var model = model
@@ -26,10 +29,16 @@ struct RootView: View {
             }
             .acceptsScans()
             .noticeOverlay(model, bottomPadding: 40)
-            .inspector(isPresented: $showInspector) {
+            .inspector(isPresented: $model.showInspector) {
                 InspectorView()
                     .acceptsScans()
-                    .inspectorColumnWidth(min: 280, ideal: 340, max: 480)
+                    .inspectorColumnWidth(min: 280, ideal: inspectorWidth, max: 480)
+                    .onGeometryChange(for: Double.self) { $0.size.width } action: { width in
+                        // Only a width it is shown at: closing it can pass
+                        // through narrower ones.
+                        guard model.showInspector, (280...480).contains(width) else { return }
+                        inspectorWidth = width.rounded()
+                    }
             }
         }
         // For the Window menu and Mission Control, which tell windows apart
@@ -56,7 +65,11 @@ struct RootView: View {
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in
             model.appResignedActive()
         }
-        .onAppear { model.undoManager = undoManager }
+        .onAppear {
+            model.undoManager = undoManager
+            model.showInspector = showInspector
+        }
+        .onChange(of: model.showInspector) { _, shown in showInspector = shown }
         .onOpenURL { url in
             guard url.isFileURL else { return model.handleURL(url) }
             // Checked on disk: a URL handed over for a package need not end in
@@ -152,7 +165,7 @@ struct RootView: View {
             .disabled(model.library == nil)
 
             Button {
-                showInspector.toggle()
+                model.showInspector.toggle()
             } label: {
                 Label("Inspector", systemImage: "sidebar.trailing")
             }
@@ -223,7 +236,8 @@ private struct SearchSuggestions: View {
 
     var body: some View {
         if model.searchText.isEmpty {
-            ForEach(["is:review", "is:untagged", "is:duplicate", "is:stale-analysis", "is:unanalyzed", "ext:pdf",
+            ForEach(["is:review", "is:untagged", "is:duplicate", "is:stale-analysis", "is:unanalyzed", "is:unsummarized",
+                     "ext:pdf",
                      "date:\"this month\"", "date:\(thisYear)"], id: \.self) { token in
                 Text(token).searchCompletion(token)
             }

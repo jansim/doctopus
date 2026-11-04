@@ -51,6 +51,10 @@ struct SearchQuery: Sendable, Equatable {
          "m.source = 'heuristic' OR m.source IS NULL OR m.source NOT LIKE '%:v\(MetadataSource.promptVersion)'"),
         (["analyzed"], "m.analyzed_at IS NOT NULL"),
         (["unanalyzed", "not-analyzed"], "m.analyzed_at IS NULL"),
+        // The summary is what the inspector and review call a description.
+        (["unsummarized", "no-summary", "undescribed", "no-description"],
+         "m.summary IS NULL OR TRIM(m.summary) = ''"),
+        (["summarized", "described"], "TRIM(COALESCE(m.summary, '')) <> ''"),
         (["missing"], "d.missing=1"),
         (["trashed", "deleted"], "d.deleted_at IS NOT NULL"),
     ]

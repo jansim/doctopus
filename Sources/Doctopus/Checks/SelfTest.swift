@@ -161,6 +161,7 @@ enum SelfTest {
         }
         await filenameEnforcement(store: store)
         await analyzedFilter(store: store)
+        await summaryFilter(store: store)
 
         // Last: it trims the history, which the checks above read.
         await changeLog(store: store, indexer: indexer, root: root)
