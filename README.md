@@ -61,7 +61,11 @@ library — `--selftest` for the ingest pipeline, `--uitest` for the panes. Both
 run in CI on every push; [Testing](Technotes/Testing.md) has the commands.
 
 Pushing a tag such as `v1.1` builds the app with that version, runs the
-pipeline checks and publishes it as `Doctopus.zip` in a GitHub release.
+pipeline checks and publishes it as `Doctopus.zip` in a GitHub release. A
+release published in the GitHub UI, new or from a draft, is built the same way
+and gets `Doctopus.zip` uploaded in place, keeping its notes. GitHub starts no
+workflow for drafts, so to fill a draft, run the Release workflow by hand with
+its tag.
 
 ## Technotes
 
