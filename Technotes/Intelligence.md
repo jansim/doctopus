@@ -96,8 +96,8 @@ in plain text, a fenced reply, a chatty preamble and a thinking trace that
 drafts JSON of its own are all still read correctly.
 
 This backend does send document text to the endpoint you choose, which is why
-it is never the default. The API key is kept in the login keychain, and only
-among the preferences if the keychain refuses it.
+it is never the default. The API key is stored in Doctopus's own index rather
+than the Keychain.
 
 ## Vision models
 

@@ -77,7 +77,7 @@ folder travels with the folder.
 | Tags, fields, routing rules, ingest settings | Model backend and endpoint, OCR concurrency, raster quality, view mode |
 
 Keeping the second group out of the library is also what keeps an API key out
-of a folder somebody might share. The key itself is in the login keychain.
+of a folder somebody might share.
 
 Settings badges every section with its side of this split (`ScopeBadge`), and
 the library side is always the front window's.
