@@ -124,8 +124,9 @@ enum FileScanner {
         while true {
             // A read that fails is not the end of the file: the bytes so far
             // would hash to something no copy of this document ever presents.
-            guard let chunk = try? handle.read(upToCount: 1 << 20) else { return nil }
-            if chunk.isEmpty { break }
+            let chunk: Data?
+            do { chunk = try handle.read(upToCount: 1 << 20) } catch { return nil }
+            guard let chunk, !chunk.isEmpty else { break }
             hasher.update(data: chunk)
         }
         return hasher.finalize().map { String(format: "%02x", $0) }.joined()
