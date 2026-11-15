@@ -28,7 +28,7 @@ enum TextExtractor {
         switch url.pathExtension.lowercased() {
         case "pdf":
             result = try extractPDF(url)
-        case "png", "jpg", "jpeg", "heic", "tiff", "tif":
+        case "png", "jpg", "jpeg":
             result = try extractImage(url)
         default:
             result = ExtractedText(source: "unsupported")
@@ -84,13 +84,15 @@ enum TextExtractor {
         guard let page else { return nil }
         let box = page.getBoxRect(.cropBox)
         guard box.width > 1, box.height > 1 else { return nil }
+        // Vision reads a page lying on its side poorly, if at all.
+        let shown = page.shownSize(of: box)
 
         var scale = ocrDPI / 72.0
-        let longest = max(box.width, box.height) * scale
+        let longest = max(shown.width, shown.height) * scale
         if longest > maxPixelDimension { scale *= maxPixelDimension / longest }
 
-        let w = Int((box.width * scale).rounded())
-        let h = Int((box.height * scale).rounded())
+        let w = Int((shown.width * scale).rounded())
+        let h = Int((shown.height * scale).rounded())
         guard w > 0, h > 0 else { return nil }
 
         guard let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8,
@@ -99,7 +101,7 @@ enum TextExtractor {
         ctx.setFillColor(gray: 1, alpha: 1)
         ctx.fill(CGRect(x: 0, y: 0, width: w, height: h))
         ctx.scaleBy(x: scale, y: scale)
-        ctx.translateBy(x: -box.origin.x, y: -box.origin.y)
+        ctx.concatenate(page.uprightTransform(.cropBox, shown: shown))
         ctx.interpolationQuality = .high
         ctx.drawPDFPage(page)
         return ctx.makeImage()

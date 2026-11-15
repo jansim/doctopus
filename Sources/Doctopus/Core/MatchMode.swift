@@ -42,6 +42,27 @@ enum MatchMode: Int64, CaseIterable, Sendable, Codable {
 
 enum PatternMatcher {
 
+    /// A rule's pattern is matched against every document it is tried on, and
+    /// compiling it costs far more than running it.
+    private final class Compiled: @unchecked Sendable {
+        private let lock = NSLock()
+        private var known: [String: NSRegularExpression?] = [:]
+
+        func regex(_ pattern: String, _ options: NSRegularExpression.Options) -> NSRegularExpression? {
+            let key = "\(options.rawValue):\(pattern)"
+            return lock.withLock {
+                if let found = known[key] { return found }
+                // Patterns come and go as rules are edited; nobody has this many.
+                if known.count >= 256 { known.removeAll() }
+                let made = try? NSRegularExpression(pattern: pattern, options: options)
+                known.updateValue(made, forKey: key)
+                return made
+            }
+        }
+    }
+
+    private static let compiled = Compiled()
+
     static func matches(_ pattern: String, mode: MatchMode, insensitive: Bool,
                         in subject: String) -> Bool {
         let p = pattern.trimmingCharacters(in: .whitespaces)
@@ -59,7 +80,7 @@ enum PatternMatcher {
                 .firstMatch(in: subject, range: NSRange(location: 0, length: (subject as NSString).length)) != nil
         case .regex:
             let options: NSRegularExpression.Options = insensitive ? [.caseInsensitive] : []
-            guard let re = try? NSRegularExpression(pattern: p, options: options) else { return false }
+            guard let re = compiled.regex(p, options) else { return false }
             return re.firstMatch(in: subject,
                                  range: NSRange(location: 0, length: (subject as NSString).length)) != nil
         case .fuzzy:
@@ -114,7 +135,7 @@ enum PatternMatcher {
             .map { NSRegularExpression.escapedPattern(for: String($0)) }
         guard !parts.isEmpty else { return nil }
         let options: NSRegularExpression.Options = insensitive ? [.caseInsensitive] : []
-        return try? NSRegularExpression(pattern: parts.joined(separator: #"\s+"#), options: options)
+        return compiled.regex(parts.joined(separator: #"\s+"#), options)
     }
 
     /// Only ever run against a document's words, never its whole text: an edit

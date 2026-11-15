@@ -24,7 +24,7 @@ enum PageImage {
         switch url.pathExtension.lowercased() {
         case "pdf":
             return pdfFirstPage(url, maxDimension: maxDimension)
-        case "png", "jpg", "jpeg", "heic", "tiff", "tif":
+        case "png", "jpg", "jpeg":
             return imageFile(url, maxDimension: maxDimension)
         default:
             return nil
@@ -88,5 +88,22 @@ enum PageImage {
                                    [kCGImageDestinationLossyCompressionQuality: jpegQuality] as CFDictionary)
         guard CGImageDestinationFinalize(dest), data.length > 0 else { return nil }
         return data as Data
+    }
+}
+
+extension CGPDFPage {
+    /// The size `box` is displayed at: a page that declares a quarter turn is
+    /// shown on its side, and drawn without it comes out sideways.
+    func shownSize(of box: CGRect) -> CGSize {
+        let rotation = ((Int(rotationAngle) % 360) + 360) % 360
+        return rotation == 90 || rotation == 270
+            ? CGSize(width: box.height, height: box.width) : box.size
+    }
+
+    /// Maps `kind` onto a rectangle of its shown size at the origin, turned
+    /// the way the page says it is to be read.
+    func uprightTransform(_ kind: CGPDFBox, shown: CGSize) -> CGAffineTransform {
+        getDrawingTransform(kind, rect: CGRect(origin: .zero, size: shown),
+                            rotate: 0, preserveAspectRatio: true)
     }
 }

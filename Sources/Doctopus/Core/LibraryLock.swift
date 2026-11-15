@@ -55,6 +55,7 @@ final class LibraryLock: @unchecked Sendable {
     private let guardLock = NSLock()
     private var fd: Int32
     private var timer: DispatchSourceTimer?
+    private var onLost: (@Sendable (Owner) -> Void)?
 
     private init(url: URL, fd: Int32) {
         self.url = url
@@ -118,6 +119,13 @@ final class LibraryLock: @unchecked Sendable {
         }
     }
 
+    /// Called once, off the main thread, if another Mac is found to have taken
+    /// the library over — after this one slept past `staleAfter`, say. The lock
+    /// has let go by then, and nothing more may be written to the index.
+    func whenLost(_ handler: @escaping @Sendable (Owner) -> Void) {
+        guardLock.withLock { onLost = handler }
+    }
+
     /// Clears the owner record, so another Mac need not wait out `staleAfter`,
     /// and lets go. Safe to call more than once.
     func release() {
@@ -132,17 +140,34 @@ final class LibraryLock: @unchecked Sendable {
         }
     }
 
-    private func renew(now: Date = Date()) {
-        guardLock.withLock {
-            guard fd >= 0 else { return }
+    /// `now` is for the checks.
+    func renew(now: Date = Date()) {
+        let lost: (handler: (@Sendable (Owner) -> Void)?, to: Owner)? = guardLock.withLock {
+            guard fd >= 0 else { return nil }
+            // A Mac that slept through `staleAfter` wakes to find another's
+            // record here. Writing over it would put two writers on one index.
+            if let other = Self.read(fd), other.machine != Self.thisMachine,
+               now.timeIntervalSince(other.heartbeat) < Self.staleAfter {
+                timer?.cancel()
+                timer = nil
+                flock(fd, LOCK_UN)
+                close(fd)
+                fd = -1
+                return (onLost, other)
+            }
             let owner = Owner(machine: Self.thisMachine, name: Self.thisMachineName,
                               pid: getpid(), heartbeat: now)
-            guard let data = try? JSONEncoder().encode(owner) else { return }
+            guard let data = try? JSONEncoder().encode(owner) else { return nil }
             ftruncate(fd, 0)
             _ = data.withUnsafeBytes { pwrite(fd, $0.baseAddress, $0.count, 0) }
             fsync(fd)
+            return nil
         }
+        if let lost { lost.handler?(lost.to) }
     }
+
+    /// False once the lock has been released, or lost to another Mac.
+    var isHeld: Bool { guardLock.withLock { fd >= 0 } }
 
     private func startRenewing() {
         let timer = DispatchSource.makeTimerSource(queue: .global(qos: .utility))

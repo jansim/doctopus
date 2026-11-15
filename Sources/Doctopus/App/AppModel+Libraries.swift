@@ -78,7 +78,7 @@ extension AppModel {
             intelligence: intelligence,
             onProgress: { [weak self] p in Task { @MainActor in self?.progress = p } },
             onDataChanged: { [weak self] in Task { @MainActor in self?.refreshAll() } },
-            onProblem: { [weak self] text in Task { @MainActor in self?.errorMessage = text } })
+            onProblem: { [weak self] text in Task { @MainActor in self?.addProblem(text) } })
 
         if (try? await store.rules())?.isEmpty ?? true {
             for rule in Rule.starters { _ = try? await store.upsertRule(rule) }
@@ -88,6 +88,12 @@ extension AppModel {
 
         library = lib
         Preferences.noteRecentLibrary(lib.container)
+        store.lock?.whenLost { [weak self, weak lib] owner in
+            Task { @MainActor in
+                guard let self, let lib else { return }
+                self.libraryTakenOver(lib, by: owner)
+            }
+        }
         startWatching(lib)
         startBackups(lib)
         adoptSettings(of: lib)
@@ -260,8 +266,8 @@ extension AppModel {
         let name = lib.displayName
         detachLibrary(lib)
         if let found, !found.path.contains("/.Trash/"),
-           fm.fileExists(atPath: found.appendingPathComponent("library.doctopus").path) {
-            let outcome = await openLibrary(container: found.appendingPathComponent("library.doctopus"),
+           fm.fileExists(atPath: found.appendingPathComponent(lib.container.lastPathComponent).path) {
+            let outcome = await openLibrary(container: found.appendingPathComponent(lib.container.lastPathComponent),
                                             quietly: true)
             if outcome == .opened {
                 notify("\(name) moved to \(found.path); it was reopened there.", .info)
@@ -271,6 +277,28 @@ extension AppModel {
         errorMessage = "The folder of \(name) was moved, renamed, deleted or disconnected, "
             + "so the library was closed. Nothing in it was changed. Open it again from wherever it is now."
         Workspace.shared.persistOpenLibraries()
+    }
+
+    /// Another Mac took the library while this one was not renewing its lock.
+    /// Two writers would corrupt the index, so this one stops at once.
+    func libraryTakenOver(_ lib: Library, by owner: LibraryLock.Owner) {
+        guard library === lib else { return }
+        let name = lib.displayName
+        detachLibrary(lib)
+        errorMessage = "\(name) was opened in Doctopus on “\(owner.name)” while this Mac was asleep or offline, "
+            + "so it was closed here. Nothing in it was changed. Close it there before opening it here again."
+        Workspace.shared.persistOpenLibraries()
+    }
+
+    /// Problems arrive from the background one after another, and each is
+    /// shown where the last one was: joined, so the second does not unsay
+    /// the first before anyone has read it.
+    func addProblem(_ text: String) {
+        guard let showing = errorMessage, !showing.isEmpty else {
+            errorMessage = text
+            return
+        }
+        if !showing.contains(text) { errorMessage = showing + "\n\n" + text }
     }
 
     /// Closing the last window quits the app, and whatever it showed should

@@ -113,7 +113,10 @@ extension Store {
             // documents a rule would still change; they wait here too.
             var waiting = "d.id IN (SELECT doc_id FROM processing WHERE status=0)"
             if !ruleMatched.isEmpty {
-                waiting += " OR d.id IN (\(ruleMatched.sorted().map { String($0) }.joined(separator: ",")))"
+                // Bound as one JSON array: spelled into the SQL, every new
+                // set of documents would be a new statement, cached for good.
+                waiting += " OR d.id IN (SELECT value FROM json_each(?))"
+                args.append(.text("[" + ruleMatched.sorted().map { String($0) }.joined(separator: ",") + "]"))
             }
             wheres.append("(\(waiting))")
         case .outliers(let rule):
@@ -265,8 +268,9 @@ extension Store {
         \(joinQueue)
         WHERE \(wheres.joined(separator: " AND "))
         ORDER BY \(order)
-        LIMIT \(limit) OFFSET \(offset)
+        LIMIT ? OFFSET ?
         """
+        args.append(.int(limit)); args.append(.int(offset))
 
         var extras: [Int64: (amount: String?, intent: String?)] = [:]
         var rows = try db.map(sql, args) { r -> DocumentRow in
@@ -420,14 +424,27 @@ extension Store {
         return d
     }
 
-    func folderTree() throws -> [FolderNode] {
+    /// The walk of the folders on disk is done before the store is asked for
+    /// anything: on a slow volume it takes a while, and every other query
+    /// would wait behind it.
+    nonisolated func folderTree() async throws -> [FolderNode] {
+        let library = root
+        let onDisk = await withCheckedContinuation { (done: CheckedContinuation<[URL], Never>) in
+            DispatchQueue.global(qos: .userInitiated).async {
+                done.resume(returning: FileScanner.directories(root: library))
+            }
+        }
+        return try await folderTree(onDisk: onDisk)
+    }
+
+    private func folderTree(onDisk: [URL]) throws -> [FolderNode] {
         var counts: [String: Int] = [:]
         try db.query("SELECT directory, COUNT(*) FROM documents WHERE missing=0 AND deleted_at IS NULL GROUP BY directory") {
             counts[$0.string(0)] = Int($0.int(1))
         }
 
         var allDirs = Set(counts.keys)
-        for url in FileScanner.directories(root: root) {
+        for url in onDisk {
             allDirs.insert(relPath(url.path))
         }
 

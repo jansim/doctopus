@@ -720,6 +720,12 @@ private struct ResultsBar: View {
                         .buttonStyle(.borderless)
                         .font(.caption)
                 }
+                if !model.ignoredFilters.isEmpty {
+                    Label("Ignored \(model.ignoredFilters.joined(separator: " "))",
+                          systemImage: "questionmark.circle")
+                        .foregroundStyle(.orange)
+                        .help("These filters are not ones Doctopus knows, or their value could not be read, so they narrow nothing.")
+                }
                 Spacer()
                 if model.stats.pending > 0 {
                     Label("\(model.stats.pending) pending OCR", systemImage: "clock")

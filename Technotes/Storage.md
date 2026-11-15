@@ -53,7 +53,9 @@ index — a second copy of the app, or a second Mac on a shared or synced folder
 is exact between processes on one Mac, and writes into it which Mac holds it,
 renewed every minute, which is what reaches another Mac through Dropbox or
 iCloud. Another Mac's record counts until it has gone five minutes unrenewed,
-so a Mac that crashed or went to sleep gives the library up by itself.
+so a Mac that crashed or went to sleep gives the library up by itself. A Mac
+that wakes to find another's fresh record there closes the library rather than
+writing its own over it.
 Closing a library clears the record. The check suites and command-line modes
 open the index without it.
 
@@ -75,7 +77,7 @@ folder travels with the folder.
 | Tags, fields, routing rules, ingest settings | Model backend and endpoint, OCR concurrency, raster quality, view mode |
 
 Keeping the second group out of the library is also what keeps an API key out
-of a folder somebody might share.
+of a folder somebody might share. The key itself is in the login keychain.
 
 Settings badges every section with its side of this split (`ScopeBadge`), and
 the library side is always the front window's.

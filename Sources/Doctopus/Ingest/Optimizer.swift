@@ -51,6 +51,11 @@ enum Optimizer {
             if text.count < 24 { rasterPages.insert(i) }
         }
         guard !rasterPages.isEmpty else { return nil }
+        // Redrawing keeps what a page shows and nothing that sits on top of
+        // it: notes, form fields, links, signatures and the outline would all
+        // be gone from the rewrite, with nothing to say they ever were there.
+        let annotated = (0..<pageCount).contains { pdfkit?.page(at: $0)?.annotations.isEmpty == false }
+        guard !annotated, pdfkit?.outlineRoot == nil else { return nil }
 
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent("doctopus-opt-\(UUID().uuidString).pdf")
@@ -67,20 +72,26 @@ enum Optimizer {
         var rasterized = 0
         for index in 0..<pageCount {
             guard let page = cg.page(at: index + 1) else { continue }
-            var box = page.getBoxRect(.cropBox)
-            if box.width < 1 || box.height < 1 { box = page.getBoxRect(.mediaBox) }
-            var mediaBox = CGRect(origin: .zero, size: box.size)
+            var kind = CGPDFBox.cropBox
+            var box = page.getBoxRect(kind)
+            if box.width < 1 || box.height < 1 {
+                kind = .mediaBox
+                box = page.getBoxRect(kind)
+            }
+            // The new page has no rotation of its own, so it is laid out the
+            // way the old one was shown.
+            let shown = page.shownSize(of: box)
+            var mediaBox = CGRect(origin: .zero, size: shown)
 
             ctx.beginPage(mediaBox: &mediaBox)
             ctx.saveGState()
-            ctx.translateBy(x: -box.origin.x, y: -box.origin.y)
 
             if rasterPages.contains(index),
-               let compressed = compressedImage(of: page, box: box, options: options) {
-                ctx.translateBy(x: box.origin.x, y: box.origin.y)
-                ctx.draw(compressed, in: CGRect(origin: .zero, size: box.size))
+               let compressed = compressedImage(of: page, kind: kind, shown: shown, options: options) {
+                ctx.draw(compressed, in: CGRect(origin: .zero, size: shown))
                 rasterized += 1
             } else {
+                ctx.concatenate(page.uprightTransform(kind, shown: shown))
                 ctx.drawPDFPage(page)   // keeps text + vectors selectable
             }
 
@@ -101,11 +112,12 @@ enum Optimizer {
         return Result(originalSize: originalSize, newSize: newSize, pagesRasterized: rasterized)
     }
 
-    private static func compressedImage(of page: CGPDFPage, box: CGRect, options: Options) -> CGImage? {
+    private static func compressedImage(of page: CGPDFPage, kind: CGPDFBox, shown: CGSize,
+                                        options: Options) -> CGImage? {
         var scale = options.targetDPI / 72.0
-        let longest = max(box.width, box.height) * scale
+        let longest = max(shown.width, shown.height) * scale
         if longest > 5000 { scale *= 5000 / longest }
-        let w = Int((box.width * scale).rounded()), h = Int((box.height * scale).rounded())
+        let w = Int((shown.width * scale).rounded()), h = Int((shown.height * scale).rounded())
         guard w > 0, h > 0 else { return nil }
 
         let space = options.grayscale ? CGColorSpaceCreateDeviceGray() : CGColorSpaceCreateDeviceRGB()
@@ -117,7 +129,7 @@ enum Optimizer {
         ctx.setFillColor(gray: 1, alpha: 1)
         ctx.fill(CGRect(x: 0, y: 0, width: w, height: h))
         ctx.scaleBy(x: scale, y: scale)
-        ctx.translateBy(x: -box.origin.x, y: -box.origin.y)
+        ctx.concatenate(page.uprightTransform(kind, shown: shown))
         ctx.interpolationQuality = .high
         ctx.drawPDFPage(page)
         guard let raw = ctx.makeImage() else { return nil }

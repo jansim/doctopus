@@ -224,6 +224,11 @@ enum Naming {
         if out.count > 180 {
             out = String(out.prefix(180)).trimmingCharacters(in: CharacterSet(charactersIn: " _-."))
         }
+        // The limit on disk is 255 bytes, not characters, and some volumes
+        // store a name decomposed: 180 characters of Japanese are 540 bytes.
+        while out.decomposedStringWithCanonicalMapping.utf8.count > 220, !out.isEmpty {
+            out = String(out.dropLast()).trimmingCharacters(in: CharacterSet(charactersIn: " _-."))
+        }
         return ext.isEmpty ? out : "\(out).\(ext)"
     }
 
@@ -233,11 +238,22 @@ enum Naming {
             .filter { !$0.isEmpty && $0 != ctx.originalStem }
     }
 
+    /// Whether two paths name one file, as a name and its own respelling in
+    /// another case do on a case-insensitive volume.
+    static func isSameFile(_ a: URL, _ b: URL) -> Bool {
+        var x = stat(), y = stat()
+        guard lstat(a.path, &x) == 0, lstat(b.path, &y) == 0 else { return false }
+        return x.st_dev == y.st_dev && x.st_ino == y.st_ino
+    }
+
     /// `separator` goes between the stem and the number that tells a copy apart.
-    static func uniqueURL(in directory: URL, filename: String, separator: String = " ") -> URL {
+    /// `moving`: the file the name is for, which is no obstacle to itself.
+    static func uniqueURL(in directory: URL, filename: String, separator: String = " ",
+                          moving: URL? = nil) -> URL {
         let fm = FileManager.default
         var candidate = directory.appendingPathComponent(filename)
         guard fm.fileExists(atPath: candidate.path) else { return candidate }
+        if let moving, isSameFile(moving, candidate) { return candidate }
         let stem = candidate.deletingPathExtension().lastPathComponent
         let ext = candidate.pathExtension
         var n = 2

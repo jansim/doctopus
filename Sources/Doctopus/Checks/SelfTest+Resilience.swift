@@ -135,6 +135,18 @@ extension SelfTest {
         Check.that("a rescan of one folder marks nothing outside it missing", elsewhere == stillThere,
                    "\(elsewhere) → \(stillThere)")
 
+        // Trashing a folder in Finder is one event, for the folder, and none
+        // for anything in it.
+        let away = fm.temporaryDirectory.appendingPathComponent("doctopus-gone-\(UUID().uuidString)")
+        try? fm.moveItem(at: folder, to: away)
+        await indexer.handleChanges(paths: [folder.path])
+        Check.that("a folder that goes as a whole takes its documents with it",
+                   await isMissing(subject.doc, in: store) == true)
+        try? fm.moveItem(at: away, to: folder)
+        await indexer.handleChanges(paths: [folder.path])
+        Check.that("…and brings them back when it returns",
+                   await isMissing(subject.doc, in: store) == false)
+
         _ = await indexer.move(ids: [subject.doc], to: subject.url.deletingLastPathComponent())
         try? fm.removeItem(at: folder)
 
@@ -202,7 +214,16 @@ extension SelfTest {
         elsewhere(LibraryLock.staleAfter + 60)
         let takenOver = try? LibraryLock.acquire(in: container)
         Check.that("…but one it stopped renewing is taken over", takenOver != nil)
+        // This Mac slept, the other one took the library, and this one wakes.
+        elsewhere(30)
+        takenOver?.renew()
+        Check.that("a holder that wakes to another Mac's record lets go rather than writing over it",
+                   takenOver?.isHeld == false
+                       && LibraryLock.owner(in: container)?.machine == "another-mac")
         takenOver?.release()
+        Check.that("…and letting go leaves that record alone",
+                   LibraryLock.owner(in: container)?.machine == "another-mac")
+        elsewhere(LibraryLock.staleAfter + 60)
 
         let store = try? Store(directory: container, lock: try? LibraryLock.acquire(in: container))
         var storeRefusal: LibraryLock.Refusal?

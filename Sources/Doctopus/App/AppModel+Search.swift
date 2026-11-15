@@ -56,6 +56,12 @@ enum URLSchemeHandler: Sendable {
 
 extension AppModel {
 
+    /// What the search field holds that reads as a filter and filters nothing.
+    var ignoredFilters: [String] {
+        SearchQuery(searchText, fieldKeys: Set(fields.map(\.key))).ignored
+    }
+
+
     func globalSearch(text: String, limit: Int = 20) -> [GlobalSearchResult] {
         guard !text.trimmingCharacters(in: .whitespaces).isEmpty else { return [] }
         let query = text.lowercased()

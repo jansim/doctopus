@@ -27,6 +27,14 @@ actor Indexer {
     // Indexer+Pipeline
     var languageCache: String??
     var entityRuleCache: [Entity]?
+    /// Documents a pipeline is reading right now, and the run each one still
+    /// owes to a request that arrived meanwhile.
+    var inFlight: Set<Int64> = []
+    var owed: [Int64: PipelineRequest] = [:]
+
+    /// The library's folder with its symbolic links followed, where that is
+    /// somewhere else: FSEvents names every file by its real path.
+    private let realRoot: String?
 
     init(store: Store, intelligence: Intelligence, settings: AppSettings,
          onProgress: @escaping @Sendable (IndexProgress) -> Void,
@@ -38,6 +46,27 @@ actor Indexer {
         self.onProgress = onProgress
         self.onDataChanged = onDataChanged
         self.onProblem = onProblem
+        let real = FileScanner.realPath(store.root.path)
+        self.realRoot = real == store.root.path ? nil : real
+    }
+
+    /// Reading, hashing and OCR block for as long as they take. Run here they
+    /// would hold the actor, and with it every other document in the batch.
+    static func offActor<T: Sendable>(_ work: @escaping @Sendable () -> T) async -> T {
+        await withCheckedContinuation { done in
+            DispatchQueue.global(qos: .utility).async { done.resume(returning: work()) }
+        }
+    }
+
+    static func hash(_ url: URL) async -> String? {
+        await offActor { FileScanner.hash(url) }
+    }
+
+    private func libraryPath(_ path: String) -> String {
+        guard let realRoot else { return path }
+        if path == realRoot { return store.root.path }
+        guard path.hasPrefix(realRoot + "/") else { return path }
+        return store.root.path + path.dropFirst(realRoot.count)
     }
 
     func update(settings: AppSettings) async {
@@ -63,7 +92,8 @@ actor Indexer {
         // An index that cannot say how much it holds cannot say which that is.
         let firstPass: Bool
         let upserted: [(id: Int64, path: String, isNew: Bool, changed: Bool)]
-        var scan = FileScanner.scan(root: store.root)
+        let root = store.root
+        var scan = await Self.offActor { FileScanner.scan(root: root) }
         let found = scan.found.map { Self.facts($0) }
         do {
             firstPass = try await store.documentCount() == 0
@@ -121,7 +151,7 @@ actor Indexer {
         var touched = false
 
         for directory in rescanning {
-            let path = Store.canonical(directory)
+            let path = Store.canonical(libraryPath(directory))
             guard path == store.root.path || path.hasPrefix(rootPrefix),
                   !FileScanner.isInsideLibraryContainer(URL(fileURLWithPath: path)) else { continue }
             // A root that is gone is the library leaving, not its documents.
@@ -130,7 +160,7 @@ actor Indexer {
             touched = true
         }
 
-        for path in paths {
+        for path in paths.map(libraryPath) {
             guard path == store.root.path || path.hasPrefix(rootPrefix) else { continue }
             if FileScanner.isInsideLibraryContainer(URL(fileURLWithPath: path)) { continue }
 
@@ -144,13 +174,23 @@ actor Indexer {
             }
 
             let url = URL(fileURLWithPath: path)
-            guard FileScanner.supportedExtensions.contains(url.pathExtension.lowercased()) else { continue }
+            let isDocument = FileScanner.supportedExtensions.contains(url.pathExtension.lowercased())
 
             if !exists {
-                try? await store.markMissing(path: path)
-                touched = true
+                if isDocument {
+                    try? await store.markMissing(path: path)
+                    touched = true
+                }
+                // A folder moved out or trashed is one event, for the folder:
+                // nothing is said about the documents that went with it. A
+                // root that is gone is the library leaving, not its documents.
+                if fm.fileExists(atPath: store.root.path),
+                   let gone = try? await store.markMissing(under: path), gone > 0 {
+                    touched = true
+                }
                 continue
             }
+            guard isDocument else { continue }
 
             guard let v = try? url.resourceValues(forKeys: Set(Self.factKeys + [.isAliasFileKey])),
                   v.isAliasFile != true else { continue }
@@ -158,7 +198,7 @@ actor Indexer {
 
             // After a file-ID relink the upsert still runs, to catch an edit made on the way.
             if (try? await store.relinkByFileID(facts)) == nil,
-               let hash = FileScanner.hash(url),
+               let hash = await Self.hash(url),
                (try? await store.relinkByHash(hash: hash, newPath: path)) != nil {
                 touched = true
                 continue
@@ -282,8 +322,8 @@ actor Indexer {
 
     static func facts(path: String, _ v: URLResourceValues) -> Store.FileFacts {
         Store.FileFacts(path: path, size: Int64(v.fileSize ?? 0),
-                        mtime: v.contentModificationDate ?? Date(),
-                        created: v.creationDate ?? Date(),
+                        mtime: v.contentModificationDate ?? .distantPast,
+                        created: v.creationDate ?? v.contentModificationDate ?? Date(),
                         fileID: FileScanner.fileID(v))
     }
 

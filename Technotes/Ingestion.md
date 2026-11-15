@@ -211,6 +211,11 @@ original is kept byte-for-byte. Nothing is optimized until a copy of the
 original is safely kept beside the index; when it cannot be, the file is left
 as it is and Doctopus says why.
 
+A PDF with annotations, form fields, links, signatures or an outline is not
+optimized by the built-in rewrite either: redrawing its pages would leave all
+of those behind. A page that declares a rotation is redrawn the way it is
+shown.
+
 An encrypted PDF is never optimized. One that needs a password to open would
 draw its pages blank, and one that only restricts would lose its
 restrictions in the rewrite.

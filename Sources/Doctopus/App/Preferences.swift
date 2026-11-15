@@ -12,23 +12,58 @@ enum Preferences {
         static let libraryFolderName = "libraryFolderName"
         static let appWide = "appSettings_v1"
         static let unreadableAppWide = "appSettings_v1.unreadable"
+        static let apiKeyAccount = "remote-llm-api-key"
     }
 
     /// Settings that do not decode are copied aside before anything can save
     /// defaults over them, and read as defaults until then.
     static var appWide: AppWideSettings {
         get {
-            guard let raw = defaults.string(forKey: Key.appWide) else { return AppWideSettings() }
-            if let settings = AppWideSettings.decodedIfReadable(from: Data(raw.utf8)) { return settings }
+            guard let raw = defaults.string(forKey: Key.appWide) else { return withAPIKey(AppWideSettings()) }
+            if let settings = AppWideSettings.decodedIfReadable(from: Data(raw.utf8)) {
+                // Written by a build that kept the key among the preferences:
+                // saved straight back, which moves it to the keychain.
+                if usesKeychain, !settings.remoteAPIKey.isEmpty {
+                    appWide = settings
+                    return settings
+                }
+                return withAPIKey(settings)
+            }
             defaults.set(raw, forKey: Key.unreadableAppWide)
             appWideUnreadable = true
-            return AppWideSettings()
+            return withAPIKey(AppWideSettings())
         }
         set {
+            var newValue = newValue
+            if usesKeychain {
+                let key = newValue.remoteAPIKey
+                // Left among the preferences only if the keychain will not
+                // take it: a key kept in the wrong place beats a key lost.
+                if key == storedAPIKey || Keychain.write(key, Key.apiKeyAccount) {
+                    storedAPIKey = key
+                    newValue.remoteAPIKey = ""
+                }
+            }
             guard let data = try? JSONEncoder().encode(newValue),
                   let raw = String(data: data, encoding: .utf8) else { return }
             defaults.set(raw, forKey: Key.appWide)
         }
+    }
+
+    /// The headless checks keep to their throwaway suite, and out of the
+    /// keychain of whoever runs them.
+    private static var usesKeychain: Bool { defaults == .standard }
+
+    /// The key as the keychain last had it, so that saving the settings does
+    /// not ask the keychain again for every other setting that changes.
+    private static var storedAPIKey: String?
+
+    private static func withAPIKey(_ settings: AppWideSettings) -> AppWideSettings {
+        guard usesKeychain else { return settings }
+        if storedAPIKey == nil { storedAPIKey = Keychain.read(Key.apiKeyAccount) ?? "" }
+        var settings = settings
+        settings.remoteAPIKey = storedAPIKey ?? ""
+        return settings
     }
 
     static var libraryBookmarks: [Data] {
