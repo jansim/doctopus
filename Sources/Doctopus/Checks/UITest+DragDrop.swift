@@ -186,7 +186,11 @@ extension UITest {
         let undo = UndoManager()
         model.undoManager = undo
         model.selection = .all
-        guard let row = model.documents.first(where: { !$0.isAliasHere }),
+        // The list may not have caught up with the drags before this, which
+        // moved files: a row whose file is gone has nothing to move.
+        guard let row = model.documents.first(where: {
+                  !$0.isAliasHere && !$0.missing && FileManager.default.fileExists(atPath: $0.path)
+              }),
               let library = model.library else { return }
         let folder = library.root.appendingPathComponent("Undo Check", isDirectory: true)
         model.move([row], to: folder)

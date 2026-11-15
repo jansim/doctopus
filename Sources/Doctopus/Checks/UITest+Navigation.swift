@@ -43,7 +43,15 @@ extension UITest {
         let window = libraryWindow(model)
         defer { window.orderOut(nil) }
         model.selection = .folder(row.directory)
-        _ = await settle { model.documents.contains { $0.id == row.id } }
+        // Until the folder's own list arrives, the one showing is All
+        // Documents', which holds the row too; only a folder's list marks
+        // what is merely aliased there.
+        func folderListed() -> Bool {
+            model.documents.contains { $0.id == row.id }
+                && model.documents.allSatisfy { $0.directory == row.directory
+                    || $0.directory.hasPrefix(row.directory + "/") || $0.isAliasHere }
+        }
+        _ = await settle(folderListed)
         let listed = model.documents.count
         model.searchText = "nothing-matches-\(UUID().uuidString.prefix(8))"
         let emptied = await settle { model.documents.isEmpty }
@@ -55,7 +63,7 @@ extension UITest {
                    emptied && model.canClearFilter, "\(model.documents.count) listed")
 
         model.clearFilter()
-        let back = await settle { model.searchText.isEmpty && model.documents.count == listed }
+        let back = await settle { model.searchText.isEmpty && folderListed() && model.documents.count == listed }
         Check.that("clearing it lists the folder again, still in that folder",
                    back && model.selection == .folder(row.directory),
                    "\(model.documents.count) of \(listed), selection \(model.selection)")
