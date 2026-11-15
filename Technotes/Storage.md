@@ -53,7 +53,9 @@ index — a second copy of the app, or a second Mac on a shared or synced folder
 is exact between processes on one Mac, and writes into it which Mac holds it,
 renewed every minute, which is what reaches another Mac through Dropbox or
 iCloud. Another Mac's record counts until it has gone five minutes unrenewed,
-so a Mac that crashed or went to sleep gives the library up by itself.
+so a Mac that crashed or went to sleep gives the library up by itself. A Mac
+that wakes to find another's fresh record there closes the library rather than
+writing its own over it.
 Closing a library clears the record. The check suites and command-line modes
 open the index without it.
 

@@ -77,6 +77,12 @@ extension SelfTest {
             Check.that("“\(partial)” is still a query the list can run", hits != nil,
                        SearchQuery(partial).ftsExpression ?? "no expression")
         }
+        let typo = SearchQuery("is:nonsense date:someday rechnung")
+        Check.that("a filter that means nothing is kept to be said, not quietly dropped",
+                   typo.ignored == ["is:nonsense", "date:someday"] && typo.terms == ["rechnung"],
+                   typo.ignored.joined(separator: " "))
+        Check.that("…and one that means something is not",
+                   SearchQuery("is:review -is:duplicate date:2025 before:2026-03").ignored.isEmpty)
     }
 
     /// Advanced Search takes the field's query apart into rows and writes it

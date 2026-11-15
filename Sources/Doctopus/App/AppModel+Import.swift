@@ -20,7 +20,9 @@ extension AppModel {
 
     /// With no `destination`, files go to the Inbox and are auto-routed: the only
     /// case where Doctopus moves a file on its own, and only one it just brought in.
-    func importFiles(_ urls: [URL], into destination: URL?, movingSource: Bool = false) {
+    /// `scratch`: a folder the files were staged in, removed once it is empty.
+    func importFiles(_ urls: [URL], into destination: URL?, movingSource: Bool = false,
+                     scratch: URL? = nil) {
         let chosen = destination ?? explicitImportDirectory
         guard let dest = chosen ?? defaultImportDirectory else {
             errorMessage = "Open a library before importing."
@@ -37,6 +39,11 @@ extension AppModel {
         Task {
             let batch = await lib.indexer.receiveFiles(urls, into: dest, movingSource: movingSource,
                                                        route: chosen == nil)
+            // Only once everything in it has moved out: a scan that could not
+            // be filed is the only copy there is, and stays where it is.
+            if let scratch, (try? FileManager.default.contentsOfDirectory(atPath: scratch.path))?.isEmpty == true {
+                try? FileManager.default.removeItem(at: scratch)
+            }
             if batch.summary.imported > 0 {
                 let n = batch.summary.imported
                 notify("Received \(n) document\(n == 1 ? "" : "s") — processing in the background.", .info)
@@ -90,7 +97,11 @@ extension AppModel {
             let url = tmp.appendingPathComponent(name)
             if (try? item.data.write(to: url)) != nil { urls.append(url) }
         }
-        if !urls.isEmpty { importFiles(urls, into: destination, movingSource: true) }
+        if urls.isEmpty {
+            try? FileManager.default.removeItem(at: tmp)
+        } else {
+            importFiles(urls, into: destination, movingSource: true, scratch: tmp)
+        }
 
         let lost = delivery.offered - urls.count
         guard lost > 0 else { return }

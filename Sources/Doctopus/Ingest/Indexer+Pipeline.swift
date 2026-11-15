@@ -1,11 +1,51 @@
 import Foundation
 
 extension Indexer {
-    /// Nothing here writes to a file the user already had: only a fresh import is
-    /// optimized, and only an import nobody gave a destination is moved.
+    struct PipelineRequest: Sendable {
+        var path: String
+        var isImport: Bool
+        var route: Bool
+        var scanned: Bool
+        var isNew: Bool
+
+        /// Two requests for one document that both still wait are one run,
+        /// which does whatever either asked for.
+        func merged(with other: PipelineRequest) -> PipelineRequest {
+            PipelineRequest(path: other.path, isImport: isImport || other.isImport,
+                            route: route || other.route, scanned: scanned || other.scanned,
+                            isNew: isNew || other.isNew)
+        }
+    }
+
+    /// One document is read by one pipeline at a time. The watcher hears of a
+    /// file the moment an import copies it in, and two runs over the same row
+    /// would each store half of what they found; the later request waits and
+    /// runs once the first is through.
     @discardableResult
     func pipeline(id: Int64, path: String, isImport: Bool, route: Bool,
                   scanned: Bool, isNew: Bool) async -> String? {
+        var request = PipelineRequest(path: path, isImport: isImport, route: route,
+                                      scanned: scanned, isNew: isNew)
+        guard inFlight.insert(id).inserted else {
+            owed[id] = owed[id]?.merged(with: request) ?? request
+            return URL(fileURLWithPath: path).lastPathComponent
+        }
+        defer { inFlight.remove(id) }
+        var name: String?
+        while true {
+            name = await run(request, for: id)
+            guard !cancelled, let next = owed.removeValue(forKey: id) else { break }
+            request = next
+        }
+        owed[id] = nil
+        return name
+    }
+
+    /// Nothing here writes to a file the user already had: only a fresh import is
+    /// optimized, and only an import nobody gave a destination is moved.
+    private func run(_ request: PipelineRequest, for id: Int64) async -> String? {
+        let (path, isImport, route, scanned, isNew) =
+            (request.path, request.isImport, request.route, request.scanned, request.isNew)
         // The row says where the file is now: a received document is listed
         // before it is processed, and may have been moved or renamed meanwhile.
         var url = URL(fileURLWithPath: (try? await store.documentPath(id)) ?? path)
@@ -18,7 +58,8 @@ extension Indexer {
         // Hashed before anything rewrites it, so the pre-optimization bytes are
         // on record: that is the hash an identical original would present on a
         // later import.
-        if let hash = FileScanner.hash(url) { try? await store.setHash(id, hash, isOriginal: true) }
+        let arrived = url
+        if let hash = await Self.hash(arrived) { try? await store.setHash(id, hash, isOriginal: true) }
 
         try? await store.indexFinderTags(docID: id, entries: FinderTags.entries(url))
 
@@ -37,7 +78,10 @@ extension Indexer {
 
         let extracted: ExtractedText
         do {
-            extracted = try TextExtractor.extract(url: url)
+            // After optimizing, which may have rewritten it: the text
+            // indexed is the text of the bytes that are kept.
+            let stored = url
+            extracted = try await Self.offActor { Result { try TextExtractor.extract(url: stored) } }.get()
             if extracted.source == "unreadable" { problems.append("the file could not be opened to read its text") }
             if extracted.source == TextSource.locked {
                 problems.append("it is password-protected, so its text could not be read")
@@ -58,9 +102,12 @@ extension Indexer {
 
         let known = (try? await store.facets(column: "correspondent"))?.map(\.value) ?? []
         let created = (try? url.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? Date()
-        var findings = DocumentAnalyzer.analyze(url: url, text: extracted.text,
-                                                fallbackDate: created, knownCorrespondents: known,
-                                                options: await analyzerOptions())
+        let options = await analyzerOptions()
+        let (read, text) = (url, extracted.text)
+        var findings = await Self.offActor {
+            DocumentAnalyzer.analyze(url: read, text: text, fallbackDate: created,
+                                     knownCorrespondents: known, options: options)
+        }
         // Offered even where the date was chosen already: the review shows them
         // as alternatives, and only someone picking one changes the date.
         try? await store.setDateCandidates(findings.dates, for: id)

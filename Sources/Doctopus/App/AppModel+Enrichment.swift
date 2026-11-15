@@ -242,7 +242,9 @@ extension AppModel {
                     gone.append(row.filename)
                     continue
                 }
-                let destination = URL(fileURLWithPath: row.path)
+                // Not `row.path`: a trashed document gives its path up to a
+                // newer file that turns up there.
+                let destination = URL(fileURLWithPath: row.directory).appendingPathComponent(row.filename)
                 do {
                     try FileManager.default.createDirectory(
                         at: destination.deletingLastPathComponent(),

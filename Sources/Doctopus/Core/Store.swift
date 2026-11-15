@@ -155,6 +155,7 @@ actor Store {
         let name = url.lastPathComponent
         let ext = url.pathExtension.lowercased()
 
+        try vacate(relative)
         let existing = try db.first(
             "SELECT id, size, mtime, ocr_state, filename FROM documents WHERE path=?", [.text(relative)]
         ) { ($0.int(0), $0.int(1), $0.double(2), $0.int(3), $0.string(4)) }
@@ -194,6 +195,19 @@ actor Store {
                 return (result.id, f.path, result.isNew, result.changed)
             }
         }
+    }
+
+    static let trashedPathMarker = "/.trashed-"
+
+    /// A document in the Trash keeps the path it was deleted from, and paths
+    /// are unique: left there, it would be taken for whatever file turns up at
+    /// that path next. It steps aside instead, keeping `directory` and
+    /// `filename`, which are what say where it goes back to.
+    func vacate(_ relative: String, for docID: Int64? = nil) throws {
+        try db.run("""
+            UPDATE documents SET path = path || ? || id
+            WHERE path = ? AND deleted_at IS NOT NULL AND id <> COALESCE(?, -1)
+            """, [.text(Store.trashedPathMarker), .text(relative), .int(docID)])
     }
 
     private func logOrigin(docID: Int64, _ origin: DocumentOrigin, path: String) throws {
@@ -241,6 +255,7 @@ actor Store {
         let rows = try db.map("SELECT id, path FROM documents WHERE file_id=? AND deleted_at IS NULL",
                               [.int(fileID)]) { ($0.int(0), $0.string(1)) }
         guard !rows.isEmpty, !rows.contains(where: { $0.1 == relative }) else { return nil }
+        try vacate(relative)
         let taken = try db.first("SELECT id FROM documents WHERE path=?", [.text(relative)]) { $0.int(0) }
         guard taken == nil else { return nil }
 
@@ -259,19 +274,29 @@ actor Store {
             "SELECT id FROM documents WHERE hash=? AND missing=1 AND deleted_at IS NULL LIMIT 1", [.text(hash)],
             { $0.int(0) })
         guard let id = match else { return nil }
-        let url = URL(fileURLWithPath: newPath)
-        try db.run("""
-            UPDATE documents SET path=?, directory=?, filename=?, missing=0, missing_since=NULL
-            WHERE id=?
-            """, [.text(relPath(newPath)), .text(relPath(url.deletingLastPathComponent().path)),
-                  .text(url.lastPathComponent), .int(id)])
-        try refreshSearchIndex(id)
+        try updatePath(id, to: newPath)
         return id
     }
 
     func markMissing(path: String) throws {
         try db.run("UPDATE documents SET missing=1, missing_since=COALESCE(missing_since,?) WHERE path=?",
                    [.double(Date().timeIntervalSince1970), .text(relPath(path))])
+    }
+
+    /// For a folder that went as a whole, which FSEvents reports once, for the
+    /// folder, and never for the documents in it.
+    @discardableResult
+    func markMissing(under directory: String) throws -> Int {
+        let relative = relPath(directory)
+        guard !relative.isEmpty, !relative.hasPrefix("/") else { return 0 }
+        // A range rather than a LIKE, so the index on `path` answers it: this
+        // runs for every path that vanishes, and deleting a big folder of
+        // other files is thousands of those. "0" is what follows "/".
+        try db.run("""
+            UPDATE documents SET missing=1, missing_since=COALESCE(missing_since,?)
+            WHERE path >= ? AND path < ? AND missing=0 AND deleted_at IS NULL
+            """, [.double(Date().timeIntervalSince1970), .text(relative + "/"), .text(relative + "0")])
+        return Int(db.changes)
     }
 
     func documentCount() throws -> Int {
@@ -316,7 +341,9 @@ actor Store {
         }
     }
 
-    func documentIDsNeedingOCR(limit: Int = 5000) throws -> [(id: Int64, path: String, ext: String)] {
+    /// Every one by default: a cap here leaves the rest unread until some
+    /// later scan happens to reach them.
+    func documentIDsNeedingOCR(limit: Int = -1) throws -> [(id: Int64, path: String, ext: String)] {
         try db.map("""
             SELECT id, path, ext FROM documents
             WHERE ocr_state=0 AND missing=0 AND deleted_at IS NULL ORDER BY created_at DESC LIMIT ?
@@ -516,6 +543,7 @@ actor Store {
 
     func updatePath(_ docID: Int64, to newPath: String) throws {
         let url = URL(fileURLWithPath: newPath)
+        try vacate(relPath(newPath), for: docID)
         try db.run("""
             UPDATE documents SET path=?, directory=?, filename=?, ext=?, missing=0, missing_since=NULL WHERE id=?
             """, [.text(relPath(newPath)), .text(relPath(url.deletingLastPathComponent().path)),

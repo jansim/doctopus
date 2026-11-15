@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 extension Indexer {
     /// Forgets the placement aliases that are no longer on disk. Only the
@@ -177,6 +178,7 @@ extension Indexer {
         case originalUnreadable
         case originalNotKept(String)
         case unrecorded(String)
+        case failed(String)
 
         var errorDescription: String? {
             switch self {
@@ -186,6 +188,8 @@ extension Indexer {
                 return "its original could not be kept (\(reason)), so it was left as it is"
             case .unrecorded(let reason):
                 return "it was optimized, but the index could not record where its original is kept (\(reason)), so it cannot be reverted"
+            case .failed(let reason):
+                return "it could not be optimized (\(reason)), so it was left as it is"
             }
         }
     }
@@ -194,22 +198,19 @@ extension Indexer {
     /// when its original cannot be kept: without it the change could never
     /// be taken back.
     func optimizeFile(id: Int64, url: URL) async throws -> Optimizer.Result? {
-        guard let preHash = FileScanner.hash(url) else { throw OptimizeError.originalUnreadable }
+        guard let preHash = await Self.hash(url) else { throw OptimizeError.originalUnreadable }
         // False when an identical original is already kept, which will do.
         let savedOriginal: String?
         do {
             savedOriginal = try await store.saveOriginalFile(for: id, from: url, hash: preHash) ? preHash : nil
         } catch { throw OptimizeError.originalNotKept(error.localizedDescription) }
-        // On a thread of its own, which may block: an external compressor can
-        // take minutes, and the indexer must keep serving everything else.
+        // An external compressor can take minutes.
         let options = settings.optimizerOptions
-        let optimized = await withCheckedContinuation { (done: CheckedContinuation<Optimizer.Result?, Never>) in
-            DispatchQueue.global(qos: .utility).async {
-                done.resume(returning: try? Optimizer.optimize(url: url, options: options))
-            }
-        }
-        guard let result = optimized else {
+        let optimized = await Self.offActor { Result { try Optimizer.optimize(url: url, options: options) } }
+        guard case .success(let result?) = optimized else {
             if let savedOriginal { await store.discardOriginalFile(hash: savedOriginal, ext: url.pathExtension) }
+            // Failing is not the same as having nothing to gain, and is said.
+            if case .failure(let error) = optimized { throw OptimizeError.failed(error.localizedDescription) }
             return nil
         }
         // `original_size` is what finds the kept original again, so a revert
@@ -222,7 +223,7 @@ extension Indexer {
                            result.savings * 100, result.pagesRasterized,
                            result.pagesRasterized == 1 ? "" : "s"),
             rule: nil, from: nil, to: nil, approved: true)
-        if let hash = FileScanner.hash(url) { try? await store.setHash(id, hash) }
+        if let hash = await Self.hash(url) { try? await store.setHash(id, hash) }
         return result
     }
 
@@ -266,8 +267,17 @@ extension Indexer {
                   approved: Bool = true) async throws -> URL {
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let target = Naming.uniqueURL(in: folder, filename: name,
-                                      separator: settings.filenameUnderscoresForSpaces ? "_" : " ")
-        try FileManager.default.moveItem(at: url, to: target)
+                                      separator: settings.filenameUnderscoresForSpaces ? "_" : " ",
+                                      moving: url)
+        if Naming.isSameFile(url, target) {
+            // Only its case changes. `moveItem` refuses a destination that
+            // exists, which on a case-insensitive volume this one does.
+            guard Darwin.rename(url.path, target.path) == 0 else {
+                throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+            }
+        } else {
+            try FileManager.default.moveItem(at: url, to: target)
+        }
         do {
             try await store.updatePath(id, to: target.path)
         } catch {

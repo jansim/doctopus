@@ -59,7 +59,7 @@ extension Indexer {
                 if r.isNew { fresh.insert(r.id) }
                 continue
             }
-            let sourceHash = FileScanner.hash(url)
+            let sourceHash = await Self.hash(url)
             if let sourceHash,
                (try? await store.findDuplicate(hash: sourceHash)) != nil {
                 summary.duplicates += 1

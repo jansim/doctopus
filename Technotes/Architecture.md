@@ -61,7 +61,8 @@ system's own ID for the file, so a file moved while Doctopus was closed, or
 edited on the way, is still recognised. The watcher falls back to the SHA-256,
 for volumes whose IDs do not persist and moves that got the file a new one.
 Rows stay claimable for thirty days, and a row whose file is in the Trash is
-never forgotten at all.
+never forgotten at all. A trashed row gives its path up to a new file that
+turns up there, and keeps the folder and name it goes back to.
 
 Not seeing a file is only evidence it is gone when the scan could look. A
 folder the scan cannot read — no permission, a privacy prompt declined, a share

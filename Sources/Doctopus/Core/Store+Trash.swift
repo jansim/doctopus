@@ -62,6 +62,14 @@ extension Store {
     func restore(_ docID: Int64, at path: String? = nil) throws {
         if let path {
             try updatePath(docID, to: path)
+        } else {
+            // Stepped aside for a newer file at its path: it takes the path
+            // back only if that is free again.
+            try db.run("""
+                UPDATE OR IGNORE documents
+                SET path = CASE WHEN directory = '' THEN filename ELSE directory || '/' || filename END
+                WHERE id = ? AND instr(path, ?) > 0
+                """, [.int(docID), .text(Store.trashedPathMarker)])
         }
         try db.run("""
             UPDATE documents SET deleted_at=NULL, deleted_path=NULL, missing=0, missing_since=NULL

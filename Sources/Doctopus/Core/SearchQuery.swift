@@ -16,6 +16,10 @@ struct SearchQuery: Sendable, Equatable {
     var fieldFilters: [FieldFilter] = []
     var negatedFieldFilters: [FieldFilter] = []
     var dateFilters: [DateFilter] = []
+    /// Filters as typed that mean nothing — a flag nobody defined, a date that
+    /// does not read — and so narrow nothing. Kept to be said, since a list
+    /// that ignores one looks exactly like a list it matched everything in.
+    var ignored: [String] = []
 
     struct FieldFilter: Sendable, Equatable, Hashable {
         var key: String
@@ -105,27 +109,28 @@ struct SearchQuery: Sendable, Equatable {
                 if isNegated { negatedExts.append(v) } else { exts.append(v) }
             case "is":
                 let f = value.lowercased()
-                if isNegated { negatedFlags.insert(f) } else { flags.insert(f) }
+                if SearchQuery.flagPredicate(f) == nil { ignored.append(token) }
+                else if isNegated { negatedFlags.insert(f) } else { flags.insert(f) }
             case "date", "docdate", "doc_date":
                 if let range = SearchDateParser.parse(value) {
                     dateFilters.append(DateFilter(column: "COALESCE(m.doc_date, d.created_at)", start: range.start, end: range.end, negated: isNegated))
-                }
+                } else { ignored.append(token) }
             case "created", "added":
                 if let range = SearchDateParser.parse(value) {
                     dateFilters.append(DateFilter(column: "d.created_at", start: range.start, end: range.end, negated: isNegated))
-                }
+                } else { ignored.append(token) }
             case "analyzed":
                 if let range = SearchDateParser.parse(value) {
                     dateFilters.append(DateFilter(column: "m.analyzed_at", start: range.start, end: range.end, negated: isNegated))
-                }
+                } else { ignored.append(token) }
             case "before":
                 if let range = SearchDateParser.parse(value), let cutoff = range.start ?? range.end {
                     dateFilters.append(DateFilter(column: "COALESCE(m.doc_date, d.created_at)", start: nil, end: cutoff.addingTimeInterval(-1), negated: isNegated))
-                }
+                } else { ignored.append(token) }
             case "after":
                 if let range = SearchDateParser.parse(value), let cutoff = range.end ?? range.start {
                     dateFilters.append(DateFilter(column: "COALESCE(m.doc_date, d.created_at)", start: cutoff.addingTimeInterval(1), end: nil, negated: isNegated))
-                }
+                } else { ignored.append(token) }
             default:
                 let key = SearchQuery.aliases[prefix] ?? prefix
                 if fieldKeys.contains(key) || SearchQuery.aliases[prefix] != nil {

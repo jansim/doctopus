@@ -92,6 +92,20 @@ extension SelfTest {
             Check.that("…but its row, and everything on it, is still there",
                        ((try? await store.tags(for: victim.doc)) ?? []).contains { $0.tagID == tagID })
 
+            // Its file was never moved here, so this is a file turning up
+            // at the path a deleted document still names.
+            if let facts = Indexer.facts(victim.url) {
+                let arrival = try? await store.upsertDocument(facts, origin: .inLibrary)
+                let stillTrashed = (try? await store.listDocuments(selection: .deleted, query: SearchQuery(""),
+                                                                   sort: .added, ascending: false)) ?? []
+                Check.that("a file where a deleted document was is a document of its own",
+                           arrival?.isNew == true && arrival?.id != victim.doc)
+                Check.that("…and the deleted one keeps its name and its place in Recently Deleted",
+                           stillTrashed.contains { $0.doc == victim.doc && $0.filename == victim.filename
+                                                       && $0.directory == victim.directory })
+                if let arrival { try? await store.deleteDocument(arrival.id) }
+            }
+
             _ = try? await store.purgeMissing(olderThan: 0)
             let survived = (try? await store.listDocuments(selection: .deleted, query: SearchQuery(""),
                                                            sort: .added, ascending: false)) ?? []
@@ -102,8 +116,8 @@ extension SelfTest {
             let back = (try? await store.listDocuments(selection: .all, query: SearchQuery(""),
                                                        sort: .added, ascending: false)) ?? []
             let keptTags = (try? await store.tags(for: victim.doc)) ?? []
-            Check.that("putting it back revives the row it always had",
-                       back.contains { $0.doc == victim.doc }
+            Check.that("putting it back revives the row it always had, at the path it had",
+                       back.contains { $0.doc == victim.doc && $0.path == victim.path }
                            && keptTags.contains { $0.tagID == tagID })
             try? await store.unassign(tag: tagID, from: victim.doc)
             try? await store.deleteTag(tagID)
