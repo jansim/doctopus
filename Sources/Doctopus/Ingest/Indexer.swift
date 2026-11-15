@@ -66,7 +66,7 @@ actor Indexer {
         guard let realRoot else { return path }
         if path == realRoot { return store.root.path }
         guard path.hasPrefix(realRoot + "/") else { return path }
-        return store.root.path + path.dropFirst(realRoot.count)
+        return store.root.path + String(path.dropFirst(realRoot.count))
     }
 
     func update(settings: AppSettings) async {
@@ -160,7 +160,7 @@ actor Indexer {
             touched = true
         }
 
-        for path in paths.map(libraryPath) {
+        for path in paths.map({ libraryPath($0) }) {
             guard path == store.root.path || path.hasPrefix(rootPrefix) else { continue }
             if FileScanner.isInsideLibraryContainer(URL(fileURLWithPath: path)) { continue }
 
