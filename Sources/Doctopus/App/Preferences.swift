@@ -24,7 +24,7 @@ enum Preferences {
                 // Written by a build that kept the key among the preferences:
                 // saved straight back, which moves it to the keychain.
                 if usesKeychain, !settings.remoteAPIKey.isEmpty {
-                    appWide = settings
+                    Preferences.appWide = settings
                     return settings
                 }
                 return withAPIKey(settings)
