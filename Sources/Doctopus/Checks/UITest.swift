@@ -64,6 +64,7 @@ enum UITest {
             await optionRevealsFolders(model)
             await showInAllDocumentsKeepsTheSelection(model)
             await creatingAFolderKeepsTheView(model)
+            await emptyFilteredFolderOffersToClear(model, snapshots: snapshots)
             await searchFieldTakesAndGivesUpFocus(model)
             await advancedSearchDraws(model, snapshots: snapshots)
             await secondLibraryOpensApart(model, alongside: library, snapshots: snapshots)
