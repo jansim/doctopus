@@ -289,10 +289,13 @@ actor Store {
     func markMissing(under directory: String) throws -> Int {
         let relative = relPath(directory)
         guard !relative.isEmpty, !relative.hasPrefix("/") else { return 0 }
+        // A range rather than a LIKE, so the index on `path` answers it: this
+        // runs for every path that vanishes, and deleting a big folder of
+        // other files is thousands of those. "0" is what follows "/".
         try db.run("""
             UPDATE documents SET missing=1, missing_since=COALESCE(missing_since,?)
-            WHERE missing=0 AND deleted_at IS NULL AND path LIKE ? ESCAPE '\\'
-            """, [.double(Date().timeIntervalSince1970), .text(Store.likeLiteral(relative) + "/%")])
+            WHERE path >= ? AND path < ? AND missing=0 AND deleted_at IS NULL
+            """, [.double(Date().timeIntervalSince1970), .text(relative + "/"), .text(relative + "0")])
         return Int(db.changes)
     }
 

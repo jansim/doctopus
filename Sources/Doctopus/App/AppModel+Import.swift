@@ -20,7 +20,7 @@ extension AppModel {
 
     /// With no `destination`, files go to the Inbox and are auto-routed: the only
     /// case where Doctopus moves a file on its own, and only one it just brought in.
-    /// `scratch`: a folder the files were staged in, removed once they are in.
+    /// `scratch`: a folder the files were staged in, removed once it is empty.
     func importFiles(_ urls: [URL], into destination: URL?, movingSource: Bool = false,
                      scratch: URL? = nil) {
         let chosen = destination ?? explicitImportDirectory
@@ -39,7 +39,11 @@ extension AppModel {
         Task {
             let batch = await lib.indexer.receiveFiles(urls, into: dest, movingSource: movingSource,
                                                        route: chosen == nil)
-            if let scratch { try? FileManager.default.removeItem(at: scratch) }
+            // Only once everything in it has moved out: a scan that could not
+            // be filed is the only copy there is, and stays where it is.
+            if let scratch, (try? FileManager.default.contentsOfDirectory(atPath: scratch.path))?.isEmpty == true {
+                try? FileManager.default.removeItem(at: scratch)
+            }
             if batch.summary.imported > 0 {
                 let n = batch.summary.imported
                 notify("Received \(n) document\(n == 1 ? "" : "s") — processing in the background.", .info)
