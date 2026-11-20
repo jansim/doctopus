@@ -14,7 +14,6 @@ struct DocumentDragSource: NSViewRepresentable {
     func updateNSView(_ view: SourceView, context: Context) {
         view.rowID = row.id
         view.rows = { model.selectedIDs.contains(row.id) ? model.selectedRows : [row] }
-        view.count = { model.dragCount(from: row) }
         view.wholeTableRow = wholeTableRow
         view.onClick = onClick
         view.ended = { model.folderDropTarget = nil }
@@ -32,40 +31,16 @@ struct DocumentDragSource: NSViewRepresentable {
         }
     }
 
-    /// The file's icon, badged with how many documents the drag carries when
-    /// that is more than one, as `DocumentDragPreview` does.
-    static func dragImage(for row: DocumentRow, count: Int) -> NSImage {
-        let icon = NSWorkspace.shared.icon(forFile: row.path)
-        let size = NSSize(width: 48, height: 64)
-        guard count > 1 else { return icon }
-        return NSImage(size: size, flipped: false) { bounds in
-            icon.draw(in: bounds.insetBy(dx: 0, dy: 8))
-            let label = NSAttributedString(string: "\(count)", attributes: [
-                .font: NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .semibold),
-                .foregroundColor: NSColor.white,
-            ])
-            let width = max(22, label.size().width + 12)
-            let badge = NSRect(x: bounds.maxX - width, y: bounds.maxY - 22, width: width, height: 22)
-            NSColor.systemRed.setFill()
-            NSBezierPath(roundedRect: badge, xRadius: 11, yRadius: 11).fill()
-            label.draw(at: NSPoint(x: badge.midX - label.size().width / 2,
-                                   y: badge.midY - label.size().height / 2))
-            return true
-        }
-    }
-
     /// The documents of the sources that claimed the last mouse-down, for the UI checks.
     @MainActor static var lastClaimants: [Int64] = []
 
     final class SourceView: NSView, NSDraggingSource {
         var rowID: Int64 = 0
         var rows: () -> [DocumentRow] = { [] }
-        var count: () -> Int = { 1 }
         var ended: () -> Void = {}
         var onClick: ((NSEvent) -> Void)?
         private var down: NSPoint?
         private var startingRows: [DocumentRow] = []
-        private var startingCount = 1
         var wholeTableRow = false
 
         // Native controls keep their normal hit testing. Gallery clicks and
@@ -108,7 +83,6 @@ struct DocumentDragSource: NSViewRepresentable {
         func begin(_ event: NSEvent) {
             down = convert(event.locationInWindow, from: nil)
             startingRows = rows()
-            startingCount = count()
         }
 
         /// Nil when the event was used up here.
@@ -128,11 +102,11 @@ struct DocumentDragSource: NSViewRepresentable {
                 reset()
                 let payloads = DocumentDragSource.pasteboardItems(for: selected)
                 guard !payloads.isEmpty else { return event }
+                // AppKit badges a drag of several items with their count
+                // itself; a badge drawn into the image showed it twice.
                 let items = zip(selected, payloads).enumerated().map { index, pair in
                     let item = NSDraggingItem(pasteboardWriter: pair.1)
-                    let image = index == 0
-                        ? DocumentDragSource.dragImage(for: pair.0, count: startingCount)
-                        : NSWorkspace.shared.icon(forFile: pair.0.path)
+                    let image = NSWorkspace.shared.icon(forFile: pair.0.path)
                     item.setDraggingFrame(NSRect(x: point.x + CGFloat(index * 4),
                                                  y: point.y + CGFloat(index * 4), width: 48, height: 64),
                                           contents: image)
