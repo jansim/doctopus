@@ -51,18 +51,29 @@ struct DocumentListView: View {
     @ViewBuilder
     private var emptyState: some View {
         if model.documents.isEmpty {
+            // Only the button takes clicks: the rest lets them through to the
+            // table and the drop target under it.
             ContentUnavailableView {
                 Label(model.searchText.isEmpty ? "Nothing here yet" : "No matches",
                       systemImage: model.searchText.isEmpty ? "tray" : "magnifyingglass")
+                    .allowsHitTesting(false)
             } description: {
                 Text(emptyMessage)
+                    .allowsHitTesting(false)
+            } actions: {
+                if model.canClearFilter {
+                    Button("Clear Filter") { model.clearFilter() }
+                        .help("Show everything here again, without “\(model.searchText)”")
+                }
             }
-            .allowsHitTesting(false)
         }
     }
 
     private var emptyMessage: String {
         if !model.searchText.isEmpty {
+            if model.canClearFilter, model.selection != .all {
+                return "Nothing here matches “\(model.searchText)”. Clear the filter to see everything in this pane."
+            }
             return "Try fewer words, or a token filter like tag:invoice or type:Receipt."
         }
         switch model.selection {

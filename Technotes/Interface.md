@@ -76,7 +76,10 @@ Finder's red count of how many documents are going along.
 ## Centre pane
 
 A high-density list/table with SQLite-backed deep full-text search, token
-filters and sort options.
+filters and sort options. A search stays in the field as the sidebar
+selection changes, so it narrows each pane it is carried into; one that leaves a
+pane empty offers Clear Filter right there. A smart folder's query is the folder,
+so it is not offered.
 
 The gallery, sorted by document date or by when documents were added, is headed
 the way Photos heads its grid: by month, or by year once a library spans years

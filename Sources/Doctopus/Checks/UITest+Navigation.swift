@@ -33,4 +33,45 @@ extension UITest {
                    exists && model.selection == .all, "selection \(model.selection)")
         try? FileManager.default.removeItem(at: created)
     }
+
+    /// A filter carried into a folder it leaves empty is offered to be
+    /// cleared there; a smart folder's query is the folder, so it is not.
+    static func emptyFilteredFolderOffersToClear(_ model: AppModel, snapshots: String?) async {
+        guard let row = model.documents.first(where: { !$0.isAliasHere && !$0.missing }) else {
+            return Check.that("a document whose folder to filter", false)
+        }
+        let window = libraryWindow(model)
+        defer { window.orderOut(nil) }
+        model.selection = .folder(row.directory)
+        // Until the folder's own list arrives, the one showing is All
+        // Documents', which holds the row too; only a folder's list marks
+        // what is merely aliased there.
+        func folderListed() -> Bool {
+            model.documents.contains { $0.id == row.id }
+                && model.documents.allSatisfy { $0.directory == row.directory
+                    || $0.directory.hasPrefix(row.directory + "/") || $0.isAliasHere }
+        }
+        _ = await settle(folderListed)
+        let listed = model.documents.count
+        model.searchText = "nothing-matches-\(UUID().uuidString.prefix(8))"
+        let emptied = await settle { model.documents.isEmpty }
+        try? await Task.sleep(for: .seconds(1))
+        if let dir = snapshots, let view = window.contentView {
+            snapshot(view, to: dir + "/empty-filtered-folder.png")
+        }
+        Check.that("a filter that leaves a folder empty can be cleared there",
+                   emptied && model.canClearFilter, "\(model.documents.count) listed")
+
+        model.clearFilter()
+        let back = await settle { model.searchText.isEmpty && folderListed() && model.documents.count == listed }
+        Check.that("clearing it lists the folder again, still in that folder",
+                   back && model.selection == .folder(row.directory),
+                   "\(model.documents.count) of \(listed), selection \(model.selection)")
+
+        model.selection = .savedView(id: -1, query: "nothing-matches")
+        Check.that("a smart folder's query is not offered to be cleared", !model.canClearFilter)
+        model.selection = .all
+        _ = await settle { model.searchText.isEmpty && !model.documents.isEmpty }
+        yieldFocus()
+    }
 }

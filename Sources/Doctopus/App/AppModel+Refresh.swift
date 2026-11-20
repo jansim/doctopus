@@ -127,6 +127,22 @@ extension AppModel {
         reloadDocuments()
     }
 
+    /// A search typed into the field narrows whichever pane is selected. A
+    /// smart folder's query is the folder itself, so there is nothing to clear.
+    var canClearFilter: Bool {
+        guard !searchText.isEmpty else { return false }
+        if case .savedView = selection { return false }
+        return true
+    }
+
+    /// Back to everything in the selected pane, at once rather than debounced.
+    func clearFilter() {
+        guard canClearFilter else { return }
+        searchText = ""
+        searchTask?.cancel()
+        reloadDocuments()
+    }
+
     func scheduleSearch() {
         searchTask?.cancel()
         searchTask = Task { [weak self] in
